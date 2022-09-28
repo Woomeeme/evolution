@@ -1,0 +1,6 @@
+usr/bin
+usr/lib/evolution/plugins/*-publish-calendar.so
+usr/lib/evolution/plugins/*-publish-calendar.eplug
+usr/share/applications
+usr/share/metainfo/org.gnome.Evolution.appdata.xml
+usr/share/man

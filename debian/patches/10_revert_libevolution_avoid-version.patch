@@ -1,0 +1,320 @@
+From: Jordi Mallach <jordi@debian.org>
+Date: Thu, 17 May 2012 23:05:13 +0200
+Subject: Revert 160006402248075b95c98e9e34d4538670ba7480
+
+Revert upstream patch that adds -avoid-version to all libevolution
+libs, making them versionless. This is a massive WTF.
+Bug-GNOME: https://bugzilla.gnome.org/show_bug.cgi?id=591436
+Forwarded: no
+ Without this patch, dpkg-shlibdeps doesn't work and libevolution's
+ reverse dependencies don't get an automatic dependency on libevolution
+   dpkg-shlibdeps: warning: can't extract name and version from library name
+'  libevolution-util.so'
+---
+ src/addressbook/gui/contact-editor/CMakeLists.txt      | 5 +++++
+ src/addressbook/gui/contact-list-editor/CMakeLists.txt | 5 +++++
+ src/addressbook/gui/widgets/CMakeLists.txt             | 6 ++++++
+ src/addressbook/importers/CMakeLists.txt               | 5 +++++
+ src/addressbook/printing/CMakeLists.txt                | 5 +++++
+ src/addressbook/util/CMakeLists.txt                    | 5 +++++
+ src/calendar/gui/CMakeLists.txt                        | 5 +++++
+ src/calendar/importers/CMakeLists.txt                  | 5 +++++
+ src/composer/CMakeLists.txt                            | 5 +++++
+ src/e-util/CMakeLists.txt                              | 5 +++++
+ src/em-format/CMakeLists.txt                           | 5 +++++
+ src/libemail-engine/CMakeLists.txt                     | 5 +++++
+ src/libgnomecanvas/CMakeLists.txt                      | 2 ++
+ src/mail/CMakeLists.txt                                | 5 +++++
+ src/mail/importers/CMakeLists.txt                      | 5 +++++
+ src/shell/CMakeLists.txt                               | 5 +++++
+ src/smime/gui/CMakeLists.txt                           | 5 +++++
+ src/smime/lib/CMakeLists.txt                           | 5 +++++
+ src/web-extensions/CMakeLists.txt                      | 5 +++++
+ 19 files changed, 93 insertions(+)
+
+Index: evolution/src/addressbook/gui/contact-editor/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/addressbook/gui/contact-editor/CMakeLists.txt
++++ evolution/src/addressbook/gui/contact-editor/CMakeLists.txt
+@@ -30,6 +30,11 @@ add_dependencies(econtacteditor
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(econtacteditor PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(econtacteditor PRIVATE
+ 	-DG_LOG_DOMAIN=\"e-contact-editor\"
+ )
+Index: evolution/src/addressbook/gui/contact-list-editor/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/addressbook/gui/contact-list-editor/CMakeLists.txt
++++ evolution/src/addressbook/gui/contact-list-editor/CMakeLists.txt
+@@ -25,6 +25,11 @@ add_dependencies(econtactlisteditor
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(econtactlisteditor PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(econtactlisteditor PRIVATE
+ 	-DG_LOG_DOMAIN=\"e-contact-list-editor\"
+ )
+Index: evolution/src/addressbook/gui/widgets/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/addressbook/gui/widgets/CMakeLists.txt
++++ evolution/src/addressbook/gui/widgets/CMakeLists.txt
+@@ -74,6 +74,12 @@ add_dependencies(eabwidgets
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(eabwidgets PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
++
+ target_compile_definitions(eabwidgets PRIVATE
+ 	-DG_LOG_DOMAIN=\"eabwidgets\"
+ 	-DEVOLUTION_ETSPECDIR=\"${etspecdir}\"
+Index: evolution/src/addressbook/importers/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/addressbook/importers/CMakeLists.txt
++++ evolution/src/addressbook/importers/CMakeLists.txt
+@@ -19,6 +19,11 @@ add_dependencies(evolution-addressbook-i
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(evolution-addressbook-importers PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(evolution-addressbook-importers PRIVATE
+ 	-DG_LOG_DOMAIN=\"evolution-addressbook-importers\"
+ )
+Index: evolution/src/addressbook/printing/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/addressbook/printing/CMakeLists.txt
++++ evolution/src/addressbook/printing/CMakeLists.txt
+@@ -25,6 +25,11 @@ add_dependencies(econtactprint
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(econtactprint PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(econtactprint PRIVATE
+ 	-DG_LOG_DOMAIN=\"addressbook-printing\"
+ 	-DEVOLUTION_ECPSDIR=\"${ecpsdir}\"
+Index: evolution/src/addressbook/util/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/addressbook/util/CMakeLists.txt
++++ evolution/src/addressbook/util/CMakeLists.txt
+@@ -16,6 +16,11 @@ add_dependencies(eabutil
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(eabutil PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(eabutil PRIVATE
+ 	-DG_LOG_DOMAIN=\"eabutil\"
+ )
+Index: evolution/src/calendar/gui/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/calendar/gui/CMakeLists.txt
++++ evolution/src/calendar/gui/CMakeLists.txt
+@@ -183,6 +183,11 @@ add_dependencies(evolution-calendar
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(evolution-calendar PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(evolution-calendar PRIVATE
+ 	-DG_LOG_DOMAIN=\"evolution-calendar\"
+ 	-DEVOLUTION_ETSPECDIR=\"${etspecdir}\"
+Index: evolution/src/calendar/importers/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/calendar/importers/CMakeLists.txt
++++ evolution/src/calendar/importers/CMakeLists.txt
+@@ -16,6 +16,11 @@ add_dependencies(evolution-calendar-impo
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(evolution-calendar-importers PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(evolution-calendar-importers PRIVATE
+ 	-DG_LOG_DOMAIN=\"evolution-calendar-importers\"
+ 	-DEVOLUTION_SOUNDDIR=\"${soundsdir}\"
+Index: evolution/src/composer/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/composer/CMakeLists.txt
++++ evolution/src/composer/CMakeLists.txt
+@@ -49,6 +49,11 @@ add_dependencies(evolution-mail-composer
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(evolution-mail-composer PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(evolution-mail-composer PRIVATE
+ 	-DG_LOG_DOMAIN=\"evolution-mail-composer\"
+ 	-DEVOLUTION_UIDIR=\"${uidir}\"
+Index: evolution/src/e-util/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/e-util/CMakeLists.txt
++++ evolution/src/e-util/CMakeLists.txt
+@@ -593,6 +593,11 @@ add_dependencies(evolution-util
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(evolution-util PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(evolution-util PRIVATE
+ 	-DG_LOG_DOMAIN=\"evolution-util\"
+ 	-DEVOLUTION_BINDIR=\"${BIN_INSTALL_DIR}\"
+Index: evolution/src/em-format/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/em-format/CMakeLists.txt
++++ evolution/src/em-format/CMakeLists.txt
+@@ -110,6 +110,11 @@ add_dependencies(evolution-mail-formatte
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(evolution-mail-formatter PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(evolution-mail-formatter PRIVATE
+ 	-DG_LOG_DOMAIN=\"evolution-mail-formatter\"
+ 	-DEVOLUTION_IMAGESDIR=\"${imagesdir}\"
+Index: evolution/src/libemail-engine/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/libemail-engine/CMakeLists.txt
++++ evolution/src/libemail-engine/CMakeLists.txt
+@@ -56,6 +56,11 @@ add_dependencies(email-engine
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(email-engine PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(email-engine PRIVATE
+ 	-DG_LOG_DOMAIN=\"e-mail-engine\"
+ 	-DEVOLUTION_PRIVDATADIR=\"${privdatadir}\"
+Index: evolution/src/libgnomecanvas/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/libgnomecanvas/CMakeLists.txt
++++ evolution/src/libgnomecanvas/CMakeLists.txt
+@@ -50,6 +50,8 @@ target_compile_options(gnomecanvas PUBLI
+ )
+ 
+ set_target_properties(gnomecanvas PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
+ 	INSTALL_RPATH ""
+ )
+ 
+Index: evolution/src/mail/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/mail/CMakeLists.txt
++++ evolution/src/mail/CMakeLists.txt
+@@ -221,6 +221,11 @@ add_dependencies(evolution-mail
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(evolution-mail PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(evolution-mail PRIVATE
+ 	-DG_LOG_DOMAIN=\"evolution-mail\"
+ 	-DEVOLUTION_PRIVDATADIR=\"${privdatadir}\"
+Index: evolution/src/mail/importers/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/mail/importers/CMakeLists.txt
++++ evolution/src/mail/importers/CMakeLists.txt
+@@ -24,6 +24,11 @@ add_dependencies(evolution-mail-importer
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(evolution-mail-importers PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(evolution-mail-importers PRIVATE
+ 	-DG_LOG_DOMAIN=\"evolution-mail-importers\"
+ 	-DEVOLUTION_PRIVDATADIR=\"${privdatadir}\"
+Index: evolution/src/shell/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/shell/CMakeLists.txt
++++ evolution/src/shell/CMakeLists.txt
+@@ -60,6 +60,11 @@ add_dependencies(evolution-shell
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(evolution-shell PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(evolution-shell PRIVATE
+ 	-DG_LOG_DOMAIN=\"evolution-shell\"
+ 	-DEVOLUTION_LOCALEDIR=\"${LOCALE_INSTALL_DIR}\"
+Index: evolution/src/smime/gui/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/smime/gui/CMakeLists.txt
++++ evolution/src/smime/gui/CMakeLists.txt
+@@ -25,6 +25,11 @@ add_dependencies(evolution-smime
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(evolution-smime PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(evolution-smime PRIVATE
+ 	-DG_LOG_DOMAIN=\"evolution-smime\"
+ )
+Index: evolution/src/smime/lib/CMakeLists.txt
+===================================================================
+--- evolution.orig/src/smime/lib/CMakeLists.txt
++++ evolution/src/smime/lib/CMakeLists.txt
+@@ -21,6 +21,11 @@ add_dependencies(essmime
+ 	${DEPENDENCIES}
+ )
+ 
++set_target_properties(essmime PROPERTIES
++	VERSION 0.0.0
++	SOVERSION 0
++)
++
+ target_compile_definitions(essmime PRIVATE
+ 	-DG_LOG_DOMAIN=\"essmime\"
+ )

@@ -1,0 +1,24 @@
+From: Sebastien Bacher <seb128@ubuntu.com>
+Date: Mon, 4 Sep 2017 12:56:28 +0000
+Subject: Ubuntu's dh-translations can't handle variables
+
+for GETTEXT_PACKAGE
+Bug: https://bugzilla.gnome.org/784877
+===================================================================
+---
+ CMakeLists.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2339e4f..2a1ba7f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -35,7 +35,7 @@ else(_is_devel_version EQUAL 1)
+ endif(_is_devel_version EQUAL 1)
+ 
+ # Required for FindIntltool module
+-set(GETTEXT_PACKAGE ${PROJECT_NAME})
++set(GETTEXT_PACKAGE "evolution")
+ set(GETTEXT_PO_DIR ${CMAKE_SOURCE_DIR}/po)
+ 
+ # Required for 'disttest' and 'distcheck' of DistTarget module

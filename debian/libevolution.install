@@ -1,0 +1,7 @@
+usr/lib/evolution/*.so.*
+usr/lib/evolution/modules/*.so
+usr/lib/evolution/web-extensions/*.so
+usr/lib/evolution/web-extensions/webkit-editor/*.so
+usr/libexec/evolution/evolution-backup
+usr/libexec/evolution/killev
+usr/lib/evolution-data-server/ui-modules/module-evolution-alarm-notify.so
