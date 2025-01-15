@@ -24,10 +24,6 @@
 
 #include "e-mail-config-provider-page.h"
 
-#define E_MAIL_CONFIG_PROVIDER_PAGE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_CONFIG_PROVIDER_PAGE, EMailConfigProviderPagePrivate))
-
 #define STANDARD_MARGIN   12
 #define DEPENDENCY_MARGIN 24
 
@@ -45,23 +41,16 @@ enum {
 static void	e_mail_config_provider_page_interface_init
 					(EMailConfigPageInterface *iface);
 
-G_DEFINE_TYPE_WITH_CODE (
-	EMailConfigProviderPage,
-	e_mail_config_provider_page,
-	E_TYPE_MAIL_CONFIG_ACTIVITY_PAGE,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL)
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_MAIL_CONFIG_PAGE,
-		e_mail_config_provider_page_interface_init))
+G_DEFINE_TYPE_WITH_CODE (EMailConfigProviderPage, e_mail_config_provider_page, E_TYPE_MAIL_CONFIG_ACTIVITY_PAGE,
+	G_ADD_PRIVATE (EMailConfigProviderPage)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL)
+	G_IMPLEMENT_INTERFACE (E_TYPE_MAIL_CONFIG_PAGE, e_mail_config_provider_page_interface_init))
 
 static void
-mail_config_provider_page_handle_dependency (EMailConfigProviderPage *page,
+mail_config_provider_page_handle_dependency (CamelSettings *settings,
                                              CamelProviderConfEntry *entry,
                                              GtkWidget *widget)
 {
-	EMailConfigServiceBackend *backend;
-	CamelSettings *settings;
 	GBindingFlags binding_flags = G_BINDING_SYNC_CREATE;
 	const gchar *depname = entry->depname;
 	gint margin;
@@ -74,9 +63,6 @@ mail_config_provider_page_handle_dependency (EMailConfigProviderPage *page,
 		depname++;
 	}
 
-	backend = e_mail_config_provider_page_get_backend (page);
-	settings = e_mail_config_service_backend_get_settings (backend);
-
 	e_binding_bind_property (
 		settings, depname,
 		widget, "sensitive",
@@ -88,19 +74,15 @@ mail_config_provider_page_handle_dependency (EMailConfigProviderPage *page,
 }
 
 static void
-mail_config_provider_page_add_section (EMailConfigProviderPage *page,
-				       GtkBox *main_box,
-                                       CamelProviderConfEntry *entry)
+mail_config_provider_page_add_section (GtkBox *main_box,
+				       CamelProvider *provider,
+				       CamelProviderConfEntry *entry,
+				       gboolean skip_first_section_name)
 {
-	EMailConfigServiceBackend *backend;
-	CamelProvider *provider;
 	GtkWidget *widget;
 	gchar *markup;
 
 	g_return_if_fail (entry->text != NULL);
-
-	backend = e_mail_config_provider_page_get_backend (page);
-	provider = e_mail_config_service_backend_get_provider (backend);
 
 	markup = g_markup_printf_escaped ("<b>%s</b>", entry->text);
 
@@ -111,25 +93,20 @@ mail_config_provider_page_add_section (EMailConfigProviderPage *page,
 	gtk_widget_show (widget);
 
 	/* Skip the top margin if this is the first entry. */
-	if (entry != provider->extra_conf)
+	if (entry != provider->extra_conf || !skip_first_section_name)
 		gtk_widget_set_margin_top (widget, 6);
 
 	g_free (markup);
 }
 
 static void
-mail_config_provider_page_add_checkbox (EMailConfigProviderPage *page,
-					GtkBox *main_box,
-                                        CamelProviderConfEntry *entry)
+mail_config_provider_page_add_checkbox (GtkBox *main_box,
+					CamelSettings *settings,
+					CamelProviderConfEntry *entry)
 {
-	EMailConfigServiceBackend *backend;
-	CamelSettings *settings;
 	GtkWidget *widget;
 
 	g_return_if_fail (entry->text != NULL);
-
-	backend = e_mail_config_provider_page_get_backend (page);
-	settings = e_mail_config_service_backend_get_settings (backend);
 
 	widget = gtk_check_button_new_with_mnemonic (entry->text);
 	gtk_widget_set_margin_left (widget, STANDARD_MARGIN);
@@ -142,16 +119,14 @@ mail_config_provider_page_add_checkbox (EMailConfigProviderPage *page,
 		G_BINDING_BIDIRECTIONAL |
 		G_BINDING_SYNC_CREATE);
 
-	mail_config_provider_page_handle_dependency (page, entry, widget);
+	mail_config_provider_page_handle_dependency (settings, entry, widget);
 }
 
 static void
-mail_config_provider_page_add_checkspin (EMailConfigProviderPage *page,
-					 GtkBox *main_box,
-                                         CamelProviderConfEntry *entry)
+mail_config_provider_page_add_checkspin (GtkBox *main_box,
+					 CamelSettings *settings,
+					 CamelProviderConfEntry *entry)
 {
-	EMailConfigServiceBackend *backend;
-	CamelSettings *settings;
 	GObjectClass *class;
 	GParamSpec *pspec;
 	GParamSpec *use_pspec;
@@ -162,9 +137,6 @@ mail_config_provider_page_add_checkspin (EMailConfigProviderPage *page,
 	gchar *pre, *post;
 
 	g_return_if_fail (entry->text != NULL);
-
-	backend = e_mail_config_provider_page_get_backend (page);
-	settings = e_mail_config_service_backend_get_settings (backend);
 
 	/* The entry->name property (e.g. "foo") should be numeric for the
 	 * spin button.  If a "use" boolean property exists (e.g. "use-foo")
@@ -316,24 +288,19 @@ mail_config_provider_page_add_checkspin (EMailConfigProviderPage *page,
 		gtk_widget_show (label);
 	}
 
-	mail_config_provider_page_handle_dependency (page, entry, hbox);
+	mail_config_provider_page_handle_dependency (settings, entry, hbox);
 }
 
 static void
-mail_config_provider_page_add_entry (EMailConfigProviderPage *page,
-				     GtkBox *main_box,
-                                     CamelProviderConfEntry *entry)
+mail_config_provider_page_add_entry (GtkBox *main_box,
+				     CamelSettings *settings,
+				     CamelProviderConfEntry *entry)
 {
-	EMailConfigServiceBackend *backend;
-	CamelSettings *settings;
 	GtkWidget *hbox;
 	GtkWidget *input;
 	GtkWidget *label;
 
 	g_return_if_fail (entry->text != NULL);
-
-	backend = e_mail_config_provider_page_get_backend (page);
-	settings = e_mail_config_service_backend_get_settings (backend);
 
 	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_box_set_spacing (GTK_BOX (hbox), 6);
@@ -362,12 +329,12 @@ mail_config_provider_page_add_entry (EMailConfigProviderPage *page,
 		label, "sensitive",
 		G_BINDING_SYNC_CREATE);
 
-	mail_config_provider_page_handle_dependency (page, entry, hbox);
+	mail_config_provider_page_handle_dependency (settings, entry, hbox);
 }
 
 static void
-mail_config_provider_page_add_label (EMailConfigProviderPage *page,
-				     GtkBox *main_box,
+mail_config_provider_page_add_label (GtkBox *main_box,
+				     CamelSettings *settings,
 				     CamelProviderConfEntry *entry)
 {
 	GtkWidget *hbox;
@@ -386,17 +353,15 @@ mail_config_provider_page_add_label (EMailConfigProviderPage *page,
 	gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
 	gtk_widget_show (label);
 
-	mail_config_provider_page_handle_dependency (page, entry, hbox);
+	mail_config_provider_page_handle_dependency (settings, entry, hbox);
 }
 
 static void
-mail_config_provider_page_add_options (EMailConfigProviderPage *page,
-				       GtkBox *main_box,
+mail_config_provider_page_add_options (GtkBox *main_box,
+				       CamelProvider *provider,
+				       CamelSettings *settings,
                                        CamelProviderConfEntry *entry)
 {
-	EMailConfigServiceBackend *backend;
-	CamelProvider *provider;
-	CamelSettings *settings;
 	GtkCellRenderer *renderer;
 	GtkListStore *store;
 	GtkWidget *hbox;
@@ -414,10 +379,6 @@ mail_config_provider_page_add_options (EMailConfigProviderPage *page,
 
 	g_return_if_fail (entry->text != NULL);
 	g_return_if_fail (entry->value != NULL);
-
-	backend = e_mail_config_provider_page_get_backend (page);
-	provider = e_mail_config_service_backend_get_provider (backend);
-	settings = e_mail_config_service_backend_get_settings (backend);
 
 	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_box_set_spacing (GTK_BOX (hbox), 6);
@@ -475,12 +436,12 @@ mail_config_provider_page_add_options (EMailConfigProviderPage *page,
 	gtk_cell_layout_set_attributes (
 		GTK_CELL_LAYOUT (combo), renderer, "text", 1, NULL);
 
-	mail_config_provider_page_handle_dependency (page, entry, hbox);
+	mail_config_provider_page_handle_dependency (settings, entry, hbox);
 }
 
 static void
-mail_config_provider_page_add_placeholder (EMailConfigProviderPage *page,
-					   GtkBox *main_box,
+mail_config_provider_page_add_placeholder (GtkBox *main_box,
+					   CamelSettings *settings,
 					   CamelProviderConfEntry *entry)
 {
 	GtkWidget *hbox;
@@ -497,7 +458,150 @@ mail_config_provider_page_add_placeholder (EMailConfigProviderPage *page,
 	gtk_box_pack_start (main_box, hbox, FALSE, FALSE, 0);
 	gtk_widget_show (hbox);
 
-	mail_config_provider_page_handle_dependency (page, entry, hbox);
+	mail_config_provider_page_handle_dependency (settings, entry, hbox);
+}
+
+static GtkBox *
+mail_config_provider_page_add_advanced_section (GtkBox *main_box,
+						CamelSettings *settings,
+						CamelProviderConfEntry *entry)
+{
+	GtkWidget *vbox, *expander, *widget;
+	const gchar *label;
+
+	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	gtk_box_set_spacing (GTK_BOX (vbox), 6);
+	gtk_widget_set_margin_left (vbox, STANDARD_MARGIN);
+	gtk_widget_show (vbox);
+
+	label = entry->text;
+
+	if (!label || !*label)
+		label = _("Advanced Options");
+
+	expander = gtk_expander_new_with_mnemonic (label);
+	widget = gtk_expander_get_label_widget (GTK_EXPANDER (expander));
+	if (widget) {
+		PangoAttrList *bold;
+
+		bold = pango_attr_list_new ();
+		pango_attr_list_insert (bold, pango_attr_weight_new (PANGO_WEIGHT_BOLD));
+
+		gtk_label_set_attributes (GTK_LABEL (widget), bold);
+
+		pango_attr_list_unref (bold);
+	}
+	gtk_expander_set_expanded (GTK_EXPANDER (expander), FALSE);
+
+	gtk_widget_show (expander);
+
+	gtk_box_pack_start (main_box, expander, FALSE, FALSE, 0);
+	gtk_box_pack_start (main_box, vbox, FALSE, FALSE, 0);
+
+	/* Because some themes can show the box in different style than the rest of the options */
+	e_binding_bind_property (
+		expander, "expanded",
+		vbox, "visible",
+		G_BINDING_SYNC_CREATE);
+
+	mail_config_provider_page_handle_dependency (settings, entry, expander);
+	mail_config_provider_page_handle_dependency (settings, entry, vbox);
+
+	return GTK_BOX (vbox);
+}
+
+void
+e_mail_config_provider_add_widgets (CamelProvider *provider,
+				    CamelSettings *settings,
+				    GtkBox *main_box,
+				    gboolean skip_first_section_name)
+{
+	CamelProviderConfEntry *entries;
+	GSList *section_boxes = NULL; /* GtkBox * */
+	gboolean first_section = skip_first_section_name;
+	gint ii;
+
+	if (!provider || !provider->extra_conf)
+		return;
+
+	g_return_if_fail (CAMEL_IS_SETTINGS (settings));
+	g_return_if_fail (GTK_IS_BOX (main_box));
+
+	/* Note the "text" member of each CamelProviderConfEntry is
+	 * already localized, so we can use it directly in widgets. */
+
+	entries = provider->extra_conf;
+
+	/* Loop until we see CAMEL_PROVIDER_CONF_END. */
+	for (ii = 0; entries[ii].type != CAMEL_PROVIDER_CONF_END; ii++) {
+
+		/* Skip entries with no name. */
+		if (entries[ii].name == NULL && entries[ii].type != CAMEL_PROVIDER_CONF_ADVANCED_SECTION_START)
+			continue;
+
+		switch (entries[ii].type) {
+			case CAMEL_PROVIDER_CONF_SECTION_START:
+				/* Skip the first section start. */
+				if (first_section) {
+					first_section = FALSE;
+					continue;
+				}
+				section_boxes = g_slist_prepend (section_boxes, main_box);
+				mail_config_provider_page_add_section (
+					main_box, provider, &entries[ii], skip_first_section_name);
+				break;
+
+			case CAMEL_PROVIDER_CONF_CHECKBOX:
+				mail_config_provider_page_add_checkbox (
+					main_box, settings, &entries[ii]);
+				break;
+
+			case CAMEL_PROVIDER_CONF_CHECKSPIN:
+				mail_config_provider_page_add_checkspin (
+					main_box, settings, &entries[ii]);
+				break;
+
+			case CAMEL_PROVIDER_CONF_ENTRY:
+				mail_config_provider_page_add_entry (
+					main_box, settings, &entries[ii]);
+				break;
+
+			case CAMEL_PROVIDER_CONF_LABEL:
+				mail_config_provider_page_add_label (
+					main_box, settings, &entries[ii]);
+				break;
+
+			case CAMEL_PROVIDER_CONF_OPTIONS:
+				mail_config_provider_page_add_options (
+					main_box, provider, settings, &entries[ii]);
+				break;
+
+			case CAMEL_PROVIDER_CONF_PLACEHOLDER:
+				mail_config_provider_page_add_placeholder (
+					main_box, settings, &entries[ii]);
+				break;
+
+			case CAMEL_PROVIDER_CONF_ADVANCED_SECTION_START:
+				first_section = FALSE;
+
+				section_boxes = g_slist_prepend (section_boxes, main_box);
+
+				main_box = mail_config_provider_page_add_advanced_section (
+					main_box, settings, &entries[ii]);
+				break;
+
+			case CAMEL_PROVIDER_CONF_SECTION_END:
+				if (section_boxes) {
+					main_box = section_boxes->data;
+					section_boxes = g_slist_remove (section_boxes, main_box);
+				}
+				break;
+			default:
+				break;  /* skip it */
+		}
+	}
+
+	g_slist_free (section_boxes);
 }
 
 static void
@@ -505,17 +609,15 @@ mail_config_provider_page_add_widgets (EMailConfigProviderPage *page,
 				       GtkBox *main_box)
 {
 	EMailConfigServiceBackend *backend;
-	CamelProviderConfEntry *entries;
 	CamelProvider *provider;
+	CamelSettings *settings;
 	GtkWidget *container;
 	GtkWidget *widget;
 	ESource *source;
 	ESourceExtension *extension;
-	gboolean first_section = TRUE;
 	const gchar *extension_name;
 	const gchar *text;
 	gchar *markup;
-	gint ii;
 
 	/* XXX We begin the page with our own section header and refresh
 	 *     interval setting, and then skip the CamelProvider's first
@@ -529,6 +631,7 @@ mail_config_provider_page_add_widgets (EMailConfigProviderPage *page,
 
 	backend = e_mail_config_provider_page_get_backend (page);
 	source = e_mail_config_service_backend_get_source (backend);
+	settings = e_mail_config_service_backend_get_settings (backend);
 	provider = e_mail_config_service_backend_get_provider (backend);
 	g_return_if_fail (provider != NULL);
 
@@ -584,63 +687,7 @@ mail_config_provider_page_add_widgets (EMailConfigProviderPage *page,
 	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
 	gtk_widget_show (widget);
 
-	/* Note the "text" member of each CamelProviderConfEntry is
-	 * already localized, so we can use it directly in widgets. */
-
-	entries = provider->extra_conf;
-
-	/* Loop until we see CAMEL_PROVIDER_CONF_END. */
-	for (ii = 0; entries[ii].type != CAMEL_PROVIDER_CONF_END; ii++) {
-
-		/* Skip entries with no name. */
-		if (entries[ii].name == NULL)
-			continue;
-
-		switch (entries[ii].type) {
-			case CAMEL_PROVIDER_CONF_SECTION_START:
-				/* Skip the first section start. */
-				if (first_section) {
-					first_section = FALSE;
-					continue;
-				}
-				mail_config_provider_page_add_section (
-					page, main_box, &entries[ii]);
-				break;
-
-			case CAMEL_PROVIDER_CONF_CHECKBOX:
-				mail_config_provider_page_add_checkbox (
-					page, main_box, &entries[ii]);
-				break;
-
-			case CAMEL_PROVIDER_CONF_CHECKSPIN:
-				mail_config_provider_page_add_checkspin (
-					page, main_box, &entries[ii]);
-				break;
-
-			case CAMEL_PROVIDER_CONF_ENTRY:
-				mail_config_provider_page_add_entry (
-					page, main_box, &entries[ii]);
-				break;
-
-			case CAMEL_PROVIDER_CONF_LABEL:
-				mail_config_provider_page_add_label (
-					page, main_box, &entries[ii]);
-				break;
-
-			case CAMEL_PROVIDER_CONF_OPTIONS:
-				mail_config_provider_page_add_options (
-					page, main_box, &entries[ii]);
-				break;
-
-			case CAMEL_PROVIDER_CONF_PLACEHOLDER:
-				mail_config_provider_page_add_placeholder (
-					page, main_box, &entries[ii]);
-				break;
-
-			default:
-				break;  /* skip it */
-		}
-	}
+	e_mail_config_provider_add_widgets (provider, settings, main_box, TRUE);
 }
 
 static void
@@ -691,10 +738,9 @@ mail_config_provider_page_get_property (GObject *object,
 static void
 mail_config_provider_page_dispose (GObject *object)
 {
-	EMailConfigProviderPagePrivate *priv;
+	EMailConfigProviderPage *self = E_MAIL_CONFIG_PROVIDER_PAGE (object);
 
-	priv = E_MAIL_CONFIG_PROVIDER_PAGE_GET_PRIVATE (object);
-	g_clear_object (&priv->backend);
+	g_clear_object (&self->priv->backend);
 
 	/* Chain up parent's dispose() method. */
 	G_OBJECT_CLASS (e_mail_config_provider_page_parent_class)->
@@ -736,8 +782,6 @@ e_mail_config_provider_page_class_init (EMailConfigProviderPageClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (EMailConfigProviderPagePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_config_provider_page_set_property;
 	object_class->get_property = mail_config_provider_page_get_property;
@@ -767,7 +811,7 @@ e_mail_config_provider_page_interface_init (EMailConfigPageInterface *iface)
 static void
 e_mail_config_provider_page_init (EMailConfigProviderPage *page)
 {
-	page->priv = E_MAIL_CONFIG_PROVIDER_PAGE_GET_PRIVATE (page);
+	page->priv = e_mail_config_provider_page_get_instance_private (page);
 }
 
 EMailConfigPage *

@@ -49,8 +49,6 @@
 
 G_BEGIN_DECLS
 
-#define E_CALENDAR_VIEW_TOOLTIP_OFFSET 16
-
 typedef enum {
 	E_CALENDAR_VIEW_POS_OUTSIDE,
 	E_CALENDAR_VIEW_POS_NONE,
@@ -79,8 +77,6 @@ typedef enum {
 	guint16 end_minute; \
 	guint different_timezone : 1; \
 	gboolean is_editable; \
-	GtkWidget *tooltip; \
-	gint	timeout; \
 	GdkColor *color; \
 	gint x,y;
 
@@ -113,14 +109,15 @@ struct _ECalendarView {
 	ECalendarViewPrivate *priv;
 };
 
-typedef struct {
-	ECalendarViewEvent * (*get_view_event)	(ECalendarView *view,
-						 gint day,
-						 gint event_num);
-	ECalendarView *cal_view;
-	gint day;
-	gint event_num;
-} ECalendarViewEventData;
+typedef struct _ECalendarViewSelectionData {
+	ECalClient *client;
+	ICalComponent *icalcomp;
+} ECalendarViewSelectionData;
+
+ECalendarViewSelectionData *
+		e_calendar_view_selection_data_new	(ECalClient *client,
+							 ICalComponent *icalcomp);
+void		e_calendar_view_selection_data_free	(gpointer ptr);
 
 typedef enum {
 	EDIT_EVENT_AUTODETECT,
@@ -163,7 +160,7 @@ struct _ECalendarViewClass {
 						 gint64 exact_date);
 
 	/* Virtual methods */
-	GList *		(*get_selected_events)	(ECalendarView *cal_view);
+	GSList *	(*get_selected_events)	(ECalendarView *cal_view); /* ECalendarViewSelectionData * */
 	gboolean	(*get_selected_time_range)
 						(ECalendarView *cal_view,
 						 time_t *start_time,
@@ -203,7 +200,7 @@ GtkTargetList *	e_calendar_view_get_copy_target_list
 GtkTargetList *	e_calendar_view_get_paste_target_list
 						(ECalendarView *cal_view);
 
-GList *		e_calendar_view_get_selected_events
+GSList *	e_calendar_view_get_selected_events /* ECalendarViewSelectionData * */
 						(ECalendarView *cal_view);
 gboolean	e_calendar_view_get_selected_time_range
 						(ECalendarView *cal_view,
@@ -224,6 +221,7 @@ void		e_calendar_view_precalc_visible_time_range
 						 time_t *out_start_time,
 						 time_t *out_end_time);
 void		e_calendar_view_update_query	(ECalendarView *cal_view);
+void		e_calendar_view_paste_text	(ECalendarView *cal_view);
 
 void		e_calendar_view_delete_selected_occurrence
 						(ECalendarView *cal_view,
@@ -256,12 +254,6 @@ gchar *		e_calendar_view_get_description_text
 void		e_calendar_view_move_view_range	(ECalendarView *cal_view,
 						 ECalendarViewMoveType mode_type,
 						 time_t exact_date);
-gboolean	e_calendar_view_get_tooltips	(const ECalendarViewEventData *data);
-
-void		e_calendar_view_move_tip	(GtkWidget *widget,
-						 gint x,
-						 gint y);
-void		e_calendar_view_destroy_tooltip	(ECalendarView *cal_view);
 
 gchar *		e_calendar_view_dup_component_summary
 						(ICalComponent *icomp);
@@ -286,6 +278,11 @@ gboolean	e_calendar_view_is_editing	(ECalendarView *cal_view);
 gboolean	e_calendar_view_get_allow_direct_summary_edit
 						(ECalendarView *cal_view);
 void		e_calendar_view_set_allow_direct_summary_edit
+						(ECalendarView *cal_view,
+						 gboolean allow);
+gboolean	e_calendar_view_get_allow_event_dnd
+						(ECalendarView *cal_view);
+void		e_calendar_view_set_allow_event_dnd
 						(ECalendarView *cal_view,
 						 gboolean allow);
 

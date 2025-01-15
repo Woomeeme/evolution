@@ -113,10 +113,10 @@ emfe_attachment_format (EMailFormatterExtension *extension,
 	registry = e_mail_formatter_get_extension_registry (formatter);
 
 	extensions = e_mail_extension_registry_get_for_mime_type (
-		registry, empa->snoop_mime_type);
+		registry, e_mail_part_attachment_get_guessed_mime_type (empa));
 	if (extensions == NULL)
 		extensions = e_mail_extension_registry_get_fallback (
-			registry, empa->snoop_mime_type);
+			registry, e_mail_part_attachment_get_guessed_mime_type (empa));
 
 	/* If the attachment is requested as RAW, then call the
 	 * handler directly and do not append any other code. */
@@ -132,8 +132,16 @@ emfe_attachment_format (EMailFormatterExtension *extension,
 			gchar *name;
 			EAttachment *attachment;
 			GFileInfo *file_info;
+			GSettings *settings;
 			const gchar *display_name;
 			gchar *description;
+
+			settings = e_util_ref_settings ("org.gnome.evolution.mail");
+			if (!g_settings_get_boolean (settings, "print-attachments")) {
+				g_clear_object (&settings);
+				return TRUE;
+			}
+			g_clear_object (&settings);
 
 			attachment = e_mail_part_attachment_ref_attachment (
 				E_MAIL_PART_ATTACHMENT (part));
@@ -182,7 +190,7 @@ emfe_attachment_format (EMailFormatterExtension *extension,
 	/* E_MAIL_FORMATTER_MODE_NORMAL: */
 
 	mime_part = e_mail_part_ref_mime_part (part);
-	text = e_mail_part_describe (mime_part, empa->snoop_mime_type);
+	text = e_mail_part_describe (mime_part, e_mail_part_attachment_get_guessed_mime_type (empa));
 	flags = e_mail_formatter_get_text_format_flags (formatter);
 	html = camel_text_to_html (
 		text, flags & CAMEL_MIME_FILTER_TOHTML_CONVERT_URLS, 0);
@@ -192,9 +200,9 @@ emfe_attachment_format (EMailFormatterExtension *extension,
 
 	if (camel_content_type_is (content_type, "text", "*") ||
 	    camel_content_type_is (content_type, "application", "xml") ||
-	    (empa->snoop_mime_type && (
-	     g_ascii_strncasecmp (empa->snoop_mime_type, "text/", 5) == 0 ||
-	     g_ascii_strcasecmp (empa->snoop_mime_type, "application/xml") == 0))) {
+	    (e_mail_part_attachment_get_guessed_mime_type (empa) && (
+	     g_ascii_strncasecmp (e_mail_part_attachment_get_guessed_mime_type (empa), "text/", 5) == 0 ||
+	     g_ascii_strcasecmp (e_mail_part_attachment_get_guessed_mime_type (empa), "application/xml") == 0))) {
 		GSettings *settings;
 		gsize size_limit;
 

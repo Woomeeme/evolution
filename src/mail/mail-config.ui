@@ -163,9 +163,9 @@
     <property name="step_increment">1</property>
     <property name="page_increment">10</property>
   </object>
-  <object class="GtkAdjustment" id="adjustment7">
+  <object class="GtkAdjustment" id="adjustment_wrap-length">
     <property name="lower">31</property>
-    <property name="upper">200</property>
+    <property name="upper">998</property>
     <property name="value">71</property>
     <property name="step_increment">1</property>
     <property name="page_increment">1</property>
@@ -211,14 +211,26 @@
                     <property name="can_focus">False</property>
                     <property name="spacing">8</property>
                     <child>
-                      <object class="GtkCheckButton" id="chkSendHTML">
-                        <property name="label" translatable="yes">For_mat messages in HTML</property>
+                      <object class="GtkBox" id="hboxSendMode">
+                        <property name="orientation">horizontal</property>
                         <property name="visible">True</property>
-                        <property name="can_focus">True</property>
-                        <property name="receives_default">False</property>
-                        <property name="use_underline">True</property>
-                        <property name="xalign">0.5</property>
-                        <property name="draw_indicator">True</property>
+                        <property name="can_focus">False</property>
+                        <property name="spacing">8</property>
+                        <child>
+                          <object class="GtkLabel" id="lblSendMode">
+                            <property name="label" translatable="yes" comments="Translators: The text is followed by the format combo with values like 'Plain Text', 'HTML' and so on">For_mat messages in</property>
+                            <property name="visible">True</property>
+                            <property name="can_focus">True</property>
+                            <property name="use_underline">True</property>
+                            <property name="justify">center</property>
+                            <property name="xalign">0</property>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">False</property>
+                            <property name="position">0</property>
+                          </packing>
+                        </child>
                       </object>
                       <packing>
                         <property name="expand">False</property>
@@ -291,6 +303,22 @@
                       </packing>
                     </child>
                     <child>
+                      <object class="GtkCheckButton" id="chkRequestDSN">
+                        <property name="label" translatable="yes">Always request Deli_very Status Notification</property>
+                        <property name="visible">True</property>
+                        <property name="can_focus">True</property>
+                        <property name="receives_default">False</property>
+                        <property name="use_underline">True</property>
+                        <property name="xalign">0.5</property>
+                        <property name="draw_indicator">True</property>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">False</property>
+                        <property name="position">5</property>
+                      </packing>
+                    </child>
+                    <child>
                       <object class="GtkCheckButton" id="chkOutlookFilenames">
                         <property name="label" translatable="yes">Encode filenames in an _Outlook/GMail way</property>
                         <property name="visible">True</property>
@@ -303,7 +331,7 @@
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">False</property>
-                        <property name="position">5</property>
+                        <property name="position">6</property>
                       </packing>
                     </child>
                     <child>
@@ -342,7 +370,7 @@
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">False</property>
-                        <property name="position">6</property>
+                        <property name="position">7</property>
                       </packing>
                     </child>
                     <child>
@@ -369,7 +397,7 @@
                             <property name="can_focus">True</property>
                             <property name="max_length">3</property>
                             <property name="caps_lock_warning">False</property>
-                            <property name="adjustment">adjustment7</property>
+                            <property name="adjustment">adjustment_wrap-length</property>
                             <property name="numeric">True</property>
                             <property name="update_policy">if-valid</property>
                           </object>
@@ -383,7 +411,7 @@
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">False</property>
-                        <property name="position">7</property>
+                        <property name="position">8</property>
                       </packing>
                     </child>
                     <child>
@@ -413,7 +441,7 @@
                       <packing>
                         <property name="expand">False</property>
                         <property name="fill">False</property>
-                        <property name="position">8</property>
+                        <property name="position">9</property>
                       </packing>
                     </child>
                   </object>
@@ -629,6 +657,23 @@
                         <property name="right_attach">2</property>
                         <property name="top_attach">9</property>
                         <property name="bottom_attach">10</property>
+                        <property name="y_options"/>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkCheckButton" id="chkAttachSeparateMessages">
+                        <property name="label" translatable="yes">_Attach multiple messages as separate files</property>
+                        <property name="visible">True</property>
+                        <property name="can_focus">True</property>
+                        <property name="receives_default">True</property>
+                        <property name="use_underline">True</property>
+                        <property name="xalign">0.5</property>
+                        <property name="draw_indicator">True</property>
+                      </object>
+                      <packing>
+                        <property name="right_attach">2</property>
+                        <property name="top_attach">10</property>
+                        <property name="bottom_attach">11</property>
                         <property name="y_options"/>
                       </packing>
                     </child>
@@ -1163,6 +1208,159 @@
                     <property name="expand">False</property>
                     <property name="fill">False</property>
                     <property name="position">8</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkCheckButton" id="chkPromptChangedAttachment">
+                    <property name="label" translatable="yes" comments="This is in the context of: Ask for confirmation before...">Sending a message with _attachments which changed since being attached</property>
+                    <property name="visible">True</property>
+                    <property name="can_focus">True</property>
+                    <property name="receives_default">False</property>
+                    <property name="use_underline">True</property>
+                    <property name="xalign">0.5</property>
+                    <property name="draw_indicator">True</property>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">False</property>
+                    <property name="position">9</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkCheckButton" id="chkPromptWantHTML">
+                    <property name="label" translatable="yes">Sending an _HTML mail to contacts that do not want them</property>
+                    <property name="visible">True</property>
+                    <property name="can_focus">True</property>
+                    <property name="receives_default">False</property>
+                    <property name="use_underline">True</property>
+                    <property name="xalign">0.5</property>
+                    <property name="draw_indicator">True</property>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">False</property>
+                    <property name="position">10</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkGrid" id="accept-html-grid">
+                    <property name="visible">True</property>
+                    <property name="can-focus">False</property>
+                    <property name="margin-start">24</property>
+                    <property name="halign">fill</property>
+                    <property name="valign">start</property>
+                    <property name="vexpand">False</property>
+                    <property name="sensitive" bind-source="chkPromptWantHTML" bind-property="active" bind-flags="sync-create"/>
+                    <child>
+                      <object class="GtkLabel" id="accept-html-label">
+                        <property name="visible">True</property>
+                        <property name="can_focus">False</property>
+                        <property name="halign">start</property>
+                        <property name="valign">center</property>
+                        <property name="margin-bottom">6</property>
+                        <property name="label" translatable="yes">Addresses or domains which accept HTML messages:</property>
+                        <property name="sensitive" bind-source="chkPromptWantHTML" bind-property="active" bind-flags="sync-create"/>
+                      </object>
+                      <packing>
+                        <property name="left-attach">0</property>
+                        <property name="top-attach">0</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkScrolledWindow" id="accept-html-scrolledwindow">
+                        <property name="visible">True</property>
+                        <property name="can-focus">True</property>
+                        <property name="margin-bottom">6</property>
+                        <property name="halign">fill</property>
+                        <property name="valign">start</property>
+                        <property name="min-content-height">120</property>
+                        <property name="shadow-type">out</property>
+                        <child>
+                          <object class="GtkTreeView" id="accept-html-treeview">
+                            <property name="visible">True</property>
+                            <property name="can-focus">True</property>
+                            <property name="hexpand">True</property>
+                            <property name="vexpand">True</property>
+                            <property name="headers-visible">False</property>
+                            <child internal-child="selection">
+                              <object class="GtkTreeSelection" id="accept-html-treeview-selection">
+                                <property name="mode">multiple</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="left-attach">0</property>
+                        <property name="top-attach">1</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkButtonBox" id="accept-html-bbox">
+                        <property name="visible">True</property>
+                        <property name="can-focus">False</property>
+                        <property name="margin-start">6</property>
+                        <property name="margin-end">6</property>
+                        <property name="margin-top">0</property>
+                        <property name="margin-bottom">6</property>
+                        <property name="spacing">2</property>
+                        <property name="layout-style">center</property>
+                        <property name="halign">start</property>
+                        <property name="valign">start</property>
+                        <property name="orientation">vertical</property>
+                        <child>
+                          <object class="GtkButton" id="accept-html-add-button">
+                            <property name="label" translatable="yes">_Add</property>
+                            <property name="visible">True</property>
+                            <property name="can-focus">True</property>
+                            <property name="receives-default">True</property>
+                            <property name="use-underline">True</property>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">0</property>
+                          </packing>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="accept-html-edit-button">
+                            <property name="label" translatable="yes">_Edit</property>
+                            <property name="visible">True</property>
+                            <property name="can-focus">True</property>
+                            <property name="receives_default">False</property>
+                            <property name="use-underline">True</property>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">1</property>
+                          </packing>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="accept-html-remove-button">
+                            <property name="label" translatable="yes">_Remove</property>
+                            <property name="visible">True</property>
+                            <property name="can-focus">True</property>
+                            <property name="receives-default">False</property>
+                            <property name="use-underline">True</property>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">2</property>
+                          </packing>
+                        </child>
+                      </object>
+                      <packing>
+                        <property name="left-attach">1</property>
+                        <property name="top-attach">1</property>
+                      </packing>
+                    </child>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">False</property>
+                    <property name="position">11</property>
                   </packing>
                 </child>
               </object>
@@ -2106,6 +2304,22 @@
                         <property name="position">6</property>
                       </packing>
                     </child>
+                    <child>
+                      <object class="GtkCheckButton" id="thread-flat">
+                        <property name="label" translatable="yes">Group messages to _flat threads</property>
+                        <property name="visible">True</property>
+                        <property name="can_focus">True</property>
+                        <property name="receives_default">False</property>
+                        <property name="use_underline">True</property>
+                        <property name="xalign">0.5</property>
+                        <property name="draw_indicator">True</property>
+                      </object>
+                      <packing>
+                        <property name="expand">True</property>
+                        <property name="fill">True</property>
+                        <property name="position">7</property>
+                      </packing>
+                    </child>
                   </object>
                 </child>
               </object>
@@ -2408,8 +2622,8 @@
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkCheckButton" id="chkPromptWantHTML">
-                        <property name="label" translatable="yes">_Prompt on sending HTML mail to contacts that do not want them</property>
+                      <object class="GtkCheckButton" id="chkUnsetHTMLColors">
+                        <property name="label" translatable="yes">Unset colors provided in HTML mails in message previe_w</property>
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
                         <property name="receives_default">False</property>
@@ -3439,6 +3653,24 @@
                   </packing>
                 </child>
                 <child>
+                  <object class="GtkCheckButton" id="chkPromptOnMarkAsJunk">
+                    <property name="label" translatable="yes">_Prompt before marking message as junk</property>
+                    <property name="visible">True</property>
+                    <property name="can_focus">True</property>
+                    <property name="receives_default">False</property>
+                    <property name="use_underline">True</property>
+                    <property name="xalign">0</property>
+                    <property name="draw_indicator">True</property>
+                  </object>
+                  <packing>
+                    <property name="x_options">GTK_FILL</property>
+                    <property name="y_options"/>
+                    <property name="top_attach">2</property>
+                    <property name="bottom_attach">3</property>
+                    <property name="x_padding">12</property>
+                  </packing>
+                </child>
+                <child>
                   <object class="GtkLabel" id="junk-test-opts-header">
                     <property name="visible">True</property>
                     <property name="can_focus">False</property>
@@ -3450,8 +3682,8 @@
                     </attributes>
                   </object>
                   <packing>
-                    <property name="top_attach">2</property>
-                    <property name="bottom_attach">3</property>
+                    <property name="top_attach">3</property>
+                    <property name="bottom_attach">4</property>
                     <property name="x_options">GTK_FILL</property>
                     <property name="y_options"/>
                   </packing>
@@ -3467,8 +3699,8 @@
                     <property name="draw_indicator">True</property>
                   </object>
                   <packing>
-                    <property name="top_attach">3</property>
-                    <property name="bottom_attach">4</property>
+                    <property name="top_attach">4</property>
+                    <property name="bottom_attach">5</property>
                     <property name="x_options">GTK_FILL</property>
                     <property name="y_options"/>
                     <property name="x_padding">12</property>
@@ -3485,8 +3717,8 @@
                     <property name="draw_indicator">True</property>
                   </object>
                   <packing>
-                    <property name="top_attach">4</property>
-                    <property name="bottom_attach">5</property>
+                    <property name="top_attach">5</property>
+                    <property name="bottom_attach">6</property>
                     <property name="x_options">GTK_FILL</property>
                     <property name="y_options"/>
                     <property name="x_padding">24</property>
@@ -3503,8 +3735,8 @@
                     <property name="draw_indicator">True</property>
                   </object>
                   <packing>
-                    <property name="top_attach">5</property>
-                    <property name="bottom_attach">6</property>
+                    <property name="top_attach">6</property>
+                    <property name="bottom_attach">7</property>
                     <property name="x_options">GTK_FILL</property>
                     <property name="y_options"/>
                     <property name="x_padding">12</property>
@@ -3581,8 +3813,8 @@
                     </child>
                   </object>
                   <packing>
-                    <property name="top_attach">6</property>
-                    <property name="bottom_attach">7</property>
+                    <property name="top_attach">7</property>
+                    <property name="bottom_attach">8</property>
                     <property name="x_padding">12</property>
                   </packing>
                 </child>
@@ -3609,8 +3841,8 @@
                     </child>
                   </object>
                   <packing>
-                    <property name="top_attach">7</property>
-                    <property name="bottom_attach">8</property>
+                    <property name="top_attach">8</property>
+                    <property name="bottom_attach">9</property>
                     <property name="y_options">GTK_FILL</property>
                     <property name="y_padding">12</property>
                   </packing>
@@ -3644,6 +3876,179 @@
       </object>
       <packing>
         <property name="position">4</property>
+        <property name="tab_fill">False</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkBox" id="confirmation-section2">
+        <property name="orientation">vertical</property>
+        <property name="visible">True</property>
+        <property name="can_focus">False</property>
+        <property name="border_width">12</property>
+        <property name="spacing">12</property>
+        <child>
+          <object class="GtkLabel" id="confirmation-label2">
+            <property name="visible">True</property>
+            <property name="can_focus">False</property>
+            <property name="label" translatable="yes">Ask for confirmation before taking the following checkmarked actions:</property>
+            <property name="wrap">True</property>
+            <property name="xalign">0</property>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">False</property>
+            <property name="position">0</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkCheckButton" id="chk-prompt-check-if-default-mailer">
+            <property name="label" translatable="yes" comments="This is in the context of: Ask for confirmation before...">Check whether Evolution is the _default mailer</property>
+            <property name="margin-start">12</property>
+            <property name="visible">True</property>
+            <property name="can_focus">True</property>
+            <property name="receives_default">False</property>
+            <property name="use_underline">True</property>
+            <property name="xalign">0.5</property>
+            <property name="draw_indicator">True</property>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">False</property>
+            <property name="position">1</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkCheckButton" id="chk-prompt-on-empty-trash">
+            <property name="label" translatable="yes" comments="This is in the context of: Ask for confirmation before...">Emptying the _Trash</property>
+            <property name="margin-start">12</property>
+            <property name="visible">True</property>
+            <property name="can_focus">True</property>
+            <property name="receives_default">False</property>
+            <property name="use_underline">True</property>
+            <property name="xalign">0.5</property>
+            <property name="draw_indicator">True</property>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">False</property>
+            <property name="position">2</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkCheckButton" id="chk-prompt-on-open-many">
+            <property name="label" translatable="yes" comments="This is in the context of: Ask for confirmation before...">Tries to _open 10 or more messages at once</property>
+            <property name="margin-start">12</property>
+            <property name="visible">True</property>
+            <property name="can_focus">True</property>
+            <property name="receives_default">False</property>
+            <property name="use_underline">True</property>
+            <property name="xalign">0.5</property>
+            <property name="draw_indicator">True</property>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">False</property>
+            <property name="position">3</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkCheckButton" id="chk-prompt-on-mark-all-read">
+            <property name="label" translatable="yes" comments="This is in the context of: Ask for confirmation before...">Marking _all messages as read</property>
+            <property name="margin-start">12</property>
+            <property name="visible">True</property>
+            <property name="can_focus">True</property>
+            <property name="receives_default">False</property>
+            <property name="use_underline">True</property>
+            <property name="xalign">0.5</property>
+            <property name="draw_indicator">True</property>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">False</property>
+            <property name="position">4</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkCheckButton" id="chk-prompt-on-delete-in-vfolder">
+            <property name="label" translatable="yes" comments="This is in the context of: Ask for confirmation before...">Deleting messages in _search folder</property>
+            <property name="margin-start">12</property>
+            <property name="visible">True</property>
+            <property name="can_focus">True</property>
+            <property name="receives_default">False</property>
+            <property name="use_underline">True</property>
+            <property name="xalign">0.5</property>
+            <property name="draw_indicator">True</property>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">False</property>
+            <property name="position">5</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkCheckButton" id="chk-prompt-on-folder-drop-copy">
+            <property name="label" translatable="yes" comments="This is in the context of: Ask for confirmation before...">Copy _folder by Drag &amp; Drop in folder tree</property>
+            <property name="margin-start">12</property>
+            <property name="visible">True</property>
+            <property name="can_focus">True</property>
+            <property name="receives_default">False</property>
+            <property name="use_underline">True</property>
+            <property name="xalign">0.5</property>
+            <property name="draw_indicator">True</property>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">False</property>
+            <property name="position">6</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkCheckButton" id="chk-prompt-on-folder-drop-move">
+            <property name="label" translatable="yes" comments="This is in the context of: Ask for confirmation before...">_Move folder by Drag &amp; Drop in folder tree</property>
+            <property name="margin-start">12</property>
+            <property name="visible">True</property>
+            <property name="can_focus">True</property>
+            <property name="receives_default">False</property>
+            <property name="use_underline">True</property>
+            <property name="xalign">0.5</property>
+            <property name="draw_indicator">True</property>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">False</property>
+            <property name="position">7</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkCheckButton" id="chk-message-list-sort-on-header-click">
+            <property name="label" translatable="yes" comments="This is in the context of: Ask for confirmation before...">Sort message list on _header click</property>
+            <property name="margin-start">12</property>
+            <property name="visible">True</property>
+            <property name="can_focus">True</property>
+            <property name="receives_default">False</property>
+            <property name="use_underline">True</property>
+            <property name="xalign">0.5</property>
+            <property name="draw_indicator">True</property>
+          </object>
+          <packing>
+            <property name="expand">False</property>
+            <property name="fill">False</property>
+            <property name="position">8</property>
+          </packing>
+        </child>
+      </object>
+      <packing>
+        <property name="position">5</property>
+      </packing>
+    </child>
+    <child type="tab">
+      <object class="GtkLabel" id="lblConfirmation2">
+        <property name="visible">True</property>
+        <property name="can_focus">False</property>
+        <property name="label" translatable="yes">Confirmations</property>
+      </object>
+      <packing>
+        <property name="position">5</property>
         <property name="tab_fill">False</property>
       </packing>
     </child>

@@ -139,8 +139,33 @@ forward_data_free (ForwardData *data)
 }
 
 static gboolean
+check_destination_accepts_html (EDestination *dest,
+				/* const */ gchar **accepts_html)
+{
+	const gchar *email;
+	guint ii;
+
+	if (!dest)
+		return FALSE;
+	if (!accepts_html)
+		return FALSE;
+
+	email = e_destination_get_email (dest);
+	if (!email || !*email)
+		return FALSE;
+
+	for (ii = 0; accepts_html[ii]; ii++) {
+		if (camel_strstrcase (email, accepts_html[ii]))
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+static gboolean
 ask_confirm_for_unwanted_html_mail (EMsgComposer *composer,
-                                    EDestination **recipients)
+                                    EDestination **recipients,
+				    /*const */ gchar **accepts_html)
 {
 	gboolean res;
 	GString *str;
@@ -148,7 +173,8 @@ ask_confirm_for_unwanted_html_mail (EMsgComposer *composer,
 
 	str = g_string_new ("");
 	for (i = 0; recipients[i] != NULL; ++i) {
-		if (!e_destination_get_html_mail_pref (recipients[i])) {
+		if (!e_destination_get_html_mail_pref (recipients[i]) &&
+		    !check_destination_accepts_html (recipients[i], accepts_html)) {
 			const gchar *name;
 
 			name = e_destination_get_textrep (recipients[i], FALSE);
@@ -222,11 +248,13 @@ composer_presend_check_recipients (EMsgComposer *composer,
 	EComposerHeader *post_to_header;
 	GString *invalid_addrs = NULL;
 	GSettings *settings;
+	gchar *to_cc_domain = NULL;
 	gboolean check_passed = FALSE;
 	gint hidden = 0;
 	gint shown = 0;
 	gint num = 0;
 	gint num_to_cc = 0;
+	gint num_to_cc_same_domain = 0;
 	gint num_bcc = 0;
 	gint num_post = 0;
 	gint ii;
@@ -246,6 +274,20 @@ composer_presend_check_recipients (EMsgComposer *composer,
 			if (addr == NULL || *addr == '\0')
 				continue;
 
+			addr = e_destination_get_email (recipients[ii]);
+			if (addr && *addr) {
+				const gchar *at;
+
+				at = strchr (addr, '@');
+
+				if (!to_cc_domain && at) {
+					to_cc_domain = g_strdup (at);
+					num_to_cc_same_domain = 1;
+				} else if (to_cc_domain && at && g_ascii_strcasecmp (to_cc_domain, at) == 0) {
+					num_to_cc_same_domain++;
+				}
+			}
+
 			num_to_cc++;
 		}
 
@@ -260,6 +302,20 @@ composer_presend_check_recipients (EMsgComposer *composer,
 			addr = e_destination_get_address (recipients[ii]);
 			if (addr == NULL || *addr == '\0')
 				continue;
+
+			addr = e_destination_get_email (recipients[ii]);
+			if (addr && *addr) {
+				const gchar *at;
+
+				at = strchr (addr, '@');
+
+				if (!to_cc_domain && at) {
+					to_cc_domain = g_strdup (at);
+					num_to_cc_same_domain = 1;
+				} else if (to_cc_domain && at && g_ascii_strcasecmp (to_cc_domain, at) == 0) {
+					num_to_cc_same_domain++;
+				}
+			}
 
 			num_to_cc++;
 		}
@@ -386,7 +442,8 @@ composer_presend_check_recipients (EMsgComposer *composer,
 	}
 
 	settings = e_util_ref_settings ("org.gnome.evolution.mail");
-	if (num_to_cc > 1 && num_to_cc >= g_settings_get_int (settings, "composer-many-to-cc-recips-num")) {
+	if (num_to_cc > 1 && num_to_cc != num_to_cc_same_domain &&
+	    num_to_cc >= g_settings_get_int (settings, "composer-many-to-cc-recips-num")) {
 		gchar *head;
 		gchar *msg;
 
@@ -443,6 +500,8 @@ composer_presend_check_recipients (EMsgComposer *composer,
 	check_passed = TRUE;
 
 finished:
+	g_free (to_cc_domain);
+
 	if (recipients != NULL)
 		e_destination_freev (recipients);
 
@@ -552,8 +611,8 @@ composer_presend_check_unwanted_html (EMsgComposer *composer,
 {
 	EDestination **recipients;
 	EHTMLEditor *editor;
-	EContentEditor *cnt_editor;
 	EComposerHeaderTable *table;
+	EContentEditorMode mode;
 	GSettings *settings;
 	gboolean check_passed = TRUE;
 	gboolean html_mode;
@@ -564,13 +623,14 @@ composer_presend_check_unwanted_html (EMsgComposer *composer,
 	settings = e_util_ref_settings ("org.gnome.evolution.mail");
 
 	editor = e_msg_composer_get_editor (composer);
-	cnt_editor = e_html_editor_get_content_editor (editor);
-	html_mode = e_content_editor_get_html_mode (cnt_editor);
+	mode = e_html_editor_get_mode (editor);
+	html_mode = mode == E_CONTENT_EDITOR_MODE_HTML || mode == E_CONTENT_EDITOR_MODE_MARKDOWN_HTML;
 
 	table = e_msg_composer_get_header_table (composer);
 	recipients = e_composer_header_table_get_destinations (table);
 
-	send_html = g_settings_get_boolean (settings, "composer-send-html");
+	mode = g_settings_get_enum (settings, "composer-mode");
+	send_html = mode == E_CONTENT_EDITOR_MODE_HTML || mode == E_CONTENT_EDITOR_MODE_MARKDOWN_HTML;
 	confirm_html = g_settings_get_boolean (settings, "prompt-on-unwanted-html");
 
 	/* Only show this warning if our default is to send html.  If it
@@ -578,19 +638,24 @@ composer_presend_check_unwanted_html (EMsgComposer *composer,
 	 * and (presumably) had a good reason for doing this. */
 	if (html_mode && send_html && confirm_html && recipients != NULL) {
 		gboolean html_problem = FALSE;
+		gchar **accepts_html;
+
+		accepts_html = g_settings_get_strv (settings, "composer-addresses-accept-html");
 
 		for (ii = 0; recipients[ii] != NULL; ii++) {
-			if (!e_destination_get_html_mail_pref (recipients[ii])) {
+			if (!e_destination_get_html_mail_pref (recipients[ii]) &&
+			    !check_destination_accepts_html (recipients[ii], accepts_html)) {
 				html_problem = TRUE;
 				break;
 			}
 		}
 
 		if (html_problem) {
-			if (!ask_confirm_for_unwanted_html_mail (
-				composer, recipients))
+			if (!ask_confirm_for_unwanted_html_mail (composer, recipients, accepts_html))
 				check_passed = FALSE;
 		}
+
+		g_strfreev (accepts_html);
 	}
 
 	if (recipients != NULL)
@@ -601,12 +666,174 @@ composer_presend_check_unwanted_html (EMsgComposer *composer,
 	return check_passed;
 }
 
+static gboolean
+composer_presend_check_attachments (EMsgComposer *composer,
+				    EMailSession *session)
+{
+	EAttachmentView *view;
+	EAttachmentStore *store;
+	GList *attachments, *link;
+	gboolean can_send = TRUE;
+	EAttachment *first_changed = NULL;
+	guint n_changed = 0;
+
+	view = e_msg_composer_get_attachment_view (composer);
+	store = e_attachment_view_get_store (view);
+	attachments = e_attachment_store_get_attachments (store);
+
+	for (link = attachments; link; link = g_list_next (link)) {
+		EAttachment *attach = link->data;
+		gboolean file_exists = FALSE;
+
+		if (e_attachment_check_file_changed (attach, &file_exists, NULL) &&
+		    file_exists) {
+			e_attachment_set_may_reload (attach, TRUE);
+			if (!first_changed)
+				first_changed = attach;
+			n_changed++;
+		} else {
+			e_attachment_set_may_reload (attach, FALSE);
+		}
+	}
+
+	if (n_changed > 0) {
+		GFileInfo *file_info = NULL;
+		const gchar *display_name = NULL;
+		gchar *title, *text;
+
+		if (n_changed == 1) {
+			file_info = e_attachment_ref_file_info (first_changed);
+			display_name = g_file_info_get_display_name (file_info);
+			if (display_name && !*display_name)
+				display_name = NULL;
+		}
+
+		title = g_strdup_printf (ngettext (
+			"Attachment changed",
+			"%d attachments changed",
+			n_changed), n_changed);
+
+		if (n_changed == 1 && display_name) {
+			text = g_strdup_printf (_("Attachment “%s” changed after being added to the message. Do you want to send the message anyway?"),
+				display_name);
+		} else {
+			text = g_strdup_printf (ngettext ("One attachment changed after being added to the message. Do you want to send the message anyway?",
+							  "%d attachments changed after being added to the message. Do you want to send the message anyway?",
+				n_changed), n_changed);
+		}
+
+		can_send = e_util_prompt_user (
+			GTK_WINDOW (composer),
+			"org.gnome.evolution.mail",
+			"prompt-on-changed-attachment",
+			"mail:ask-composer-changed-attachment",
+			title, text, NULL);
+
+		g_clear_object (&file_info);
+		g_free (title);
+		g_free (text);
+	}
+
+	g_list_free_full (attachments, g_object_unref);
+
+	return can_send;
+}
+
+static void
+openpgp_changes_saved_cb (GObject *source_object,
+			  GAsyncResult *result,
+			  gpointer user_data)
+{
+	ESource *source = E_SOURCE (source_object);
+	GError *local_error = NULL;
+
+	if (!e_source_write_finish (source, result, &local_error))
+		g_warning ("%s: Failed to save changes to '%s': %s", G_STRFUNC, e_source_get_uid (source), local_error ? local_error->message : "Unknown error");
+
+	g_clear_error (&local_error);
+}
+
+static gboolean
+composer_presend_check_autocrypt_wanted (EMsgComposer *composer,
+					 EMailSession *session)
+{
+	EComposerHeaderTable *table;
+	gchar *identity_uid;
+	gboolean ask_send_public_key = TRUE;
+	gboolean can_send = TRUE;
+
+	if (!e_msg_composer_get_header (composer, "Autocrypt", 0))
+		return TRUE;
+
+	table = e_msg_composer_get_header_table (composer);
+	identity_uid = e_composer_header_table_dup_identity_uid (table, NULL, NULL);
+	if (identity_uid) {
+		ESource *source;
+
+		source = e_composer_header_table_ref_source (table, identity_uid);
+
+		if (source) {
+			if (e_source_has_extension (source, E_SOURCE_EXTENSION_OPENPGP)) {
+				ESourceOpenPGP *extension;
+
+				extension = e_source_get_extension (source, E_SOURCE_EXTENSION_OPENPGP);
+
+				ask_send_public_key = e_source_openpgp_get_ask_send_public_key (extension);
+			}
+
+			g_object_unref (source);
+		}
+	} else {
+		ask_send_public_key = FALSE;
+	}
+
+	if (ask_send_public_key) {
+		gint response;
+
+		response = e_alert_run_dialog_for_args (GTK_WINDOW (composer), "mail:ask-composer-send-autocrypt", NULL);
+		if (response == GTK_RESPONSE_YES) {
+			can_send = TRUE;
+		} else if (response == GTK_RESPONSE_NO) {
+			e_msg_composer_remove_header (composer, "Autocrypt");
+			can_send = TRUE;
+		} else if (response == GTK_RESPONSE_ACCEPT ||
+			   response == GTK_RESPONSE_REJECT) {
+			ESource *source;
+
+			source = e_composer_header_table_ref_source (table, identity_uid);
+			if (source) {
+				ESourceOpenPGP *extension;
+				extension = e_source_get_extension (source, E_SOURCE_EXTENSION_OPENPGP);
+				/* when disabling send of the public key, keep the ask set */
+				e_source_openpgp_set_ask_send_public_key (extension, response == GTK_RESPONSE_REJECT);
+				e_source_openpgp_set_send_public_key (extension, response == GTK_RESPONSE_ACCEPT);
+				e_source_write (source, NULL, openpgp_changes_saved_cb, NULL);
+				g_object_unref (source);
+			} else {
+				g_warn_if_reached ();
+			}
+
+			if (response != GTK_RESPONSE_ACCEPT)
+				e_msg_composer_remove_header (composer, "Autocrypt");
+
+			can_send = TRUE;
+		} else {
+			can_send = FALSE;
+		}
+	}
+
+	g_free (identity_uid);
+
+	return can_send;
+}
+
 static void
 composer_send_completed (GObject *source_object,
                          GAsyncResult *result,
                          gpointer user_data)
 {
 	EActivity *activity;
+	const gchar *outbox_uid;
 	gboolean service_unavailable;
 	gboolean set_changed = FALSE;
 	AsyncContext *async_context;
@@ -704,6 +931,28 @@ composer_send_completed (GObject *source_object,
 		}
 		set_changed = TRUE;
 		goto exit;
+	}
+
+	/* Remove the Outbox message after successful send */
+	outbox_uid = e_msg_composer_get_header (async_context->composer, "X-Evolution-Outbox-UID", 0);
+	if (outbox_uid && *outbox_uid) {
+		CamelSession *session;
+		CamelFolder *outbox;
+
+		session = e_msg_composer_ref_session (async_context->composer);
+		outbox = e_mail_session_get_local_folder (E_MAIL_SESSION (session), E_MAIL_LOCAL_FOLDER_OUTBOX);
+		if (outbox) {
+			CamelMessageInfo *info;
+
+			info = camel_folder_get_message_info (outbox, outbox_uid);
+			if (info) {
+				camel_message_info_set_flags (info, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_DELETED);
+
+				g_clear_object (&info);
+			}
+		}
+
+		g_clear_object (&session);
 	}
 
 	e_activity_set_state (activity, E_ACTIVITY_COMPLETED);
@@ -1804,6 +2053,8 @@ msg_composer_created_with_mailto_cb (GObject *source_object,
 
 	g_return_if_fail (ccd != NULL);
 
+	g_application_release (G_APPLICATION (e_shell_get_default ()));
+
 	composer = e_msg_composer_new_finish (result, &error);
 	if (error) {
 		g_warning ("%s: Failed to create msg composer: %s", G_STRFUNC, error->message);
@@ -1877,6 +2128,10 @@ em_utils_compose_new_message_with_mailto_and_selection (EShell *shell,
 	ccd->folder = folder ? g_object_ref (folder) : NULL;
 	ccd->message_uid = camel_pstring_strdup (message_uid);
 	ccd->mailto = g_strdup (mailto);
+
+	/* In case the app was started with "mailto:" URI; the composer is created
+	   asynchronously, where the async delay can cause shutdown of the app. */
+	g_application_hold (G_APPLICATION (shell));
 
 	e_msg_composer_new (shell, msg_composer_created_with_mailto_cb, ccd);
 }
@@ -2010,6 +2265,36 @@ emcu_restore_locale_after_attribution (gchar *restore_lc_messages,
 	g_free (restore_lc_time);
 }
 
+static gchar *
+emcu_generate_forward_subject (EMsgComposer *composer,
+			       CamelMimeMessage *message,
+			       const gchar *orig_subject)
+{
+	GSettings *settings;
+	gchar *restore_lc_messages = NULL, *restore_lc_time = NULL;
+	gchar *subject;
+
+	settings = e_util_ref_settings ("org.gnome.evolution.mail");
+
+	if (g_settings_get_boolean (settings, "composer-use-localized-fwd-re")) {
+		ESource *identity_source;
+
+		identity_source = emcu_ref_identity_source_from_composer (composer);
+
+		emcu_prepare_attribution_locale (identity_source, &restore_lc_messages, &restore_lc_time);
+
+		g_clear_object (&identity_source);
+	}
+
+	g_object_unref (settings);
+
+	subject = mail_tool_generate_forward_subject (message, orig_subject);
+
+	emcu_restore_locale_after_attribution (restore_lc_messages, restore_lc_time);
+
+	return subject;
+}
+
 /* Editing messages... */
 
 typedef enum {
@@ -2045,7 +2330,9 @@ static struct {
 
 static gchar *
 quoting_text (QuotingTextEnum type,
-	      EMsgComposer *composer)
+	      EMsgComposer *composer,
+	      gchar **out_restore_lc_messages,
+	      gchar **out_restore_lc_time)
 {
 	GSettings *settings;
 	gchar *restore_lc_messages = NULL, *restore_lc_time = NULL;
@@ -2055,8 +2342,18 @@ quoting_text (QuotingTextEnum type,
 	text = g_settings_get_string (settings, conf_messages[type].conf_key);
 	g_object_unref (settings);
 
-	if (text && *text)
+	if (text && *text) {
+		if (composer && out_restore_lc_messages && out_restore_lc_time) {
+			ESource *identity_source;
+
+			identity_source = emcu_ref_identity_source_from_composer (composer);
+
+			emcu_prepare_attribution_locale (identity_source, &restore_lc_messages, &restore_lc_time);
+
+			g_clear_object (&identity_source);
+		}
 		return text;
+	}
 
 	g_free (text);
 
@@ -2072,7 +2369,12 @@ quoting_text (QuotingTextEnum type,
 
 	text = g_strdup (_(conf_messages[type].message));
 
-	emcu_restore_locale_after_attribution (restore_lc_messages, restore_lc_time);
+	if (out_restore_lc_messages && out_restore_lc_time) {
+		*out_restore_lc_messages = restore_lc_messages;
+		*out_restore_lc_time = restore_lc_time;
+	} else {
+		emcu_restore_locale_after_attribution (restore_lc_messages, restore_lc_time);
+	}
 
 	return text;
 }
@@ -2089,7 +2391,7 @@ quoting_text (QuotingTextEnum type,
 gchar *
 em_composer_utils_get_forward_marker (EMsgComposer *composer)
 {
-	return quoting_text (QUOTING_FORWARD, composer);
+	return quoting_text (QUOTING_FORWARD, composer, NULL, NULL);
 }
 
 /**
@@ -2104,7 +2406,7 @@ em_composer_utils_get_forward_marker (EMsgComposer *composer)
 gchar *
 em_composer_utils_get_original_marker (EMsgComposer *composer)
 {
-	return quoting_text (QUOTING_ORIGINAL, composer);
+	return quoting_text (QUOTING_ORIGINAL, composer, NULL, NULL);
 }
 
 static gboolean
@@ -2169,6 +2471,8 @@ outbox_data_free (gpointer ptr)
  * @folder: a #CamelFolder
  * @message: a #CamelMimeMessage
  * @message_uid: UID of @message, or %NULL
+ * @keep_signature: whether to keep signature in the original message
+ * @replace_original_message: whether can replace the message in the original Draft/Outbox folder
  *
  * Sets up the @composer with the headers/mime-parts/etc of the @message.
  *
@@ -2179,20 +2483,36 @@ em_utils_edit_message (EMsgComposer *composer,
                        CamelFolder *folder,
                        CamelMimeMessage *message,
                        const gchar *message_uid,
-                       gboolean keep_signature)
+                       gboolean keep_signature,
+		       gboolean replace_original_message)
 {
 	ESourceRegistry *registry;
 	ESource *source;
+	CamelFolder *real_folder = NULL, *original_folder = NULL;
 	gboolean folder_is_sent;
 	gboolean folder_is_drafts;
 	gboolean folder_is_outbox;
 	gboolean folder_is_templates;
+	gchar *real_message_uid = NULL;
 	gchar *override_identity_uid = NULL, *override_alias_name = NULL, *override_alias_address = NULL;
 
 	g_return_if_fail (E_IS_MSG_COMPOSER (composer));
 	g_return_if_fail (CAMEL_IS_MIME_MESSAGE (message));
-	if (folder)
+	if (folder) {
 		g_return_if_fail (CAMEL_IS_FOLDER (folder));
+
+		if (CAMEL_IS_VEE_FOLDER (folder) && message_uid) {
+			em_utils_get_real_folder_and_message_uid (folder, message_uid, &real_folder, NULL, &real_message_uid);
+
+			if (real_folder) {
+				original_folder = folder;
+				folder = real_folder;
+			}
+
+			if (real_message_uid)
+				message_uid = real_message_uid;
+		}
+	}
 
 	registry = e_shell_get_registry (e_msg_composer_get_shell (composer));
 
@@ -2222,7 +2542,12 @@ em_utils_edit_message (EMsgComposer *composer,
 			}
 		}
 
-		source = em_utils_check_send_account_override (e_msg_composer_get_shell (composer), message, folder, &override_alias_name, &override_alias_address);
+		source = NULL;
+
+		if (original_folder)
+			source = em_utils_check_send_account_override (e_msg_composer_get_shell (composer), message, original_folder, &override_alias_name, &override_alias_address);
+		if (!source)
+			source = em_utils_check_send_account_override (e_msg_composer_get_shell (composer), message, folder, &override_alias_name, &override_alias_address);
 		if (source) {
 			g_free (override_identity_uid);
 			override_identity_uid = e_source_dup_uid (source);
@@ -2250,6 +2575,17 @@ em_utils_edit_message (EMsgComposer *composer,
 			e_msg_composer_set_header (composer, "X-Evolution-Source-Message", hdr_message);
 			e_msg_composer_set_header (composer, "X-Evolution-Source-Flags", hdr_flags);
 		}
+	} else if (folder_is_templates) {
+		gchar *folder_uri;
+
+		folder_uri = e_mail_folder_uri_from_folder (folder);
+
+		if (folder_uri && message_uid) {
+			e_msg_composer_set_header (composer, "X-Evolution-Templates-Folder", folder_uri);
+			e_msg_composer_set_header (composer, "X-Evolution-Templates-Message", message_uid);
+		}
+
+		g_free (folder_uri);
 	}
 
 	e_msg_composer_setup_with_message (composer, message, keep_signature, override_identity_uid, override_alias_name, override_alias_address, NULL);
@@ -2278,7 +2614,7 @@ em_utils_edit_message (EMsgComposer *composer,
 	e_msg_composer_remove_header (
 		composer, "X-Evolution-Replace-Outbox-UID");
 
-	if (message_uid != NULL && folder_is_drafts && folder) {
+	if (message_uid != NULL && folder_is_drafts && folder && replace_original_message) {
 		gchar *folder_uri;
 
 		folder_uri = e_mail_folder_uri_from_folder (folder);
@@ -2288,7 +2624,7 @@ em_utils_edit_message (EMsgComposer *composer,
 
 		g_free (folder_uri);
 
-	} else if (message_uid != NULL && folder_is_outbox) {
+	} else if (message_uid != NULL && folder_is_outbox && replace_original_message) {
 		CamelMessageInfo *info;
 
 		e_msg_composer_set_header (
@@ -2310,9 +2646,19 @@ em_utils_edit_message (EMsgComposer *composer,
 		}
 	}
 
+	if (message_uid != NULL && folder_is_outbox) {
+		/* To remove the message after send */
+		e_msg_composer_set_header (
+			composer, "X-Evolution-Outbox-UID",
+			message_uid);
+	}
+
 	composer_set_no_change (composer);
 
 	gtk_widget_show (GTK_WIDGET (composer));
+
+	g_clear_object (&real_folder);
+	g_free (real_message_uid);
 }
 
 static void
@@ -2509,10 +2855,13 @@ forward_non_attached (EMsgComposer *composer,
                       CamelFolder *folder,
                       const gchar *uid,
                       CamelMimeMessage *message,
-                      EMailForwardStyle style)
+                      EMailForwardStyle style,
+		      gboolean skip_insecure_parts)
 {
 	CamelSession *session;
+	EComposerHeaderTable *table;
 	EMailPartList *part_list = NULL;
+	gchar *restore_lc_messages = NULL, *restore_lc_time = NULL;
 	gchar *text, *forward, *subject;
 	guint32 validity_found = 0;
 	guint32 flags;
@@ -2522,22 +2871,29 @@ forward_non_attached (EMsgComposer *composer,
 	session = e_msg_composer_ref_session (composer);
 
 	flags = E_MAIL_FORMATTER_QUOTE_FLAG_HEADERS |
-		E_MAIL_FORMATTER_QUOTE_FLAG_KEEP_SIG;
+		E_MAIL_FORMATTER_QUOTE_FLAG_KEEP_SIG |
+		(skip_insecure_parts ? E_MAIL_FORMATTER_QUOTE_FLAG_SKIP_INSECURE_PARTS : 0);
 	if (style == E_MAIL_FORWARD_STYLE_QUOTED)
 		flags |= E_MAIL_FORMATTER_QUOTE_FLAG_CITE;
-	if (!e_content_editor_get_html_mode (e_html_editor_get_content_editor (e_msg_composer_get_editor (composer))))
+	if (e_html_editor_get_mode (e_msg_composer_get_editor (composer)) != E_CONTENT_EDITOR_MODE_HTML)
 		flags |= E_MAIL_FORMATTER_QUOTE_FLAG_NO_FORMATTING;
 
-	/* Setup composer's From account before calling quoting_text(),
-	   because quoting_text() relies on that account. */
-	subject = mail_tool_generate_forward_subject (message);
-	set_up_new_composer (composer, subject, folder, message, uid, FALSE);
-	g_free (subject);
+	/* Setup composer's From account before calling quoting_text() and
+	   forward subject, because both rely on that account. */
+	set_up_new_composer (composer, NULL, folder, message, uid, FALSE);
 
-	forward = quoting_text (QUOTING_FORWARD, composer);
+	forward = quoting_text (QUOTING_FORWARD, composer, &restore_lc_messages, &restore_lc_time);
 	text = em_utils_message_to_html_ex (session, message, forward, flags, NULL, NULL, NULL, &validity_found, &part_list);
+	emcu_restore_locale_after_attribution (restore_lc_messages, restore_lc_time);
 
 	e_msg_composer_add_attachments_from_part_list (composer, part_list, FALSE);
+
+	/* Read the Subject after EMFormatter, because it can update
+	   it from an encrypted part */
+	subject = emcu_generate_forward_subject (composer, message, NULL);
+	table = e_msg_composer_get_header_table (composer);
+	e_composer_header_table_set_subject (table, subject);
+	g_free (subject);
 
 	if (text != NULL) {
 		e_msg_composer_set_body_text (composer, text, TRUE);
@@ -2547,6 +2903,7 @@ forward_non_attached (EMsgComposer *composer,
 		emu_set_source_headers (composer, folder, uid, CAMEL_MESSAGE_FORWARDED);
 
 		emu_update_composers_security (composer, validity_found);
+		e_msg_composer_check_inline_attachments (composer);
 		composer_set_no_change (composer);
 		gtk_widget_show (GTK_WIDGET (composer));
 
@@ -2565,6 +2922,7 @@ forward_non_attached (EMsgComposer *composer,
  * @style: the forward style to use
  * @folder: (nullable):  a #CamelFolder, or %NULL
  * @uid: (nullable): the UID of %message, or %NULL
+ * @skip_insecure_parts: whether to not quote insecure parts
  *
  * Forwards @message in the given @style.
  *
@@ -2587,11 +2945,11 @@ em_utils_forward_message (EMsgComposer *composer,
                           CamelMimeMessage *message,
                           EMailForwardStyle style,
                           CamelFolder *folder,
-                          const gchar *uid)
+                          const gchar *uid,
+			  gboolean skip_insecure_parts)
 {
 	CamelMimePart *part;
 	GPtrArray *uids = NULL;
-	gchar *subject;
 
 	g_return_if_fail (E_IS_MSG_COMPOSER (composer));
 	g_return_if_fail (CAMEL_IS_MIME_MESSAGE (message));
@@ -2602,22 +2960,20 @@ em_utils_forward_message (EMsgComposer *composer,
 		case E_MAIL_FORWARD_STYLE_ATTACHED:
 		default:
 			part = mail_tool_make_message_attachment (message);
-			subject = mail_tool_generate_forward_subject (message);
 
 			if (folder && uid) {
 				uids = g_ptr_array_new ();
 				g_ptr_array_add (uids, (gpointer) uid);
 			}
 
-			em_utils_forward_attachment (composer, part, subject, uids ? folder : NULL, uids);
+			em_utils_forward_attachment (composer, part, camel_mime_message_get_subject (message), uids ? folder : NULL, uids);
 
 			g_object_unref (part);
-			g_free (subject);
 			break;
 
 		case E_MAIL_FORWARD_STYLE_INLINE:
 		case E_MAIL_FORWARD_STYLE_QUOTED:
-			forward_non_attached (composer, folder, uid, message, style);
+			forward_non_attached (composer, folder, uid, message, style, skip_insecure_parts);
 			break;
 	}
 
@@ -2628,10 +2984,11 @@ em_utils_forward_message (EMsgComposer *composer,
 void
 em_utils_forward_attachment (EMsgComposer *composer,
                              CamelMimePart *part,
-                             const gchar *subject,
+                             const gchar *orig_subject,
                              CamelFolder *folder,
                              GPtrArray *uids)
 {
+	GSettings *settings;
 	CamelDataWrapper *content;
 
 	g_return_if_fail (E_IS_MSG_COMPOSER (composer));
@@ -2642,11 +2999,51 @@ em_utils_forward_attachment (EMsgComposer *composer,
 
 	e_msg_composer_set_is_reply_or_forward (composer, TRUE);
 
-	set_up_new_composer (composer, subject, folder, NULL, NULL, FALSE);
+	set_up_new_composer (composer, NULL, folder, NULL, NULL, FALSE);
 
-	e_msg_composer_attach (composer, part);
+	if (orig_subject) {
+		gchar *subject;
 
+		subject = emcu_generate_forward_subject (composer, NULL, orig_subject);
+		e_composer_header_table_set_subject (e_msg_composer_get_header_table (composer), subject);
+		g_free (subject);
+	}
+
+	settings = e_util_ref_settings ("org.gnome.evolution.mail");
 	content = camel_medium_get_content (CAMEL_MEDIUM (part));
+
+	if (uids != NULL && uids->len > 1 && CAMEL_IS_MULTIPART (content) &&
+	    g_settings_get_boolean (settings, "composer-attach-separate-messages")) {
+		CamelMultipart *multipart;
+		guint ii, nparts;
+
+		multipart = CAMEL_MULTIPART (content);
+		nparts = camel_multipart_get_number (multipart);
+
+		for (ii = 0; ii < nparts; ii++) {
+			CamelMimePart *mpart;
+			gchar *mime_type;
+
+			mpart = camel_multipart_get_part (multipart, ii);
+			mime_type = camel_data_wrapper_get_mime_type (CAMEL_DATA_WRAPPER (mpart));
+
+			if (mime_type && g_ascii_strcasecmp (mime_type, "message/rfc822") == 0) {
+				CamelDataWrapper *mpart_content;
+
+				mpart_content = camel_medium_get_content (CAMEL_MEDIUM (mpart));
+
+				if (CAMEL_IS_MIME_MESSAGE (mpart_content))
+					e_msg_composer_attach (composer, mpart);
+			}
+
+			g_free (mime_type);
+		}
+	} else {
+		e_msg_composer_attach (composer, part);
+	}
+
+	g_clear_object (&settings);
+
 	if (CAMEL_IS_MIME_MESSAGE (content)) {
 		emu_add_composer_references_from_message (composer, CAMEL_MIME_MESSAGE (content));
 	} else if (CAMEL_IS_MULTIPART (content)) {
@@ -2782,7 +3179,8 @@ em_utils_camel_address_to_destination (CamelInternetAddress *iaddr)
 }
 
 static gchar *
-emcu_construct_reply_subject (const gchar *source_subject)
+emcu_construct_reply_subject (EMsgComposer *composer,
+			      const gchar *source_subject)
 {
 	gchar *res;
 
@@ -2795,8 +3193,22 @@ emcu_construct_reply_subject (const gchar *source_subject)
 
 		settings = e_util_ref_settings ("org.gnome.evolution.mail");
 		if (g_settings_get_boolean (settings, "composer-use-localized-fwd-re")) {
+			gchar *restore_lc_messages = NULL, *restore_lc_time = NULL;
+
+			if (composer) {
+				ESource *identity_source;
+
+				identity_source = emcu_ref_identity_source_from_composer (composer);
+
+				emcu_prepare_attribution_locale (identity_source, &restore_lc_messages, &restore_lc_time);
+
+				g_clear_object (&identity_source);
+			}
+
 			/* Translators: This is a reply attribution in the message reply subject. The %s is replaced with the subject of the original message. Both 'Re'-s in the 'reply-attribution' translation context should translate into the same string, the same as the ':' separator. */
 			res = g_strdup_printf (C_("reply-attribution", "Re: %s"), source_subject);
+
+			emcu_restore_locale_after_attribution (restore_lc_messages, restore_lc_time);
 		} else {
 			/* Do not localize this string */
 			res = g_strdup_printf ("Re: %s", source_subject);
@@ -2911,13 +3323,12 @@ reply_setup_composer (EMsgComposer *composer,
 
 	reply_setup_composer_recipients (composer, to, cc, folder, message_uid, postto);
 
-	/* Set the subject of the new message. */
-	subject = emcu_construct_reply_subject (camel_mime_message_get_subject (message));
-
 	table = e_msg_composer_get_header_table (composer);
-	e_composer_header_table_set_subject (table, subject);
 	e_composer_header_table_set_identity_uid (table, identity_uid, identity_name, identity_address);
 
+	/* Set the subject of the new message. */
+	subject = emcu_construct_reply_subject (composer, camel_mime_message_get_subject (message));
+	e_composer_header_table_set_subject (table, subject);
 	g_free (subject);
 
 	/* Add In-Reply-To and References. */
@@ -3054,9 +3465,10 @@ get_reply_sender (CamelMimeMessage *message,
                   CamelInternetAddress *to,
                   CamelNNTPAddress *postto)
 {
-	CamelInternetAddress *reply_to;
+	CamelInternetAddress *reply_to = NULL;
 	CamelMedium *medium;
 	const gchar *posthdr = NULL;
+	const gchar *mail_reply_to;
 
 	medium = CAMEL_MEDIUM (message);
 
@@ -3072,7 +3484,23 @@ get_reply_sender (CamelMimeMessage *message,
 		return;
 	}
 
-	reply_to = get_reply_to (message);
+	/* Prefer Mail-Reply-To for Reply-Sender, if exists */
+	mail_reply_to = camel_medium_get_header (medium, "Mail-Reply-To");
+	if (mail_reply_to && *mail_reply_to) {
+		reply_to = camel_internet_address_new ();
+		camel_address_decode (CAMEL_ADDRESS (reply_to), mail_reply_to);
+
+		if (!camel_address_length (CAMEL_ADDRESS (reply_to))) {
+			g_clear_object (&reply_to);
+		}
+	}
+
+	if (!reply_to) {
+		reply_to = get_reply_to (message);
+
+		if (reply_to)
+			g_object_ref (reply_to);
+	}
 
 	if (reply_to != NULL) {
 		const gchar *name;
@@ -3081,6 +3509,8 @@ get_reply_sender (CamelMimeMessage *message,
 
 		while (camel_internet_address_get (reply_to, ii++, &name, &addr))
 			camel_internet_address_add (to, name, addr);
+
+		g_object_unref (reply_to);
 	}
 }
 
@@ -3281,12 +3711,13 @@ em_utils_get_reply_all (ESourceRegistry *registry,
                         CamelInternetAddress *cc,
                         CamelNNTPAddress *postto)
 {
-	CamelInternetAddress *reply_to;
-	CamelInternetAddress *to_addrs;
-	CamelInternetAddress *cc_addrs;
+	CamelInternetAddress *reply_to = NULL;
+	CamelInternetAddress *to_addrs = NULL;
+	CamelInternetAddress *cc_addrs = NULL;
 	CamelMedium *medium;
 	const gchar *name, *addr;
 	const gchar *posthdr = NULL;
+	const gchar *mail_followup_to;
 	GHashTable *rcpt_hash;
 
 	g_return_if_fail (E_IS_SOURCE_REGISTRY (registry));
@@ -3308,11 +3739,24 @@ em_utils_get_reply_all (ESourceRegistry *registry,
 
 	rcpt_hash = generate_recipient_hash (registry);
 
-	reply_to = get_reply_to (message);
-	to_addrs = camel_mime_message_get_recipients (
-		message, CAMEL_RECIPIENT_TYPE_TO);
-	cc_addrs = camel_mime_message_get_recipients (
-		message, CAMEL_RECIPIENT_TYPE_CC);
+	/* Prefer Mail-Followup-To for Reply-All, if exists */
+	mail_followup_to = camel_medium_get_header (medium, "Mail-Followup-To");
+	if (mail_followup_to && *mail_followup_to) {
+		to_addrs = camel_internet_address_new ();
+		camel_address_decode (CAMEL_ADDRESS (to_addrs), mail_followup_to);
+
+		if (!camel_address_length (CAMEL_ADDRESS (to_addrs))) {
+			g_clear_object (&to_addrs);
+		}
+	}
+
+	if (to_addrs == NULL) {
+		reply_to = get_reply_to (message);
+		to_addrs = camel_mime_message_get_recipients (message, CAMEL_RECIPIENT_TYPE_TO);
+		cc_addrs = camel_mime_message_get_recipients (message, CAMEL_RECIPIENT_TYPE_CC);
+
+		g_object_ref (to_addrs);
+	}
 
 	if (reply_to != NULL) {
 		gint ii = 0;
@@ -3331,8 +3775,10 @@ em_utils_get_reply_all (ESourceRegistry *registry,
 		}
 	}
 
-	concat_unique_addrs (to, to_addrs, rcpt_hash);
-	concat_unique_addrs (cc, cc_addrs, rcpt_hash);
+	if (to_addrs)
+		concat_unique_addrs (to, to_addrs, rcpt_hash);
+	if (cc_addrs)
+		concat_unique_addrs (cc, cc_addrs, rcpt_hash);
 
 	/* Set as the 'To' the first 'Reply-To' address, if such exists, when no address
 	   had been picked (like when all addresses are configured mail accounts). */
@@ -3359,6 +3805,7 @@ em_utils_get_reply_all (ESourceRegistry *registry,
 	}
 
 	g_hash_table_destroy (rcpt_hash);
+	g_clear_object (&to_addrs);
 }
 
 enum {
@@ -3476,7 +3923,7 @@ em_composer_utils_get_reply_credits (ESource *identity_source,
 
 	emcu_prepare_attribution_locale (identity_source, &restore_lc_messages, &restore_lc_time);
 
-	format = quoting_text (QUOTING_ATTRIBUTION, NULL);
+	format = quoting_text (QUOTING_ATTRIBUTION, NULL, NULL, NULL);
 	str = g_string_new ("");
 
 	date = camel_mime_message_get_date (message, &tzone);
@@ -3489,12 +3936,13 @@ em_composer_utils_get_reply_credits (ESource *identity_source,
 		/* That didn't work either, use current time */
 		time (&date);
 		tzone = 0;
-	} else if (tzone == 0) {
+	} else {
 		GSettings *settings;
 
 		settings = e_util_ref_settings ("org.gnome.evolution.mail");
 
-		if (g_settings_get_boolean (settings, "composer-reply-credits-utc-to-localtime")) {
+		if ((tzone == 0 && g_settings_get_boolean (settings, "composer-reply-credits-utc-to-localtime")) ||
+		    g_settings_get_boolean (settings, "composer-reply-credits-to-localtime")) {
 			struct tm local;
 			gint offset = 0;
 
@@ -3619,6 +4067,7 @@ static void
 composer_set_body (EMsgComposer *composer,
                    CamelMimeMessage *message,
                    EMailReplyStyle style,
+		   gboolean skip_insecure_parts,
                    EMailPartList *parts_list,
 		   EMailPartList **out_used_part_list)
 {
@@ -3627,12 +4076,16 @@ composer_set_body (EMsgComposer *composer,
 	CamelMimePart *part;
 	CamelSession *session;
 	GSettings *settings;
-	guint32 validity_found = 0, keep_sig_flag = 0;
+	guint32 validity_found = 0, add_flags = 0;
+	gchar *restore_lc_messages = NULL, *restore_lc_time = NULL;
 
 	settings = e_util_ref_settings ("org.gnome.evolution.mail");
 	if (g_settings_get_boolean (settings, "composer-reply-keep-signature"))
-		keep_sig_flag = E_MAIL_FORMATTER_QUOTE_FLAG_KEEP_SIG;
+		add_flags = E_MAIL_FORMATTER_QUOTE_FLAG_KEEP_SIG;
 	g_clear_object (&settings);
+
+	if (skip_insecure_parts)
+		add_flags |= E_MAIL_FORMATTER_QUOTE_FLAG_SKIP_INSECURE_PARTS;
 
 	session = e_msg_composer_ref_session (composer);
 
@@ -3647,10 +4100,11 @@ composer_set_body (EMsgComposer *composer,
 		g_object_unref (part);
 		break;
 	case E_MAIL_REPLY_STYLE_OUTLOOK:
-		original = quoting_text (QUOTING_ORIGINAL, composer);
+		original = quoting_text (QUOTING_ORIGINAL, composer, &restore_lc_messages, &restore_lc_time);
 		text = em_utils_message_to_html_ex (
-			session, message, original, E_MAIL_FORMATTER_QUOTE_FLAG_HEADERS | keep_sig_flag,
+			session, message, original, E_MAIL_FORMATTER_QUOTE_FLAG_HEADERS | add_flags,
 			parts_list, NULL, NULL, &validity_found, out_used_part_list);
+		emcu_restore_locale_after_attribution (restore_lc_messages, restore_lc_time);
 		e_msg_composer_set_body_text (composer, text, TRUE);
 		g_free (text);
 		g_free (original);
@@ -3667,7 +4121,7 @@ composer_set_body (EMsgComposer *composer,
 		g_clear_object (&identity_source);
 
 		text = em_utils_message_to_html_ex (
-			session, message, credits, E_MAIL_FORMATTER_QUOTE_FLAG_CITE | keep_sig_flag,
+			session, message, credits, E_MAIL_FORMATTER_QUOTE_FLAG_CITE | add_flags,
 			parts_list, NULL, NULL, &validity_found, out_used_part_list);
 		g_free (credits);
 		e_msg_composer_set_body_text (composer, text, TRUE);
@@ -3775,51 +4229,33 @@ alt_reply_composer_created_cb (GObject *source_object,
 	composer = e_msg_composer_new_finish (result, &error);
 
 	if (composer) {
-		EContentEditor *cnt_editor;
-
-		cnt_editor = e_html_editor_get_content_editor (e_msg_composer_get_editor (composer));
-
 		if (context->new_message) {
 			CamelInternetAddress *to = NULL, *cc = NULL;
 			CamelNNTPAddress *postto = NULL;
-			gboolean need_reply_all = FALSE;
 
-			if ((context->flags & (E_MAIL_REPLY_FLAG_FORMAT_PLAIN | E_MAIL_REPLY_FLAG_FORMAT_HTML)) != 0) {
-				e_content_editor_set_html_mode (cnt_editor, (context->flags & E_MAIL_REPLY_FLAG_FORMAT_HTML) != 0);
+			if (context->template_preserve_subject) {
+				gchar *subject;
+
+				subject = emcu_construct_reply_subject (composer, camel_mime_message_get_subject (context->source_message));
+				camel_mime_message_set_subject (context->new_message, subject);
+				g_free (subject);
 			}
 
-			em_utils_edit_message (composer, context->folder, context->new_message, context->message_uid, TRUE);
+			em_utils_edit_message (composer, context->folder, context->new_message, context->message_uid, TRUE, FALSE);
 
-			if (context->type == E_MAIL_REPLY_TO_SENDER) {
-				/* Reply to sender */
-				to = camel_internet_address_new ();
-				if (context->folder)
-					postto = camel_nntp_address_new ();
-				get_reply_sender (context->source_message, to, postto);
-			} else if (context->type == E_MAIL_REPLY_TO_LIST) {
-				/* Reply to list */
-				to = camel_internet_address_new ();
+			to = camel_internet_address_new ();
+			cc = camel_internet_address_new ();
 
-				if (!get_reply_list (context->source_message, to)) {
-					need_reply_all = TRUE;
-					g_clear_object (&to);
-				}
-			} else if (context->type != E_MAIL_REPLY_TO_ALL) {
-				g_warn_if_reached ();
-			}
+			if (context->folder)
+				postto = camel_nntp_address_new ();
 
-			if (context->type == E_MAIL_REPLY_TO_ALL || need_reply_all) {
-				/* Reply to all */
-				to = camel_internet_address_new ();
-				cc = camel_internet_address_new ();
+			em_utils_get_reply_recipients (e_shell_get_registry (context->shell), context->source_message, context->type, NULL, to, cc, postto);
 
-				if (context->folder)
-					postto = camel_nntp_address_new ();
-
-				em_utils_get_reply_all (e_shell_get_registry (context->shell), context->source_message, to, cc, postto);
-			}
+			if (postto && !camel_address_length (CAMEL_ADDRESS (postto)))
+				g_clear_object (&postto);
 
 			reply_setup_composer_recipients (composer, to, cc, context->folder, context->message_uid, postto);
+			e_msg_composer_check_autocrypt (composer, context->source_message);
 
 			composer_set_no_change (composer);
 
@@ -3860,14 +4296,6 @@ alt_reply_template_applied_cb (GObject *source_object,
 	context->new_message = e_mail_templates_apply_finish (source_object, result, &error);
 
 	if (context->new_message) {
-		if (context->template_preserve_subject) {
-			gchar *subject;
-
-			subject = emcu_construct_reply_subject (camel_mime_message_get_subject (context->source_message));
-			camel_mime_message_set_subject (context->new_message, subject);
-			g_free (subject);
-		}
-
 		e_msg_composer_new (context->shell, alt_reply_composer_created_cb, context);
 	} else {
 		e_alert_submit (context->alert_sink, "mail:no-retrieve-message",
@@ -4006,6 +4434,7 @@ emcu_create_templates_combo (EShell *shell,
  * @source: (nullable): source to inherit view settings from
  * @validity_pgp_sum: a bit-or of #EMailPartValidityFlags for PGP from original message part list
  * @validity_smime_sum: a bit-or of #EMailPartValidityFlags for S/MIME from original message part list
+ * @skip_insecure_parts: whether to not quote insecure parts
  *
  * This is similar to em_utils_reply_to_message(), except it asks user to
  * change some settings before sending. It calls em_utils_reply_to_message()
@@ -4023,14 +4452,17 @@ em_utils_reply_alternative (GtkWindow *parent,
 			    EMailReplyStyle default_style,
 			    EMailPartList *source,
 			    EMailPartValidityFlags validity_pgp_sum,
-			    EMailPartValidityFlags validity_smime_sum)
+			    EMailPartValidityFlags validity_smime_sum,
+			    gboolean skip_insecure_parts)
 {
 	GtkWidget *dialog, *widget, *style_label;
 	GtkBox *hbox, *vbox;
+	GtkGrid *grid;
 	GtkRadioButton *recip_sender, *recip_list, *recip_all;
 	GtkLabel *sender_label, *list_label, *all_label;
 	GtkRadioButton *style_default, *style_attach, *style_inline, *style_quote, *style_no_quote;
-	GtkToggleButton *html_format;
+	EActionComboBox *mode_combo;
+	GtkRadioAction *radio_action, *html_mode_radio_action;
 	GtkToggleButton *bottom_posting;
 	GtkToggleButton *top_signature;
 	GtkCheckButton *apply_template;
@@ -4043,6 +4475,7 @@ em_utils_reply_alternative (GtkWindow *parent,
 	CamelInternetAddress *to, *cc;
 	CamelNNTPAddress *postto = NULL;
 	gint n_addresses;
+	guint row = 0;
 
 	g_return_if_fail (E_IS_SHELL (shell));
 	g_return_if_fail (CAMEL_IS_MIME_MESSAGE (message));
@@ -4059,23 +4492,29 @@ em_utils_reply_alternative (GtkWindow *parent,
 
 	vbox = GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog)));
 	gtk_container_set_border_width (GTK_CONTAINER (vbox), 12);
-	gtk_box_set_spacing (vbox, 2);
 
-	#define add_with_indent(x) \
+	grid = GTK_GRID (gtk_grid_new ());
+	gtk_grid_set_column_spacing (grid, 2);
+	gtk_grid_set_row_spacing (grid, 2);
+	gtk_box_pack_start (vbox, GTK_WIDGET (grid), TRUE, TRUE, 0);
+
+	#define add_with_indent(x, _cols) \
 		gtk_widget_set_margin_left (GTK_WIDGET (x), 12); \
-		gtk_box_pack_start (vbox, GTK_WIDGET (x), FALSE, FALSE, 0);
+		gtk_grid_attach (grid, GTK_WIDGET (x), 0, row, (_cols), 1); \
+		row++;
 
 	widget = gtk_label_new (_("Recipients:"));
 	g_object_set (G_OBJECT (widget),
 		"hexpand", FALSE,
 		"halign", GTK_ALIGN_START,
 		NULL);
-	gtk_box_pack_start (vbox, widget, FALSE, FALSE, 0);
+	gtk_grid_attach (grid, widget, 0, row, 1, 1);
+	row++;
 
 	attr_list = pango_attr_list_new ();
 	pango_attr_list_insert (attr_list, pango_attr_style_new (PANGO_STYLE_ITALIC));
 
-	#define add_with_label(wgt, lbl) G_STMT_START { \
+	#define add_with_label(wgt, lbl, _cols) G_STMT_START { \
 		GtkWidget *divider_label = gtk_label_new (":"); \
 		gtk_label_set_attributes (GTK_LABEL (lbl), attr_list); \
 		hbox = GTK_BOX (gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6)); \
@@ -4090,22 +4529,22 @@ em_utils_reply_alternative (GtkWindow *parent,
 			wgt, "sensitive", \
 			lbl, "visible", \
 			G_BINDING_SYNC_CREATE); \
-		add_with_indent (hbox); } G_STMT_END
+		add_with_indent (hbox, (_cols)); } G_STMT_END
 
 	recip_sender = GTK_RADIO_BUTTON (gtk_radio_button_new_with_mnemonic (
 		NULL, _("Reply to _Sender")));
 	sender_label = GTK_LABEL (gtk_label_new (""));
-	add_with_label (recip_sender, sender_label);
+	add_with_label (recip_sender, sender_label, 2);
 
 	recip_list = GTK_RADIO_BUTTON (gtk_radio_button_new_with_mnemonic (
 		gtk_radio_button_get_group (recip_sender), _("Reply to _List")));
 	list_label = GTK_LABEL (gtk_label_new (""));
-	add_with_label (recip_list, list_label);
+	add_with_label (recip_list, list_label, 2);
 
 	recip_all = GTK_RADIO_BUTTON (gtk_radio_button_new_with_mnemonic (
 		gtk_radio_button_get_group (recip_sender), _("Reply to _All")));
 	all_label = GTK_LABEL (gtk_label_new (""));
-	add_with_label (recip_all, all_label);
+	add_with_label (recip_all, all_label, 2);
 
 	#undef add_with_label
 
@@ -4113,66 +4552,92 @@ em_utils_reply_alternative (GtkWindow *parent,
 
 	/* One line gap between sections */
 	widget = gtk_label_new (" ");
-	gtk_box_pack_start (vbox, widget, FALSE, FALSE, 0);
+	gtk_grid_attach (grid, widget, 0, row, 1, 1);
+	row++;
 
 	style_label = gtk_label_new (_("Reply style:"));
 	g_object_set (G_OBJECT (style_label),
 		"hexpand", FALSE,
 		"halign", GTK_ALIGN_START,
 		NULL);
-	gtk_box_pack_start (vbox, style_label, FALSE, FALSE, 0);
+	gtk_grid_attach (grid, style_label, 0, row, 1, 1);
+	row++;
 
 	style_default = GTK_RADIO_BUTTON (gtk_radio_button_new_with_mnemonic (
 		NULL, _("_Default")));
-	add_with_indent (style_default);
+	add_with_indent (style_default, 1);
 
 	style_attach = GTK_RADIO_BUTTON (gtk_radio_button_new_with_mnemonic (
 		gtk_radio_button_get_group (style_default), _("Attach_ment")));
-	add_with_indent (style_attach);
+	add_with_indent (style_attach, 1);
 
 	style_inline = GTK_RADIO_BUTTON (gtk_radio_button_new_with_mnemonic (
 		gtk_radio_button_get_group (style_default), _("Inline (_Outlook style)")));
-	add_with_indent (style_inline);
+	add_with_indent (style_inline, 1);
 
 	style_quote = GTK_RADIO_BUTTON (gtk_radio_button_new_with_mnemonic (
 		gtk_radio_button_get_group (style_default), _("_Quote")));
-	add_with_indent (style_quote);
+	add_with_indent (style_quote, 1);
 
 	style_no_quote = GTK_RADIO_BUTTON (gtk_radio_button_new_with_mnemonic (
 		gtk_radio_button_get_group (style_default), _("Do _Not Quote")));
-	add_with_indent (style_no_quote);
-
-	/* One line gap between sections */
-	widget = gtk_label_new (" ");
-	gtk_box_pack_start (vbox, widget, FALSE, FALSE, 0);
-
-	html_format = GTK_TOGGLE_BUTTON (gtk_check_button_new_with_mnemonic (_("_Format message in HTML")));
-	gtk_box_pack_start (vbox, GTK_WIDGET (html_format), FALSE, FALSE, 0);
+	add_with_indent (style_no_quote, 1);
 
 	bottom_posting = GTK_TOGGLE_BUTTON (gtk_check_button_new_with_mnemonic (_("Start _typing at the bottom")));
-	gtk_box_pack_start (vbox, GTK_WIDGET (bottom_posting), FALSE, FALSE, 0);
+	g_object_set (bottom_posting, "margin-start", 12, NULL);
+	gtk_grid_attach (grid, GTK_WIDGET (bottom_posting), 1, row - 5, 1, 1);
 
 	top_signature = GTK_TOGGLE_BUTTON (gtk_check_button_new_with_mnemonic (_("_Keep signature above the original message")));
-	gtk_box_pack_start (vbox, GTK_WIDGET (top_signature), FALSE, FALSE, 0);
+	g_object_set (top_signature, "margin-start", 12, NULL);
+	gtk_grid_attach (grid, GTK_WIDGET (top_signature), 1, row - 4, 1, 1);
 
 	/* One line gap between sections */
 	widget = gtk_label_new (" ");
-	gtk_box_pack_start (vbox, widget, FALSE, FALSE, 0);
+	gtk_grid_attach (grid, widget, 0, row, 1, 1);
+	row++;
+
+	hbox = GTK_BOX (gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6));
+	gtk_grid_attach (grid, GTK_WIDGET (hbox), 0, row, 2, 1);
+	row++;
+
+	/* Translators: The text is followed by the format combo with values like 'Plain Text', 'HTML' and so on */
+	widget = gtk_label_new_with_mnemonic (_("_Format message in"));
+	gtk_box_pack_start (hbox, widget, FALSE, FALSE, 0);
+
+	mode_combo = e_html_editor_util_new_mode_combobox ();
+	gtk_label_set_mnemonic_widget (GTK_LABEL (widget), GTK_WIDGET (mode_combo));
+	gtk_box_pack_start (hbox, GTK_WIDGET (mode_combo), FALSE, FALSE, 0);
+
+	e_binding_bind_property (
+		mode_combo, "sensitive",
+		widget, "sensitive",
+		G_BINDING_SYNC_CREATE);
+
+	html_mode_radio_action = e_action_combo_box_get_action (mode_combo);
+	radio_action = gtk_radio_action_new ("unknown", _("Use global setting"), NULL, NULL, E_CONTENT_EDITOR_MODE_UNKNOWN);
+	gtk_radio_action_join_group (radio_action, html_mode_radio_action);
+	e_action_combo_box_update_model (mode_combo);
+
+	/* One line gap between sections */
+	widget = gtk_label_new (" ");
+	gtk_grid_attach (grid, widget, 0, row, 1, 1);
+	row++;
 
 	apply_template = GTK_CHECK_BUTTON (gtk_check_button_new_with_mnemonic (_("Apply t_emplate")));
-	gtk_box_pack_start (vbox, GTK_WIDGET (apply_template), FALSE, FALSE, 0);
+	gtk_grid_attach (grid, GTK_WIDGET (apply_template), 0, row, 2, 1);
+	row++;
 
 	last_tmpl_folder_uri = g_settings_get_string (settings, "alt-reply-template-folder-uri");
 	last_tmpl_message_uid = g_settings_get_string (settings, "alt-reply-template-message-uid");
 
 	templates = emcu_create_templates_combo (shell, last_tmpl_folder_uri, last_tmpl_message_uid);
-	add_with_indent (templates);
+	add_with_indent (templates, 2);
 
 	g_free (last_tmpl_folder_uri);
 	g_free (last_tmpl_message_uid);
 
 	preserve_message_subject = GTK_CHECK_BUTTON (gtk_check_button_new_with_mnemonic (_("Preserve original message S_ubject")));
-	add_with_indent (preserve_message_subject);
+	add_with_indent (preserve_message_subject, 2);
 
 	#undef add_with_indent
 
@@ -4286,7 +4751,7 @@ em_utils_reply_alternative (GtkWindow *parent,
 		break;
 	}
 
-	emcu_three_state_set_value (html_format, g_settings_get_enum (settings, "alt-reply-html-format"));
+	e_action_combo_box_set_current_value (mode_combo, g_settings_get_enum (settings, "alt-reply-format-mode"));
 	emcu_three_state_set_value (bottom_posting, g_settings_get_enum (settings, "alt-reply-start-bottom"));
 	emcu_three_state_set_value (top_signature, g_settings_get_enum (settings, "alt-reply-top-signature"));
 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (apply_template), g_settings_get_boolean (settings, "alt-reply-template-apply"));
@@ -4295,9 +4760,13 @@ em_utils_reply_alternative (GtkWindow *parent,
 	if (!gtk_widget_get_sensitive (GTK_WIDGET (templates)))
 		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (apply_template), FALSE);
 
-	emcu_connect_three_state_changer (html_format);
 	emcu_connect_three_state_changer (bottom_posting);
 	emcu_connect_three_state_changer (top_signature);
+
+	e_binding_bind_property (
+		apply_template, "active",
+		mode_combo, "sensitive",
+		G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
 
 	e_binding_bind_property (
 		apply_template, "active",
@@ -4354,6 +4823,7 @@ em_utils_reply_alternative (GtkWindow *parent,
 	if (gtk_dialog_run (GTK_DIALOG (dialog)) == GTK_RESPONSE_OK) {
 		GtkTreeIter iter;
 		AltReplyContext *context;
+		EContentEditorMode mode;
 		EThreeState three_state;
 		CamelFolder *template_folder = NULL;
 		gchar *template_message_uid = NULL;
@@ -4381,13 +4851,28 @@ em_utils_reply_alternative (GtkWindow *parent,
 		else
 			context->flags = context->flags & (~E_MAIL_REPLY_FLAG_FORCE_STYLE);
 
-		three_state = emcu_three_state_get_value (html_format);
-		g_settings_set_enum (settings, "alt-reply-html-format", three_state);
+		mode = e_action_combo_box_get_current_value (mode_combo);
+		g_settings_set_enum (settings, "alt-reply-format-mode", mode);
 
-		if (three_state == E_THREE_STATE_ON)
-			context->flags |= E_MAIL_REPLY_FLAG_FORMAT_HTML;
-		else if (three_state == E_THREE_STATE_OFF)
+		switch (mode) {
+		case E_CONTENT_EDITOR_MODE_UNKNOWN:
+			break;
+		case E_CONTENT_EDITOR_MODE_PLAIN_TEXT:
 			context->flags |= E_MAIL_REPLY_FLAG_FORMAT_PLAIN;
+			break;
+		case E_CONTENT_EDITOR_MODE_HTML:
+			context->flags |= E_MAIL_REPLY_FLAG_FORMAT_HTML;
+			break;
+		case E_CONTENT_EDITOR_MODE_MARKDOWN:
+			context->flags |= E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN;
+			break;
+		case E_CONTENT_EDITOR_MODE_MARKDOWN_PLAIN_TEXT:
+			context->flags |= E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_PLAIN;
+			break;
+		case E_CONTENT_EDITOR_MODE_MARKDOWN_HTML:
+			context->flags |= E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_HTML;
+			break;
+		}
 
 		three_state = emcu_three_state_get_value (bottom_posting);
 		g_settings_set_enum (settings, "alt-reply-start-bottom", three_state);
@@ -4404,6 +4889,9 @@ em_utils_reply_alternative (GtkWindow *parent,
 			context->flags |= E_MAIL_REPLY_FLAG_TOP_SIGNATURE;
 		else if (three_state == E_THREE_STATE_OFF)
 			context->flags |= E_MAIL_REPLY_FLAG_BOTTOM_SIGNATURE;
+
+		if (skip_insecure_parts)
+			context->flags |= E_MAIL_REPLY_FLAG_SKIP_INSECURE_PARTS;
 
 		g_settings_set_enum (settings, "alt-reply-style", context->style);
 		g_settings_set_boolean (settings, "alt-reply-template-apply", gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (apply_template)));
@@ -4473,6 +4961,43 @@ em_utils_update_by_reply_flags (EContentEditor *cnt_editor,
 	}
 }
 
+void
+em_utils_get_reply_recipients (ESourceRegistry *registry,
+			       CamelMimeMessage *message,
+			       EMailReplyType reply_type,
+			       CamelInternetAddress *address,
+			       CamelInternetAddress *inout_to,
+			       CamelInternetAddress *inout_cc,
+			       CamelNNTPAddress *inout_postto)
+{
+	g_return_if_fail (E_IS_SOURCE_REGISTRY (registry));
+	g_return_if_fail (CAMEL_IS_MIME_MESSAGE (message));
+	g_return_if_fail (CAMEL_IS_INTERNET_ADDRESS (inout_to));
+	g_return_if_fail (CAMEL_IS_INTERNET_ADDRESS (inout_cc));
+
+	switch (reply_type) {
+	case E_MAIL_REPLY_TO_FROM:
+		get_reply_from (message, inout_to, inout_postto);
+		break;
+	case E_MAIL_REPLY_TO_RECIPIENT:
+		get_reply_recipient (message, inout_to, inout_postto, address);
+		break;
+	case E_MAIL_REPLY_TO_SENDER:
+		get_reply_sender (message, inout_to, inout_postto);
+		break;
+	case E_MAIL_REPLY_TO_LIST:
+		if (get_reply_list (message, inout_to))
+			break;
+		/* falls through */
+	case E_MAIL_REPLY_TO_ALL:
+		em_utils_get_reply_all (registry, message, inout_to, inout_cc, inout_postto);
+		break;
+	default:
+		g_warn_if_reached ();
+		break;
+	}
+}
+
 /**
  * em_utils_reply_to_message:
  * @composer: an #EMsgComposer
@@ -4517,8 +5042,34 @@ em_utils_reply_to_message (EMsgComposer *composer,
 
 	cnt_editor = e_html_editor_get_content_editor (e_msg_composer_get_editor (composer));
 
-	if ((reply_flags & (E_MAIL_REPLY_FLAG_FORMAT_PLAIN | E_MAIL_REPLY_FLAG_FORMAT_HTML)) != 0) {
-		e_content_editor_set_html_mode (cnt_editor, (reply_flags & E_MAIL_REPLY_FLAG_FORMAT_HTML) != 0);
+	flags = reply_flags & (E_MAIL_REPLY_FLAG_FORMAT_PLAIN |
+				E_MAIL_REPLY_FLAG_FORMAT_HTML |
+				E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN |
+				E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_PLAIN |
+				E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_HTML);
+	if (flags != 0) {
+		EContentEditorMode mode = E_CONTENT_EDITOR_MODE_UNKNOWN;
+
+		switch (flags) {
+		case E_MAIL_REPLY_FLAG_FORMAT_PLAIN:
+			mode = E_CONTENT_EDITOR_MODE_PLAIN_TEXT;
+			break;
+		case E_MAIL_REPLY_FLAG_FORMAT_HTML:
+			mode = E_CONTENT_EDITOR_MODE_HTML;
+			break;
+		case E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN:
+			mode = E_CONTENT_EDITOR_MODE_MARKDOWN;
+			break;
+		case E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_PLAIN:
+			mode = E_CONTENT_EDITOR_MODE_MARKDOWN_PLAIN_TEXT;
+			break;
+		case E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_HTML:
+			mode = E_CONTENT_EDITOR_MODE_MARKDOWN_HTML;
+			break;
+		}
+
+		if (mode != E_CONTENT_EDITOR_MODE_UNKNOWN)
+			e_html_editor_set_mode (e_msg_composer_get_editor (composer), mode);
 	}
 
 	em_utils_update_by_reply_flags (cnt_editor, reply_flags);
@@ -4556,38 +5107,16 @@ em_utils_reply_to_message (EMsgComposer *composer,
 	    folder && !emcu_folder_is_inbox (folder) && em_utils_folder_is_sent (registry, folder))
 		type = E_MAIL_REPLY_TO_ALL;
 
-	switch (type) {
-	case E_MAIL_REPLY_TO_FROM:
-		if (folder)
-			postto = camel_nntp_address_new ();
+	if (folder)
+		postto = camel_nntp_address_new ();
 
-		get_reply_from (message, to, postto);
-		break;
-	case E_MAIL_REPLY_TO_RECIPIENT:
-		if (folder)
-			postto = camel_nntp_address_new ();
+	em_utils_get_reply_recipients (registry, message, type, address, to, cc, postto);
 
-		get_reply_recipient (message, to, postto, address);
-		break;
-	case E_MAIL_REPLY_TO_SENDER:
-		if (folder)
-			postto = camel_nntp_address_new ();
+	if (postto && !camel_address_length (CAMEL_ADDRESS (postto)))
+		g_clear_object (&postto);
 
-		get_reply_sender (message, to, postto);
-		break;
-	case E_MAIL_REPLY_TO_LIST:
+	if (type == E_MAIL_REPLY_TO_LIST || type == E_MAIL_REPLY_TO_ALL)
 		flags |= CAMEL_MESSAGE_ANSWERED_ALL;
-		if (get_reply_list (message, to))
-			break;
-		/* falls through */
-	case E_MAIL_REPLY_TO_ALL:
-		flags |= CAMEL_MESSAGE_ANSWERED_ALL;
-		if (folder)
-			postto = camel_nntp_address_new ();
-
-		em_utils_get_reply_all (registry, message, to, cc, postto);
-		break;
-	}
 
 	reply_setup_composer (composer, message, identity_uid, identity_name, identity_address, to, cc, folder, message_uid, postto);
 
@@ -4640,7 +5169,7 @@ em_utils_reply_to_message (EMsgComposer *composer,
 			break;
 	}
 
-	composer_set_body (composer, message, style, parts_list, &used_part_list);
+	composer_set_body (composer, message, style, (reply_flags & E_MAIL_REPLY_FLAG_SKIP_INSECURE_PARTS) != 0, parts_list, &used_part_list);
 
 	e_msg_composer_add_attachments_from_part_list (composer, used_part_list, TRUE);
 	g_clear_object (&used_part_list);
@@ -4653,6 +5182,7 @@ em_utils_reply_to_message (EMsgComposer *composer,
 
 	/* This is required to be done (also) at the end */
 	em_utils_update_by_reply_flags (cnt_editor, reply_flags);
+	e_msg_composer_check_autocrypt (composer, message);
 
 	composer_set_no_change (composer);
 
@@ -4764,6 +5294,14 @@ em_configure_new_composer (EMsgComposer *composer,
 	g_signal_connect (
 		composer, "presend",
 		G_CALLBACK (composer_presend_check_unwanted_html), session);
+
+	g_signal_connect (
+		composer, "presend",
+		G_CALLBACK (composer_presend_check_attachments), session);
+
+	g_signal_connect (
+		composer, "presend",
+		G_CALLBACK (composer_presend_check_autocrypt_wanted), session);
 
 	g_signal_connect (
 		composer, "send",

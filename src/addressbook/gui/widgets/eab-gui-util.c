@@ -318,9 +318,6 @@ eab_select_source (ESourceRegistry *registry,
 		NULL);
 	gtk_window_set_default_size (GTK_WINDOW (dialog), 350, 300);
 
-	gtk_dialog_set_response_sensitive (
-		GTK_DIALOG (dialog), GTK_RESPONSE_ACCEPT, FALSE);
-
 	/* label = gtk_label_new (message); */
 
 	extension_name = E_SOURCE_EXTENSION_ADDRESS_BOOK;
@@ -348,6 +345,8 @@ eab_select_source (ESourceRegistry *registry,
 		}
 	}
 
+	source_selection_changed_cb (E_SOURCE_SELECTOR (selector), ok_button);
+
 	scrolled_window = gtk_scrolled_window_new (NULL, NULL);
 	gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolled_window), GTK_SHADOW_IN);
 	gtk_container_add (GTK_CONTAINER (scrolled_window), selector);
@@ -374,14 +373,11 @@ eab_select_source (ESourceRegistry *registry,
 }
 
 gchar *
-eab_suggest_filename (const GSList *contact_list)
+eab_suggest_filename (EContact *contact)
 {
 	gchar *res = NULL;
 
-	g_return_val_if_fail (contact_list != NULL, NULL);
-
-	if (!contact_list->next) {
-		EContact *contact = E_CONTACT (contact_list->data);
+	if (contact) {
 		gchar *string;
 
 		string = e_contact_get (contact, E_CONTACT_FILE_AS);
@@ -524,7 +520,7 @@ do_copy (gpointer data,
 	process->count++;
 	eab_merging_book_add_contact (
 		process->registry, book_client,
-		contact, contact_added_cb, process);
+		contact, contact_added_cb, process, TRUE);
 }
 
 static void
@@ -597,8 +593,10 @@ eab_transfer_contacts (ESourceRegistry *registry,
 	destination = eab_select_source (
 		registry, source, desc, NULL, last_uid, window);
 
-	if (!destination)
+	if (!destination) {
+		g_slist_free_full (contacts, g_object_unref);
 		return;
+	}
 
 	if (strcmp (last_uid, e_source_get_uid (destination)) != 0) {
 		g_free (last_uid);
@@ -615,8 +613,7 @@ eab_transfer_contacts (ESourceRegistry *registry,
 	process->alert_sink = alert_sink;
 	process->delete_from_source = delete_from_source;
 
-	e_book_client_connect (
-		destination, 30, NULL, book_client_connect_cb, process);
+	e_book_client_connect (destination, (guint32) -1, NULL, book_client_connect_cb, process);
 }
 
 /*

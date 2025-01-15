@@ -30,12 +30,12 @@
 static void
 test_create_editor (TestFixture *fixture)
 {
-	g_assert (fixture->editor != NULL);
+	g_assert_true (fixture->editor != NULL);
 	g_assert_cmpstr (e_html_editor_get_content_editor_name (fixture->editor), ==, DEFAULT_CONTENT_EDITOR_NAME);
 
 	/* test of the test function */
-	g_assert (test_utils_html_equal (fixture, "<span>a</span>", "<sPaN>a</spaN>"));
-	g_assert (!test_utils_html_equal (fixture, "<span>A</span>", "<sPaN>a</spaN>"));
+	g_assert_true (test_utils_html_equal (fixture, "<span>a</span>", "<sPaN>a</spaN>"));
+	g_assert_true (!test_utils_html_equal (fixture, "<span>A</span>", "<sPaN>a</spaN>"));
 }
 
 static void
@@ -7688,6 +7688,7 @@ main (gint argc,
 	application = g_application_new ("org.gnome.Evolution.test-html-editor-units", G_APPLICATION_FLAGS_NONE);
 
 	gtk_icon_theme_append_search_path (gtk_icon_theme_get_default (), EVOLUTION_ICONDIR);
+	gtk_icon_theme_append_search_path (gtk_icon_theme_get_default (), E_DATA_SERVER_ICONDIR);
 
 	modules = e_module_load_all_in_directory (EVOLUTION_MODULEDIR);
 	g_list_free_full (modules, (GDestroyNotify) g_type_module_unuse);

@@ -51,10 +51,6 @@
 #define w(x)
 #define d(x)
 
-#define MAIL_FOLDER_CACHE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), MAIL_TYPE_FOLDER_CACHE, MailFolderCachePrivate))
-
 typedef struct _StoreInfo StoreInfo;
 typedef struct _FolderInfo FolderInfo;
 typedef struct _AsyncContext AsyncContext;
@@ -71,8 +67,8 @@ struct _MailFolderCachePrivate {
 	gint count_sent;
 	gint count_trash;
 
-	GQueue local_folder_uris;
-	GQueue remote_folder_uris;
+	GHashTable *local_folder_uris;
+	GHashTable *remote_folder_uris;
 };
 
 enum {
@@ -188,7 +184,7 @@ static void	store_folder_unsubscribed_cb	(CamelStore *store,
 						 CamelFolderInfo *info,
 						 MailFolderCache *cache);
 
-G_DEFINE_TYPE (MailFolderCache, mail_folder_cache, G_TYPE_OBJECT)
+G_DEFINE_TYPE_WITH_PRIVATE (MailFolderCache, mail_folder_cache, G_TYPE_OBJECT)
 
 static FolderInfo *
 folder_info_new (CamelStore *store,
@@ -1116,10 +1112,10 @@ folder_cache_process_folder_changes_thread (CamelFolder *folder,
 		added_uids = g_hash_table_new_full (g_str_hash, g_str_equal, (GDestroyNotify) camel_pstring_free, NULL);
 
 		for (i = 0; i < changes->uid_added->len; i++) {
-			const gchar *uid = changes->uid_added->pdata[i];
+			const gchar *tmp_uid = changes->uid_added->pdata[i];
 
-			if (uid)
-				g_hash_table_insert (added_uids, (gpointer) camel_pstring_strdup (uid), IGNORE_THREAD_VALUE_TODO);
+			if (tmp_uid)
+				g_hash_table_insert (added_uids, (gpointer) camel_pstring_strdup (tmp_uid), IGNORE_THREAD_VALUE_TODO);
 		}
 
 		/* for each added message, check to see that it is
@@ -1307,7 +1303,7 @@ store_folder_created_cb (CamelStore *store,
                          MailFolderCache *cache)
 {
 	/* We only want created events to do more work
-	 * if we dont support subscriptions. */
+	 * if we don't support subscriptions. */
 	if (!CAMEL_IS_SUBSCRIBABLE (store))
 		store_folder_subscribed_cb (store, info, cache);
 }
@@ -1341,7 +1337,7 @@ store_folder_deleted_cb (CamelStore *store,
                          MailFolderCache *cache)
 {
 	/* We only want deleted events to do more work
-	 * if we dont support subscriptions. */
+	 * if we don't support subscriptions. */
 	if (!CAMEL_IS_SUBSCRIBABLE (store))
 		store_folder_unsubscribed_cb (store, info, cache);
 }
@@ -1497,22 +1493,6 @@ store_has_folder_hierarchy (CamelStore *store)
 	return FALSE;
 }
 
-static GList *
-find_folder_uri (GQueue *queue,
-                 CamelSession *session,
-                 const gchar *folder_uri)
-{
-	GList *head, *link;
-
-	head = g_queue_peek_head_link (queue);
-
-	for (link = head; link != NULL; link = g_list_next (link))
-		if (e_mail_folder_uri_equal (session, link->data, folder_uri))
-			break;
-
-	return link;
-}
-
 static void
 mail_folder_cache_get_property (GObject *object,
                                 guint property_id,
@@ -1534,11 +1514,9 @@ mail_folder_cache_get_property (GObject *object,
 static void
 mail_folder_cache_dispose (GObject *object)
 {
-	MailFolderCachePrivate *priv;
+	MailFolderCache *self = MAIL_FOLDER_CACHE (object);
 
-	priv = MAIL_FOLDER_CACHE_GET_PRIVATE (object);
-
-	g_hash_table_remove_all (priv->store_info_ht);
+	g_hash_table_remove_all (self->priv->store_info_ht);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (mail_folder_cache_parent_class)->dispose (object);
@@ -1547,20 +1525,14 @@ mail_folder_cache_dispose (GObject *object)
 static void
 mail_folder_cache_finalize (GObject *object)
 {
-	MailFolderCachePrivate *priv;
+	MailFolderCache *self = MAIL_FOLDER_CACHE (object);
 
-	priv = MAIL_FOLDER_CACHE_GET_PRIVATE (object);
+	g_main_context_unref (self->priv->main_context);
 
-	g_main_context_unref (priv->main_context);
-
-	g_hash_table_destroy (priv->store_info_ht);
-	g_mutex_clear (&priv->store_info_ht_lock);
-
-	while (!g_queue_is_empty (&priv->local_folder_uris))
-		g_free (g_queue_pop_head (&priv->local_folder_uris));
-
-	while (!g_queue_is_empty (&priv->remote_folder_uris))
-		g_free (g_queue_pop_head (&priv->remote_folder_uris));
+	g_hash_table_destroy (self->priv->store_info_ht);
+	g_hash_table_destroy (self->priv->local_folder_uris);
+	g_hash_table_destroy (self->priv->remote_folder_uris);
+	g_mutex_clear (&self->priv->store_info_ht_lock);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (mail_folder_cache_parent_class)->finalize (object);
@@ -1574,7 +1546,7 @@ mail_folder_cache_folder_available (MailFolderCache *cache,
 	CamelService *service;
 	CamelSession *session;
 	CamelProvider *provider;
-	GQueue *queue;
+	GHashTable *uris_table;
 	gchar *folder_uri;
 
 	/* Disregard virtual stores. */
@@ -1601,14 +1573,11 @@ mail_folder_cache_folder_available (MailFolderCache *cache,
 	folder_uri = e_mail_folder_uri_build (store, folder_name);
 
 	if (provider->flags & CAMEL_PROVIDER_IS_REMOTE)
-		queue = &cache->priv->remote_folder_uris;
+		uris_table = cache->priv->remote_folder_uris;
 	else
-		queue = &cache->priv->local_folder_uris;
+		uris_table = cache->priv->local_folder_uris;
 
-	if (find_folder_uri (queue, session, folder_uri) == NULL)
-		g_queue_push_tail (queue, folder_uri);
-	else
-		g_free (folder_uri);
+	g_hash_table_add (uris_table, folder_uri);
 
 	g_mutex_unlock (&cache->priv->store_info_ht_lock);
 
@@ -1623,8 +1592,7 @@ mail_folder_cache_folder_unavailable (MailFolderCache *cache,
 	CamelService *service;
 	CamelSession *session;
 	CamelProvider *provider;
-	GQueue *queue;
-	GList *link;
+	GHashTable *uris_table;
 	gchar *folder_uri;
 
 	/* Disregard virtual stores. */
@@ -1651,15 +1619,11 @@ mail_folder_cache_folder_unavailable (MailFolderCache *cache,
 	folder_uri = e_mail_folder_uri_build (store, folder_name);
 
 	if (provider->flags & CAMEL_PROVIDER_IS_REMOTE)
-		queue = &cache->priv->remote_folder_uris;
+		uris_table = cache->priv->remote_folder_uris;
 	else
-		queue = &cache->priv->local_folder_uris;
+		uris_table = cache->priv->local_folder_uris;
 
-	link = find_folder_uri (queue, session, folder_uri);
-	if (link != NULL) {
-		g_free (link->data);
-		g_queue_delete_link (queue, link);
-	}
+	g_hash_table_remove (uris_table, folder_uri);
 
 	g_free (folder_uri);
 
@@ -1675,8 +1639,6 @@ mail_folder_cache_folder_deleted (MailFolderCache *cache,
 {
 	CamelService *service;
 	CamelSession *session;
-	GQueue *queue;
-	GList *link;
 	gchar *folder_uri;
 
 	/* Disregard virtual stores. */
@@ -1701,19 +1663,8 @@ mail_folder_cache_folder_deleted (MailFolderCache *cache,
 
 	folder_uri = e_mail_folder_uri_build (store, folder_name);
 
-	queue = &cache->priv->local_folder_uris;
-	link = find_folder_uri (queue, session, folder_uri);
-	if (link != NULL) {
-		g_free (link->data);
-		g_queue_delete_link (queue, link);
-	}
-
-	queue = &cache->priv->remote_folder_uris;
-	link = find_folder_uri (queue, session, folder_uri);
-	if (link != NULL) {
-		g_free (link->data);
-		g_queue_delete_link (queue, link);
-	}
+	g_hash_table_remove (cache->priv->local_folder_uris, folder_uri);
+	g_hash_table_remove (cache->priv->remote_folder_uris, folder_uri);
 
 	g_free (folder_uri);
 
@@ -1726,8 +1677,6 @@ static void
 mail_folder_cache_class_init (MailFolderCacheClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (MailFolderCachePrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->get_property = mail_folder_cache_get_property;
@@ -1880,7 +1829,7 @@ mail_folder_cache_init (MailFolderCache *cache)
 		(GDestroyNotify) g_object_unref,
 		(GDestroyNotify) store_info_unref);
 
-	cache->priv = MAIL_FOLDER_CACHE_GET_PRIVATE (cache);
+	cache->priv = mail_folder_cache_get_instance_private (cache);
 	cache->priv->main_context = g_main_context_ref_thread_default ();
 
 	cache->priv->store_info_ht = store_info_ht;
@@ -1889,8 +1838,10 @@ mail_folder_cache_init (MailFolderCache *cache)
 	cache->priv->count_sent = getenv ("EVOLUTION_COUNT_SENT") != NULL;
 	cache->priv->count_trash = getenv ("EVOLUTION_COUNT_TRASH") != NULL;
 
-	g_queue_init (&cache->priv->local_folder_uris);
-	g_queue_init (&cache->priv->remote_folder_uris);
+	/* these URIs always come from e_mail_folder_uri_build(), thus no need to engage
+	   slow e_mail_folder_uri_equal() */
+	cache->priv->local_folder_uris = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+	cache->priv->remote_folder_uris = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 }
 
 MailFolderCache *
@@ -2530,42 +2481,52 @@ mail_folder_cache_get_folder_info_flags (MailFolderCache *cache,
 	return flags_set;
 }
 
-void
-mail_folder_cache_get_local_folder_uris (MailFolderCache *cache,
-                                         GQueue *out_queue)
+static void
+mail_folder_cache_foreach_folder_uri_locked (MailFolderCache *cache,
+					     GHashTable *uris,
+					     MailFolderCacheForeachUriFunc func,
+					     gpointer user_data)
 {
-	GList *head, *link;
+	GHashTableIter iter;
+	gpointer key;
 
+	g_hash_table_iter_init (&iter, uris);
+	while (g_hash_table_iter_next (&iter, &key, NULL)) {
+		const gchar *uri = key;
+
+		if (!func (uri, user_data))
+			break;
+	}
+}
+
+void
+mail_folder_cache_foreach_local_folder_uri (MailFolderCache *cache,
+					    MailFolderCacheForeachUriFunc func,
+					    gpointer user_data)
+{
 	g_return_if_fail (MAIL_IS_FOLDER_CACHE (cache));
-	g_return_if_fail (out_queue != NULL);
+	g_return_if_fail (func != NULL);
 
 	/* Reuse the store_info_ht_lock just because it's handy. */
 	g_mutex_lock (&cache->priv->store_info_ht_lock);
 
-	head = g_queue_peek_head_link (&cache->priv->local_folder_uris);
-
-	for (link = head; link != NULL; link = g_list_next (link))
-		g_queue_push_tail (out_queue, g_strdup (link->data));
+	mail_folder_cache_foreach_folder_uri_locked (cache, cache->priv->local_folder_uris, func, user_data);
 
 	g_mutex_unlock (&cache->priv->store_info_ht_lock);
 }
 
 void
-mail_folder_cache_get_remote_folder_uris (MailFolderCache *cache,
-                                          GQueue *out_queue)
+mail_folder_cache_foreach_remote_folder_uri (MailFolderCache *cache,
+					     MailFolderCacheForeachUriFunc func,
+					     gpointer user_data)
 {
-	GList *head, *link;
-
 	g_return_if_fail (MAIL_IS_FOLDER_CACHE (cache));
-	g_return_if_fail (out_queue != NULL);
+	g_return_if_fail (func != NULL);
 
 	/* Reuse the store_info_ht_lock just because it's handy. */
 	g_mutex_lock (&cache->priv->store_info_ht_lock);
 
-	head = g_queue_peek_head_link (&cache->priv->remote_folder_uris);
-
-	for (link = head; link != NULL; link = g_list_next (link))
-		g_queue_push_tail (out_queue, g_strdup (link->data));
+	mail_folder_cache_foreach_folder_uri_locked (cache, cache->priv->remote_folder_uris, func, user_data);
 
 	g_mutex_unlock (&cache->priv->store_info_ht_lock);
 }

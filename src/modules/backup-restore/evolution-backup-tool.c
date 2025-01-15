@@ -55,6 +55,14 @@
 
 #define KEY_FILE_GROUP "Evolution Backup"
 
+enum {
+	RESULT_SUCCESS		= 0,
+	RESULT_FAILED		= 1,
+	RESULT_TAR_NOT_FOUND	= 2,
+	RESULT_GZIP_NOT_FOUND	= 3,
+	RESULT_XZ_NOT_FOUND	= 4
+};
+
 static gboolean backup_op = FALSE;
 static gchar *bk_file = NULL;
 static gboolean restore_op = FALSE;
@@ -64,7 +72,7 @@ static gchar *chk_file = NULL;
 static gboolean restart_arg = FALSE;
 static gboolean gui_arg = FALSE;
 static gchar **opt_remaining = NULL;
-static gint result = 0;
+static gint result = RESULT_SUCCESS;
 static GtkWidget *progress_dialog;
 static GtkWidget *pbar;
 static gchar *txt = NULL;
@@ -499,6 +507,35 @@ restore_settings (const gchar *from_filename,
 	return success;
 }
 
+static gboolean
+check_prog_exists (const gchar *prog)
+{
+	gchar *path;
+
+	path = g_find_program_in_path (prog);
+
+	if (!path) {
+		g_warning ("Program '%s' does not exist", prog);
+
+		result = RESULT_FAILED;
+
+		if (g_strcmp0 (prog, "tar") == 0)
+			result = RESULT_TAR_NOT_FOUND;
+		else if (g_strcmp0 (prog, "gzip") == 0)
+			result = RESULT_GZIP_NOT_FOUND;
+		else if (g_strcmp0 (prog, "xz") == 0)
+			result = RESULT_XZ_NOT_FOUND;
+		else
+			g_warning ("%s: Called with unhandled program '%s'", G_STRFUNC, prog);
+
+		return FALSE;
+	}
+
+	g_free (path);
+
+	return TRUE;
+}
+
 static void
 backup (const gchar *filename,
         GCancellable *cancellable)
@@ -512,6 +549,18 @@ backup (const gchar *filename,
 
 	if (g_cancellable_is_cancelled (cancellable))
 		return;
+
+	if (!check_prog_exists ("tar"))
+		return;
+
+	use_xz = get_filename_is_xz (filename);
+	if (use_xz) {
+		if (!check_prog_exists ("xz"))
+			return;
+	} else {
+		if (!check_prog_exists ("gzip"))
+			return;
+	}
 
 	txt = _("Shutting down Evolution");
 	/* FIXME Will the versioned setting always work? */
@@ -540,7 +589,6 @@ backup (const gchar *filename,
 	txt = _("Backing Evolution data (Mails, Contacts, Calendar, Tasks, Memos)");
 
 	quotedfname = g_shell_quote (filename);
-	use_xz = get_filename_is_xz (filename);
 
 	command = g_strdup_printf (
 		"cd $HOME && tar chf - $STRIPDATADIR "
@@ -552,6 +600,13 @@ backup (const gchar *filename,
 	g_free (quotedfname);
 
 	run_cmd ("rm $HOME/" EVOLUTION_DIR_FILE);
+
+	txt = _("Checking validity of the archive");
+
+	if (!check (filename, NULL)) {
+		g_message ("Failed to validate content of '%s', the archive is broken", filename);
+		return;
+	}
 
 	txt = _("Back up complete");
 
@@ -1013,10 +1068,18 @@ check (const gchar *filename,
 
 	g_return_val_if_fail (filename && *filename, FALSE);
 
-	if (get_filename_is_xz (filename))
+	if (!check_prog_exists ("tar"))
+		return FALSE;
+
+	if (get_filename_is_xz (filename)) {
+		if (!check_prog_exists ("xz"))
+			return FALSE;
 		tar_opts = "-tJf";
-	else
+	} else {
+		if (!check_prog_exists ("gzip"))
+			return FALSE;
 		tar_opts = "-tzf";
+	}
 
 	quotedfname = g_shell_quote (filename);
 
@@ -1029,6 +1092,7 @@ check (const gchar *filename,
 
 	g_message ("First result %d", result);
 	if (result) {
+		result = RESULT_FAILED;
 		g_free (quotedfname);
 		return FALSE;
 	}
@@ -1050,6 +1114,7 @@ check (const gchar *filename,
 
 	g_message ("Second result %d", result);
 	if (result) {
+		result = RESULT_FAILED;
 		g_free (quotedfname);
 		return FALSE;
 	}
@@ -1080,7 +1145,10 @@ check (const gchar *filename,
 
 	g_message ("Third result %d", result);
 
-	return result == 0;
+	if (result != RESULT_SUCCESS)
+		result = RESULT_FAILED;
+
+	return result == RESULT_SUCCESS;
 }
 
 static gboolean
@@ -1098,6 +1166,19 @@ pbar_update (gpointer user_data)
 static gboolean
 finish_job (gpointer user_data)
 {
+	if (backup_op && result != 0) {
+		GtkWidget *widget;
+
+		widget = gtk_message_dialog_new (progress_dialog ? GTK_WINDOW (progress_dialog) : NULL,
+			GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+			GTK_MESSAGE_ERROR,
+			GTK_BUTTONS_CLOSE,
+			_("Failed to verify the backup file “%s”, the archive is broken."),
+			bk_file);
+		gtk_dialog_run (GTK_DIALOG (widget));
+		gtk_widget_destroy (widget);
+	}
+
 	gtk_main_quit ();
 
 	return FALSE;
@@ -1174,6 +1255,9 @@ main (gint argc,
 	bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
 	textdomain (GETTEXT_PACKAGE);
 
+	/* to pair the tool with the main app in the desktop environment (like in the GNOME shell) */
+	g_set_prgname ("org.gnome.Evolution");
+
 	gtk_init_with_args (
 		&argc, &argv, NULL, options, GETTEXT_PACKAGE, &error);
 
@@ -1212,7 +1296,7 @@ main (gint argc,
 		GtkWidget *widget, *container;
 		GtkWidget *action_area;
 		GtkWidget *content_area;
-		const gchar *txt, *txt2;
+		const gchar *txt1, *txt2;
 		gchar *str = NULL;
 		gchar *markup;
 
@@ -1265,16 +1349,16 @@ main (gint argc,
 			NULL);
 
 		if (backup_op) {
-			txt = _("Backing up Evolution Data");
+			txt1 = _("Backing up Evolution Data");
 			txt2 = _("Please wait while Evolution is backing up your data.");
 		} else if (restore_op) {
-			txt = _("Restoring Evolution Data");
+			txt1 = _("Restoring Evolution Data");
 			txt2 = _("Please wait while Evolution is restoring your data.");
 		} else {
 			g_return_val_if_reached (EXIT_FAILURE);
 		}
 
-		markup = g_markup_printf_escaped ("<b><big>%s</big></b>", txt);
+		markup = g_markup_printf_escaped ("<b><big>%s</big></b>", txt1);
 		widget = gtk_label_new (markup);
 		gtk_label_set_line_wrap (GTK_LABEL (widget), FALSE);
 		gtk_label_set_use_markup (GTK_LABEL (widget), TRUE);
@@ -1335,6 +1419,7 @@ main (gint argc,
 			"halign", GTK_ALIGN_FILL,
 			"hexpand", TRUE,
 			"valign", GTK_ALIGN_FILL,
+			"show-text", TRUE,
 			NULL);
 
 		g_signal_connect (
@@ -1345,7 +1430,7 @@ main (gint argc,
 	} else if (check_op) {
 		/* For sanity we don't need gui */
 		check (chk_file, NULL);
-		exit (result == 0 ? 0 : 1);
+		exit (result);
 	}
 
 	if (gui_arg) {

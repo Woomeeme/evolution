@@ -7,12 +7,13 @@
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
- * published by the Free Software Foundation; either the
+ * published by the Free Software Foundation; either the version 2 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * for more details.
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser  General Public
+ * License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public License
  * License along with the Gnome Library; see the file COPYING.LIB.  If not,
@@ -1040,6 +1041,7 @@ gnome_canvas_item_i2c_matrix (GnomeCanvasItem *item,
                               cairo_matrix_t *matrix)
 {
 	cairo_matrix_t i2w, w2c;
+	g_return_if_fail (GNOME_IS_CANVAS_ITEM (item));
 
 	gnome_canvas_item_i2w_matrix (item, &i2w);
 	gnome_canvas_w2c_matrix (item->canvas, &w2c);
@@ -1214,6 +1216,8 @@ gnome_canvas_item_get_bounds (GnomeCanvasItem *item,
 void
 gnome_canvas_item_request_update (GnomeCanvasItem *item)
 {
+	g_return_if_fail (GNOME_IS_CANVAS_ITEM (item));
+
 	if (item->flags & GNOME_CANVAS_ITEM_NEED_UPDATE)
 		return;
 
@@ -3172,12 +3176,14 @@ gnome_canvas_get_item_at (GnomeCanvas *canvas,
 static void
 gnome_canvas_request_update (GnomeCanvas *canvas)
 {
+	g_return_if_fail (GNOME_IS_CANVAS (canvas));
 	GNOME_CANVAS_GET_CLASS (canvas)->request_update (canvas);
 }
 
 static void
 gnome_canvas_request_update_real (GnomeCanvas *canvas)
 {
+	g_return_if_fail (GNOME_IS_CANVAS (canvas));
 	if (canvas->need_update)
 		return;
 

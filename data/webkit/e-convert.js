@@ -31,8 +31,56 @@ var EvoConvert = {
 	ALIGN_JUSTIFY : 3,
 
 	NOWRAP_CHAR_START : "\x01",
-	NOWRAP_CHAR_END : "\x02"
+	NOWRAP_CHAR_END : "\x02",
+
+	E_HTML_LINK_TO_TEXT_NONE		: 0,
+	E_HTML_LINK_TO_TEXT_INLINE		: 1,
+	E_HTML_LINK_TO_TEXT_REFERENCE		: 2,
+	E_HTML_LINK_TO_TEXT_REFERENCE_WITHOUT_LABEL : 3,
 };
+
+/* EvoConvert.linkRequiresReference() function is added in the C code */
+
+EvoConvert.processAnchor = function(node, context)
+{
+	var str;
+
+	if (!node.innerText.includes(" ") && !node.innerText.includes("\n"))
+		str = EvoConvert.NOWRAP_CHAR_START + node.innerText + EvoConvert.NOWRAP_CHAR_END;
+	else
+		str = node.innerText;
+	if (context && node.href && EvoConvert.linkRequiresReference(node.href, node.innerText)) {
+		if (context.link_to_text == EvoConvert.E_HTML_LINK_TO_TEXT_INLINE) {
+			str += " <" + EvoConvert.NOWRAP_CHAR_START + node.href + EvoConvert.NOWRAP_CHAR_END + ">";
+		} else if (context.link_to_text == EvoConvert.E_HTML_LINK_TO_TEXT_REFERENCE) {
+			var index;
+
+			for (index = 0; index < context.append_refs.length; index++) {
+				if (context.append_refs[index].href == node.href)
+					break;
+			}
+
+			if (index == context.append_refs.length)
+				context.append_refs[context.append_refs.length] = { label : node.innerText, href : node.href };
+
+			str += " [" + (index + 1) + "]";
+		} else if (context.link_to_text == EvoConvert.E_HTML_LINK_TO_TEXT_REFERENCE_WITHOUT_LABEL) {
+			var index;
+
+			for (index = 0; index < context.append_refs.length; index++) {
+				if (context.append_refs[index].href == node.href)
+					break;
+			}
+
+			if (index == context.append_refs.length)
+				context.append_refs[context.append_refs.length] = { href : node.href };
+
+			str += " [" + (index + 1) + "]";
+		}
+	}
+
+	return str;
+}
 
 EvoConvert.GetOLMaxLetters = function(type, levels)
 {
@@ -148,7 +196,7 @@ EvoConvert.getComputedOrNodeStyle = function(node)
 	return node.style;
 }
 
-EvoConvert.replaceList = function(element, tagName, normalDivWidth)
+EvoConvert.replaceList = function(element, tagName, normalDivWidth, context)
 {
 	var ll, lists, type = null;
 
@@ -262,6 +310,16 @@ EvoConvert.replaceList = function(element, tagName, normalDivWidth)
 				node.setAttribute("x-evo-li-text", tmp);
 			} else if (child.tagName == "LI") {
 				liCount++;
+
+				var anchors = child.getElementsByTagName("A"), jj;
+
+				for (jj = anchors.length - 1; jj >= 0; jj--) {
+					var anchor = anchors[jj], str;
+
+					str = EvoConvert.processAnchor(anchor, context);
+					anchor.parentNode.insertBefore(document.createTextNode(str), anchor);
+					anchor.remove();
+				}
 
 				node = document.createElement("DIV");
 				if (list.style.width.endsWith("ch")) {
@@ -723,7 +781,7 @@ EvoConvert.appendNodeText = function(node, str, text)
 	return str + text;
 }
 
-EvoConvert.extractElemText = function(elem, normalDivWidth, quoteLevel)
+EvoConvert.extractElemText = function(elem, normalDivWidth, quoteLevel, context)
 {
 	if (!elem)
 		return "";
@@ -739,7 +797,7 @@ EvoConvert.extractElemText = function(elem, normalDivWidth, quoteLevel)
 		if (!node)
 			continue;
 
-		str = EvoConvert.appendNodeText(node, str, EvoConvert.processNode(node, normalDivWidth, quoteLevel));
+		str = EvoConvert.appendNodeText(node, str, EvoConvert.processNode(node, normalDivWidth, quoteLevel, context));
 	}
 
 	return str;
@@ -775,12 +833,13 @@ EvoConvert.RemoveInsignificantNewLines = function(node, stripSingleSpace)
 	var str = "";
 
 	if (node && node.nodeType == node.TEXT_NODE) {
+		var has_rnt;
 		str = node.nodeValue;
 
-		if (str.indexOf("\r") >= 0 ||
-		    str.indexOf("\n") >= 0 ||
-		    str.indexOf("\t") >= 0 ||
-		    str.indexOf(" ") >= 0) {
+		has_rnt = str.indexOf("\r") >= 0 ||
+			  str.indexOf("\n") >= 0 ||
+			  str.indexOf("\t") >= 0;
+		if (has_rnt || str.indexOf(" ") >= 0) {
 			var whiteSpace = "normal";
 
 			if (node.parentElement)
@@ -790,8 +849,12 @@ EvoConvert.RemoveInsignificantNewLines = function(node, stripSingleSpace)
 				str = EvoConvert.mergeConsecutiveSpaces(str.replace(/\t/g, " "));
 			} else if (!whiteSpace || whiteSpace == "normal" || whiteSpace == "nowrap") {
 				if (str == "\n" || str == "\r" || str == "\r\n") {
-					str = "";
-				} else {
+					var previousSibling = node.previousElementSibling;
+					if (stripSingleSpace || (previousSibling && (previousSibling.tagName == "BR" ||
+					    previousSibling.tagName == "DIV" || previousSibling.tagName == "P" ||
+					    previousSibling.tagName == "BODY")))
+						str = "";
+				} else if (has_rnt) {
 					if ((!node.previousSibling || node.previousSibling.tagName) && (str[0] == '\r' || str[0] == '\n')) {
 						var ii;
 
@@ -812,11 +875,18 @@ EvoConvert.RemoveInsignificantNewLines = function(node, stripSingleSpace)
 						str = str.substr(0, ii + 1);
 					}
 
+					if (str.length == 0 && stripSingleSpace === false)
+						str = " ";
+
 					str = EvoConvert.mergeConsecutiveSpaces(str.replace(/\t/g, " ").replace(/\r/g, " ").replace(/\n/g, " "));
 
-					if ((!whiteSpace || whiteSpace == "normal") && str == " " && (stripSingleSpace || (
-					    !node.nextElementSibling || node.nextElementSibling.tagName == "DIV" || node.nextElementSibling.tagName == "P" || node.nextElementSibling.tagName == "PRE"))) {
-						str = "";
+					if ((!whiteSpace || whiteSpace == "normal") && str == " ") {
+						if (stripSingleSpace || (!node.previousElementSibling && !node.nextElementSibling &&
+						    node.parentElement && (node.parentElement.tagName == "DIV" ||
+						    node.parentElement.tagName == "DIV" || node.parentElement.tagName == "P" ||
+						    node.parentElement.tagName == "PRE" || node.parentElement.tagName == "BODY"))) {
+							str = "";
+						}
 					}
 				}
 			}
@@ -826,12 +896,12 @@ EvoConvert.RemoveInsignificantNewLines = function(node, stripSingleSpace)
 	return str;
 }
 
-EvoConvert.processNode = function(node, normalDivWidth, quoteLevel)
+EvoConvert.processNode = function(node, normalDivWidth, quoteLevel, context)
 {
 	var str = "";
 
 	if (node.nodeType == node.TEXT_NODE) {
-		str = EvoConvert.RemoveInsignificantNewLines(node);
+		str = EvoConvert.RemoveInsignificantNewLines(node, false);
 	} else if (node.nodeType == node.ELEMENT_NODE) {
 		if (node.hidden ||
 		    node.tagName == "STYLE" ||
@@ -912,14 +982,33 @@ EvoConvert.processNode = function(node, normalDivWidth, quoteLevel)
 				useDefaultWidth = true;
 			}
 
-			if (useDefaultWidth && normalDivWidth > 0) {
+			var childrenWillWrap = true;
+			if (!node.classList.contains("gmail_quote")) {
+				childrenWillWrap = node.childNodes.length > 0 && liText == "";
+				var ii;
+				for (ii = 0; childrenWillWrap && ii < node.childNodes.length; ii++) {
+					var child = node.childNodes.item(ii);
+					childrenWillWrap = (child.nodeType == child.ELEMENT_NODE &&
+							   ((child.tagName == "DIV" && !child.getAttribute("x-evo-li-text")) ||
+							    child.tagName == "P" ||
+							    child.tagName == "PRE" ||
+							    child.tagName == "BLOCKQUOTE" ||
+							    child.tagName == "BR")) ||
+							   (child.nodeType == child.TEXT_NODE &&
+							    EvoConvert.RemoveInsignificantNewLines(child, true).trim().length == 0);
+				}
+			}
+
+			if (childrenWillWrap) {
+				width = -1;
+			} else if (useDefaultWidth && normalDivWidth > 0) {
 				width = normalDivWidth - (quoteLevel * 2);
 
 				if (width < EvoConvert.MIN_PARAGRAPH_WIDTH)
 					width = EvoConvert.MIN_PARAGRAPH_WIDTH;
 			}
 
-			str = EvoConvert.formatParagraph(EvoConvert.extractElemText(node, normalDivWidth, quoteLevel), ltr, align, indent, whiteSpace, width, extraIndent, liText, quoteLevel);
+			str = EvoConvert.formatParagraph(EvoConvert.extractElemText(node, normalDivWidth, quoteLevel, context), ltr, align, indent, whiteSpace, width, extraIndent, liText, quoteLevel);
 
 			if (!liText && node.parentElement && (node.parentElement.tagName == "DIV" || node.parentElement.tagName == "P") &&
 			    style.display == "block" && str != "" && node.previousSibling &&
@@ -928,7 +1017,7 @@ EvoConvert.processNode = function(node, normalDivWidth, quoteLevel)
 				str = "\n" + str;
 			}
 		} else if (node.tagName == "PRE") {
-			str = EvoConvert.formatParagraph(EvoConvert.extractElemText(node, normalDivWidth, quoteLevel), ltr, align, indent, "pre", -1, 0, "", quoteLevel);
+			str = EvoConvert.formatParagraph(EvoConvert.extractElemText(node, normalDivWidth, quoteLevel, context), ltr, align, indent, "pre", -1, 0, "", quoteLevel);
 		} else if (node.tagName == "BR") {
 			// ignore new-lines added by wrapping, treat them as spaces
 			if (node.classList.contains("-x-evo-wrap-br")) {
@@ -939,12 +1028,12 @@ EvoConvert.processNode = function(node, normalDivWidth, quoteLevel)
 			}
 		} else if (node.tagName == "IMG") {
 			str = EvoConvert.ImgToText(node);
-		} else if (node.tagName == "A" && !node.innerText.includes(" ") && !node.innerText.includes("\n")) {
-			str = EvoConvert.NOWRAP_CHAR_START + node.innerText + EvoConvert.NOWRAP_CHAR_END;
+		} else if (node.tagName == "A") {
+			str = EvoConvert.processAnchor(node, context);
 		} else {
 			var isBlockquote = node.tagName == "BLOCKQUOTE";
 
-			str = EvoConvert.extractElemText(node, normalDivWidth, quoteLevel + (isBlockquote ? 1 : 0));
+			str = EvoConvert.extractElemText(node, normalDivWidth, quoteLevel + (isBlockquote ? 1 : 0), context);
 
 			if (isBlockquote) {
 				var ii, lines = str.split("\n"), prefix, suffix;
@@ -963,7 +1052,7 @@ EvoConvert.processNode = function(node, normalDivWidth, quoteLevel)
 			}
 
 			if ((!isBlockquote || !str.endsWith("\n")) &&
-			    str != "\n" && ((style && style.display == "block") || node.tagName == "ADDRESS")) {
+			    str != "\n" && ((style && style.display == "block") || node.tagName == "ADDRESS" || node.tagName == "TR")) {
 				str += "\n";
 			}
 		}
@@ -976,8 +1065,11 @@ EvoConvert.processNode = function(node, normalDivWidth, quoteLevel)
  * Converts element and its children to plain text. Any <div>,<ul>,<ol>, as an immediate child
  * of the element, is wrapped to upto normalDivWidth characters, if it's defined and greater
  * than EvoConvert.MIN_PARAGRAPH_WIDTH.
+ *
+ * The link_to_text should be one of EvoConvert.E_HTML_LINK_TO_TEXT_... constants, if not
+ * defined the 'EvoConvert.E_HTML_LINK_TO_TEXT_NONE' is assumed.
  */
-EvoConvert.ToPlainText = function(element, normalDivWidth)
+EvoConvert.ToPlainText = function(element, normalDivWidth, link_to_text)
 {
 	if (!element)
 		return null;
@@ -1005,6 +1097,11 @@ EvoConvert.ToPlainText = function(element, normalDivWidth)
 		disconnectFromHead = true;
 	}
 
+	var context = {
+		link_to_text : link_to_text,
+		append_refs : []
+	};
+
 	try {
 		var uls, ols, str = "", ii;
 
@@ -1015,10 +1112,10 @@ EvoConvert.ToPlainText = function(element, normalDivWidth)
 			element = element.cloneNode(true);
 
 			if (uls.length)
-				EvoConvert.replaceList(element, "UL", normalDivWidth);
+				EvoConvert.replaceList(element, "UL", normalDivWidth, context);
 
 			if (ols.length)
-				EvoConvert.replaceList(element, "OL", normalDivWidth);
+				EvoConvert.replaceList(element, "OL", normalDivWidth, context);
 		}
 
 		for (ii = 0; ii < element.childNodes.length; ii++) {
@@ -1027,7 +1124,28 @@ EvoConvert.ToPlainText = function(element, normalDivWidth)
 			if (!node)
 				continue;
 
-			str = EvoConvert.appendNodeText(node, str, EvoConvert.processNode(node, normalDivWidth, 0));
+			str = EvoConvert.appendNodeText(node, str, EvoConvert.processNode(node, normalDivWidth, 0, context));
+		}
+
+		if (context.append_refs.length > 0) {
+			if (!str.endsWith("\n"))
+				str += "\n";
+			str += "\n";
+
+			for (ii = 0; ii < context.append_refs.length; ii++) {
+				var prefix = "[" + (ii + 1) + "] ";
+				if (context.append_refs[ii].label) {
+					var indent = prefix.length;
+					prefix += context.append_refs[ii].label.replace(/\r/g, "").replace(/\n/g, " ");
+					if (normalDivWidth && normalDivWidth > 0 &&
+					    normalDivWidth < (prefix.length + 1 + context.append_refs[ii].href.length)) {
+						prefix += "\n" + " ".repeat(indent);
+					} else {
+						prefix += " ";
+					}
+				}
+				str += prefix + context.append_refs[ii].href + "\n";
+			}
 		}
 	} finally {
 		if (disconnectFromHead)

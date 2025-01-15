@@ -38,11 +38,8 @@
 #include <libebook/libebook.h>
 #include <libebackend/libebackend.h>
 
+#include "e-simple-async-result.h"
 #include "e-client-cache.h"
-
-#define E_CLIENT_CACHE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CLIENT_CACHE, EClientCachePrivate))
 
 typedef struct _ClientData ClientData;
 typedef struct _SignalClosure SignalClosure;
@@ -78,12 +75,9 @@ struct _SignalClosure {
 	gchar *error_message;
 };
 
-G_DEFINE_TYPE_WITH_CODE (
-	EClientCache,
-	e_client_cache,
-	G_TYPE_OBJECT,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL))
+G_DEFINE_TYPE_WITH_CODE (EClientCache, e_client_cache, G_TYPE_OBJECT,
+	G_ADD_PRIVATE (EClientCache)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 enum {
 	PROP_0,
@@ -603,16 +597,16 @@ client_cache_process_results (ClientData *client_data,
 	g_mutex_unlock (&client_data->lock);
 
 	while (!g_queue_is_empty (&queue)) {
-		GSimpleAsyncResult *simple;
+		ESimpleAsyncResult *simple;
 
 		simple = g_queue_pop_head (&queue);
 		if (client != NULL)
-			g_simple_async_result_set_op_res_gpointer (
+			e_simple_async_result_set_op_pointer (
 				simple, g_object_ref (client),
 				(GDestroyNotify) g_object_unref);
 		if (error != NULL)
-			g_simple_async_result_set_from_error (simple, error);
-		g_simple_async_result_complete_in_idle (simple);
+			e_simple_async_result_take_error (simple, g_error_copy (error));
+		e_simple_async_result_complete_idle (simple);
 		g_object_unref (simple);
 	}
 }
@@ -741,29 +735,27 @@ client_cache_get_property (GObject *object,
 static void
 client_cache_dispose (GObject *object)
 {
-	EClientCachePrivate *priv;
+	EClientCache *self = E_CLIENT_CACHE (object);
 
-	priv = E_CLIENT_CACHE_GET_PRIVATE (object);
-
-	if (priv->source_removed_handler_id > 0) {
+	if (self->priv->source_removed_handler_id > 0) {
 		g_signal_handler_disconnect (
-			priv->registry,
-			priv->source_removed_handler_id);
-		priv->source_removed_handler_id = 0;
+			self->priv->registry,
+			self->priv->source_removed_handler_id);
+		self->priv->source_removed_handler_id = 0;
 	}
 
-	if (priv->source_disabled_handler_id > 0) {
+	if (self->priv->source_disabled_handler_id > 0) {
 		g_signal_handler_disconnect (
-			priv->registry,
-			priv->source_disabled_handler_id);
-		priv->source_disabled_handler_id = 0;
+			self->priv->registry,
+			self->priv->source_disabled_handler_id);
+		self->priv->source_disabled_handler_id = 0;
 	}
 
-	g_clear_object (&priv->registry);
+	g_clear_object (&self->priv->registry);
 
-	g_hash_table_remove_all (priv->client_ht);
+	g_hash_table_remove_all (self->priv->client_ht);
 
-	g_clear_pointer (&priv->main_context, g_main_context_unref);
+	g_clear_pointer (&self->priv->main_context, g_main_context_unref);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_client_cache_parent_class)->dispose (object);
@@ -772,12 +764,10 @@ client_cache_dispose (GObject *object)
 static void
 client_cache_finalize (GObject *object)
 {
-	EClientCachePrivate *priv;
+	EClientCache *self = E_CLIENT_CACHE (object);
 
-	priv = E_CLIENT_CACHE_GET_PRIVATE (object);
-
-	g_hash_table_destroy (priv->client_ht);
-	g_mutex_clear (&priv->client_ht_lock);
+	g_hash_table_destroy (self->priv->client_ht);
+	g_mutex_clear (&self->priv->client_ht_lock);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_client_cache_parent_class)->finalize (object);
@@ -820,8 +810,6 @@ static void
 e_client_cache_class_init (EClientCacheClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EClientCachePrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = client_cache_set_property;
@@ -1005,7 +993,7 @@ e_client_cache_init (EClientCache *client_cache)
 		(GDestroyNotify) g_free,
 		(GDestroyNotify) g_hash_table_unref);
 
-	client_cache->priv = E_CLIENT_CACHE_GET_PRIVATE (client_cache);
+	client_cache->priv = e_client_cache_get_instance_private (client_cache);
 
 	client_cache->priv->main_context = g_main_context_ref_thread_default ();
 	client_cache->priv->client_ht = client_ht;
@@ -1088,13 +1076,13 @@ e_client_cache_ref_registry (EClientCache *client_cache)
  *
  * #E_SOURCE_EXTENSION_ADDRESS_BOOK will obtain an #EBookClient.
  *
- * #E_SOURCE_EXTENSION_CALENDAR will obtain an #ECalClient with a
+ * #E_SOURCE_EXTENSION_CALENDAR will obtain an #ECalClient with an
  * #ECalClient:source-type of #E_CAL_CLIENT_SOURCE_TYPE_EVENTS.
  *
- * #E_SOURCE_EXTENSION_MEMO_LIST will obtain an #ECalClient with a
+ * #E_SOURCE_EXTENSION_MEMO_LIST will obtain an #ECalClient with an
  * #ECalClient:source-type of #E_CAL_CLIENT_SOURCE_TYPE_MEMOS.
  *
- * #E_SOURCE_EXTENSION_TASK_LIST will obtain an #ECalClient with a
+ * #E_SOURCE_EXTENSION_TASK_LIST will obtain an #ECalClient with an
  * #ECalClient:source-type of #E_CAL_CLIENT_SOURCE_TYPE_TASKS.
  *
  * The @source must already have an #ESourceExtension by that name
@@ -1253,7 +1241,7 @@ e_client_cache_get_client (EClientCache *client_cache,
                            GAsyncReadyCallback callback,
                            gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	ESimpleAsyncResult *simple;
 	ClientData *client_data;
 	EClient *client = NULL;
 	gboolean connect_in_progress = FALSE;
@@ -1262,21 +1250,21 @@ e_client_cache_get_client (EClientCache *client_cache,
 	g_return_if_fail (E_IS_SOURCE (source));
 	g_return_if_fail (extension_name != NULL);
 
-	simple = g_simple_async_result_new (
+	simple = e_simple_async_result_new (
 		G_OBJECT (client_cache), callback,
 		user_data, e_client_cache_get_client);
 
-	g_simple_async_result_set_check_cancellable (simple, cancellable);
+	e_simple_async_result_set_check_cancellable (simple, cancellable);
 
 	client_data = client_ht_lookup (client_cache, source, extension_name);
 
 	if (client_data == NULL) {
-		g_simple_async_result_set_error (
-			simple, G_IO_ERROR,
+		e_simple_async_result_take_error (
+			simple, g_error_new (G_IO_ERROR,
 			G_IO_ERROR_INVALID_ARGUMENT,
 			_("Cannot create a client object from "
-			"extension name “%s”"), extension_name);
-		g_simple_async_result_complete_in_idle (simple);
+			"extension name “%s”"), extension_name));
+		e_simple_async_result_complete_idle (simple);
 		goto exit;
 	}
 
@@ -1294,9 +1282,9 @@ e_client_cache_get_client (EClientCache *client_cache,
 
 	/* If a cached EClient already exists, we're done. */
 	if (client != NULL) {
-		g_simple_async_result_set_op_res_gpointer (
+		e_simple_async_result_set_op_pointer (
 			simple, client, (GDestroyNotify) g_object_unref);
-		g_simple_async_result_complete_in_idle (simple);
+		e_simple_async_result_complete_idle (simple);
 		goto exit;
 	}
 
@@ -1368,20 +1356,20 @@ e_client_cache_get_client_finish (EClientCache *client_cache,
                                   GAsyncResult *result,
                                   GError **error)
 {
-	GSimpleAsyncResult *simple;
+	ESimpleAsyncResult *simple;
 	EClient *client;
 
 	g_return_val_if_fail (
-		g_simple_async_result_is_valid (
+		e_simple_async_result_is_valid (
 		result, G_OBJECT (client_cache),
 		e_client_cache_get_client), NULL);
 
-	simple = G_SIMPLE_ASYNC_RESULT (result);
+	simple = E_SIMPLE_ASYNC_RESULT (result);
 
-	if (g_simple_async_result_propagate_error (simple, error))
+	if (e_simple_async_result_propagate_error (simple, error))
 		return NULL;
 
-	client = g_simple_async_result_get_op_res_gpointer (simple);
+	client = e_simple_async_result_get_op_pointer (simple);
 	g_return_val_if_fail (client != NULL, NULL);
 
 	return g_object_ref (client);
@@ -1428,6 +1416,75 @@ e_client_cache_ref_cached_client (EClientCache *client_cache,
 	}
 
 	return client;
+}
+
+static void
+e_client_cache_append_clients (GSList **pclients,
+			       GHashTable *inner_ht)
+{
+	GHashTableIter iter;
+	gpointer value;
+
+	g_hash_table_iter_init (&iter, inner_ht);
+
+	while (g_hash_table_iter_next (&iter, NULL, &value)) {
+		ClientData *client_data = value;
+
+		if (client_data && client_data->client)
+			*pclients = g_slist_prepend (*pclients, g_object_ref (client_data->client));
+	}
+}
+
+/**
+ * e_client_cache_list_cached_clients:
+ * @client_cache: an #EClientCache
+ * @extension_name: (nullable): an extension name the client should serve, or %NULL for all
+ *
+ * Lists currently cached clients for extension @extension_name, or all
+ * cached clients, when the @extension_name is %NULL.
+ *
+ * Free the returned #GSList with g_slist_free_full (slist, g_object_unref);,
+ * when no longer needed.
+ *
+ * Returns: (transfer full) (nullable) (element-type EClient): a newly allocated #GSList
+ *    with currently cached clients, or %NULL, when none is cached
+ *
+ * Since: 3.48
+ **/
+GSList * /* EClient * */
+e_client_cache_list_cached_clients (EClientCache *client_cache,
+				    const gchar *extension_name)
+{
+	GSList *clients = NULL;
+	GHashTable *client_ht;
+	GHashTable *inner_ht;
+
+	g_return_val_if_fail (E_IS_CLIENT_CACHE (client_cache), NULL);
+
+	client_ht = client_cache->priv->client_ht;
+
+	g_mutex_lock (&client_cache->priv->client_ht_lock);
+
+	if (extension_name) {
+		inner_ht = g_hash_table_lookup (client_ht, extension_name);
+		if (inner_ht)
+			e_client_cache_append_clients (&clients, inner_ht);
+	} else {
+		GHashTableIter iter;
+		gpointer value;
+
+		g_hash_table_iter_init (&iter, client_ht);
+
+		while (g_hash_table_iter_next (&iter, NULL, &value)) {
+			inner_ht = value;
+			if (inner_ht)
+				e_client_cache_append_clients (&clients, inner_ht);
+		}
+	}
+
+	g_mutex_unlock (&client_cache->priv->client_ht_lock);
+
+	return clients;
 }
 
 /**

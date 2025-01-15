@@ -311,7 +311,7 @@ composer_actions_accel_activate_cb (GtkAccelGroup *accel_group,
 {
 	EMsgComposer *composer = user_data;
 
-	if (keyval == GDK_KEY_Return && (modifier & GDK_MODIFIER_MASK) == GDK_CONTROL_MASK &&
+	if ((keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) && (modifier & GDK_MODIFIER_MASK) == GDK_CONTROL_MASK &&
 	    !e_util_prompt_user (GTK_WINDOW (composer), "org.gnome.evolution.mail",
 		"prompt-on-accel-send", "mail-composer:prompt-accel-send", NULL)) {
 		return TRUE;
@@ -374,7 +374,7 @@ static GtkActionEntry entries[] = {
 
 	{ "options-menu",
 	  NULL,
-	  N_("_Options"),
+	  N_("Option_s"),
 	  NULL,
 	  NULL,
 	  NULL }
@@ -413,6 +413,22 @@ static GtkActionEntry async_entries[] = {
 
 static GtkToggleActionEntry toggle_entries[] = {
 
+	{ "toolbar-show-main",
+	  NULL,
+	  N_("_Main toolbar"),
+	  NULL,
+	  N_("Main toolbar"),
+	  NULL,
+	  FALSE },
+
+	{ "toolbar-show-edit",
+	  NULL,
+	  N_("Edit _toolbar"),
+	  NULL,
+	  N_("Edit toolbar"),
+	  NULL,
+	  FALSE },
+
 	{ "pgp-encrypt",
 	  NULL,
 	  N_("PGP _Encrypt"),
@@ -438,7 +454,7 @@ static GtkToggleActionEntry toggle_entries[] = {
 	  FALSE },
 
 	{ "prioritize-message",
-	  NULL,
+	  "mail-mark-important",
 	  N_("_Prioritize Message"),
 	  NULL,
 	  N_("Set the message priority to high"),
@@ -446,10 +462,18 @@ static GtkToggleActionEntry toggle_entries[] = {
 	  FALSE },
 
 	{ "request-read-receipt",
-	  NULL,
+	  "preferences-system-notifications",
 	  N_("Re_quest Read Receipt"),
 	  NULL,
 	  N_("Get delivery notification when your message is read"),
+	  NULL,  /* no callback */
+	  FALSE },
+
+	{ "delivery-status-notification",
+	  NULL,
+	  N_("Request _Delivery Status Notification"),
+	  NULL,
+	  N_("Get delivery status notification for the message"),
 	  NULL,  /* no callback */
 	  FALSE },
 
@@ -457,7 +481,7 @@ static GtkToggleActionEntry toggle_entries[] = {
 	  NULL,
 	  N_("S/MIME En_crypt"),
 	  NULL,
-	  N_("Encrypt this message with your S/MIME Encryption Certificate"),
+	  N_("Encrypt this message with S/MIME"),
 	  G_CALLBACK (action_smime_encrypt_cb),
 	  FALSE },
 
@@ -541,6 +565,22 @@ static GtkToggleActionEntry toggle_entries[] = {
 	  NULL,  /* Handled by property bindings */
 	  FALSE },
 
+	{ "view-mail-followup-to",
+	  NULL,
+	  N_("Mail-Follow_up-To Field"),
+	  NULL,
+	  N_("Toggles whether the Mail-Followup-To field is displayed"),
+	  NULL,  /* Handled by property bindings */
+	  FALSE },
+
+	{ "view-mail-reply-to",
+	  NULL,
+	  N_("Mail-R_eply-To Field"),
+	  NULL,
+	  N_("Toggles whether the Mail-Reply-To field is displayed"),
+	  NULL,  /* Handled by property bindings */
+	  FALSE },
+
 	{ "view-reply-to",
 	  NULL,
 	  N_("_Reply-To Field"),
@@ -558,6 +598,35 @@ static GtkToggleActionEntry toggle_entries[] = {
 	  FALSE }
 };
 
+static gboolean
+eca_transform_mode_html_to_boolean_cb (GBinding *binding,
+				       const GValue *source_value,
+				       GValue *target_value,
+				       gpointer not_used)
+{
+	g_value_set_boolean (target_value, g_value_get_enum (source_value) == E_CONTENT_EDITOR_MODE_HTML);
+
+	return TRUE;
+}
+
+static gboolean
+eca_mode_to_bool_hide_in_markdown_cb (GBinding *binding,
+				      const GValue *from_value,
+				      GValue *to_value,
+				      gpointer user_data)
+{
+	EContentEditorMode mode;
+
+	mode = g_value_get_enum (from_value);
+
+	g_value_set_boolean (to_value,
+		mode != E_CONTENT_EDITOR_MODE_MARKDOWN &&
+		mode != E_CONTENT_EDITOR_MODE_MARKDOWN_PLAIN_TEXT &&
+		mode != E_CONTENT_EDITOR_MODE_MARKDOWN_HTML);
+
+	return TRUE;
+}
+
 void
 e_composer_actions_init (EMsgComposer *composer)
 {
@@ -567,6 +636,8 @@ e_composer_actions_init (EMsgComposer *composer)
 	EHTMLEditor *editor;
 	EContentEditor *cnt_editor;
 	gboolean visible;
+	GSettings *settings;
+	GtkAction *action;
 	GIcon *gcr_gnupg_icon;
 
 	g_return_if_fail (E_IS_MSG_COMPOSER (composer));
@@ -646,13 +717,28 @@ e_composer_actions_init (EMsgComposer *composer)
 
 	#undef init_toolbar_option
 
+	settings = e_util_ref_settings ("org.gnome.evolution.mail");
+
+	action = ACTION (TOOLBAR_SHOW_MAIN);
+	g_settings_bind (
+		settings, "composer-show-main-toolbar",
+		action, "active",
+		G_SETTINGS_BIND_DEFAULT);
+
+	action = ACTION (TOOLBAR_SHOW_EDIT);
+	g_settings_bind (
+		settings, "composer-show-edit-toolbar",
+		action, "active",
+		G_SETTINGS_BIND_DEFAULT);
+
+	g_object_unref (settings);
+
 	/* Borrow a GnuPG icon from gcr to distinguish between GPG and S/MIME Sign/Encrypt actions */
 	gcr_gnupg_icon = g_themed_icon_new ("gcr-gnupg");
 	if (gcr_gnupg_icon) {
 		GIcon *temp_icon;
 		GIcon *action_icon;
 		GEmblem *emblem;
-		GtkAction *action;
 
 		emblem = g_emblem_new (gcr_gnupg_icon);
 
@@ -676,10 +762,12 @@ e_composer_actions_init (EMsgComposer *composer)
 		g_object_unref (gcr_gnupg_icon);
 	}
 
-	e_binding_bind_property (
-		cnt_editor, "html-mode",
+	e_binding_bind_property_full (
+		editor, "mode",
 		ACTION (PICTURE_GALLERY), "sensitive",
-		G_BINDING_SYNC_CREATE);
+		G_BINDING_SYNC_CREATE,
+		eca_transform_mode_html_to_boolean_cb,
+		NULL, NULL, NULL);
 
 	e_binding_bind_property (
 		cnt_editor, "editable",
@@ -710,6 +798,13 @@ e_composer_actions_init (EMsgComposer *composer)
 		cnt_editor, "visually-wrap-long-lines",
 		e_html_editor_get_action (editor, "visually-wrap-long-lines"), "active",
 		G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE);
+
+	e_binding_bind_property_full (
+		editor, "mode",
+		e_html_editor_get_action (editor, "visually-wrap-long-lines"), "visible",
+		G_BINDING_SYNC_CREATE,
+		eca_mode_to_bool_hide_in_markdown_cb,
+		NULL, NULL, NULL);
 
 #if defined (ENABLE_SMIME)
 	visible = TRUE;

@@ -30,10 +30,6 @@
 #include "e-calendar-view.h"
 #include "e-day-view-top-item.h"
 
-#define E_DAY_VIEW_TOP_ITEM_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_DAY_VIEW_TOP_ITEM, EDayViewTopItemPrivate))
-
 struct _EDayViewTopItemPrivate {
 	/* The parent EDayView widget. */
 	EDayView *day_view;
@@ -48,10 +44,7 @@ enum {
 	PROP_SHOW_DATES
 };
 
-G_DEFINE_TYPE (
-	EDayViewTopItem,
-	e_day_view_top_item,
-	GNOME_TYPE_CANVAS_ITEM)
+G_DEFINE_TYPE_WITH_PRIVATE (EDayViewTopItem, e_day_view_top_item, GNOME_TYPE_CANVAS_ITEM)
 
 /* This draws a little triangle to indicate that an event extends past
  * the days visible on screen. */
@@ -421,7 +414,8 @@ day_view_top_item_draw_long_event (EDayViewTopItem *top_item,
 		e_cal_component_has_recurrences (comp) ||
 		e_cal_component_is_instance (comp))) {
 		cairo_save (cr);
-		gdk_cairo_set_source_pixbuf (cr, day_view->recurrence_icon, icon_x, icon_y);
+		gdk_cairo_set_source_pixbuf (cr,
+			e_cal_component_has_recurrences (comp) ? day_view->recurrence_icon : day_view->detached_recurrence_icon, icon_x, icon_y);
 		cairo_paint (cr);
 		cairo_restore (cr);
 
@@ -457,18 +451,11 @@ day_view_top_item_draw_long_event (EDayViewTopItem *top_item,
 	/* draw categories icons */
 	categories_list = e_cal_component_get_categories_list (comp);
 	for (elem = categories_list; elem; elem = elem->next) {
-		gchar *category;
-		gchar *file;
-		GdkPixbuf *pixbuf;
+		const gchar *category;
+		GdkPixbuf *pixbuf = NULL;
 
 		category = (gchar *) elem->data;
-		file = e_categories_dup_icon_file_for (category);
-		if (!file)
-			continue;
-
-		pixbuf = gdk_pixbuf_new_from_file (file, NULL);
-		g_free (file);
-		if (pixbuf == NULL)
+		if (!e_categories_config_get_icon_for (category, &pixbuf))
 			continue;
 
 		if (icon_x <= max_icon_x) {
@@ -482,6 +469,11 @@ day_view_top_item_draw_long_event (EDayViewTopItem *top_item,
 				E_DAY_VIEW_ICON_HEIGHT);
 			cairo_fill (cr);
 			icon_x -= icon_x_inc;
+
+			g_clear_object (&pixbuf);
+		} else {
+			g_clear_object (&pixbuf);
+			break;
 		}
 	}
 
@@ -538,10 +530,9 @@ day_view_top_item_get_property (GObject *object,
 static void
 day_view_top_item_dispose (GObject *object)
 {
-	EDayViewTopItemPrivate *priv;
+	EDayViewTopItem *self = E_DAY_VIEW_TOP_ITEM (object);
 
-	priv = E_DAY_VIEW_TOP_ITEM_GET_PRIVATE (object);
-	g_clear_object (&priv->day_view);
+	g_clear_object (&self->priv->day_view);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_day_view_top_item_parent_class)->dispose (object);
@@ -783,8 +774,6 @@ e_day_view_top_item_class_init (EDayViewTopItemClass *class)
 	GObjectClass *object_class;
 	GnomeCanvasItemClass *item_class;
 
-	g_type_class_add_private (class, sizeof (EDayViewTopItemPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = day_view_top_item_set_property;
 	object_class->get_property = day_view_top_item_get_property;
@@ -819,7 +808,7 @@ e_day_view_top_item_class_init (EDayViewTopItemClass *class)
 static void
 e_day_view_top_item_init (EDayViewTopItem *top_item)
 {
-	top_item->priv = E_DAY_VIEW_TOP_ITEM_GET_PRIVATE (top_item);
+	top_item->priv = e_day_view_top_item_get_instance_private (top_item);
 }
 
 void
@@ -848,11 +837,13 @@ e_day_view_top_item_get_day_label (EDayView *day_view,
 		format = _("%A %d %B");
 	else if (day_view->date_format == E_DAY_VIEW_DATE_ABBREVIATED)
 		/* strftime format %a = abbreviated weekday name, %d = day of month,
-		 * %b = abbreviated month name. Don't use any other specifiers. */
+		 * %b = abbreviated month name. Don't use any other specifiers.
+		 * xgettext:no-c-format */
 		format = _("%a %d %b");
 	else if (day_view->date_format == E_DAY_VIEW_DATE_NO_WEEKDAY)
 		/* strftime format %d = day of month, %b = abbreviated month name.
-		 * Don't use any other specifiers. */
+		 * Don't use any other specifiers.
+		 * xgettext:no-c-format */
 		format = _("%d %b");
 	else
 		format = "%d";

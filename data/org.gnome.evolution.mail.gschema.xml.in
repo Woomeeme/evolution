@@ -44,6 +44,30 @@
     <value nick='books'         value='2'/>
   </enum>
 
+  <!-- Keep this synchronized with EContentEditorMode. -->
+  <enum id="org.gnome.evolution.mail.ContentEditorMode">
+    <value nick='unknown'             value='-1'/>
+    <value nick='plain-text'          value='0'/>
+    <value nick='html'                value='1'/>
+    <value nick='markdown'            value='2'/>
+    <value nick='markdown-plain-text' value='3'/>
+    <value nick='markdown-html'       value='4'/>
+  </enum>
+
+  <!-- Keep this synchronized with EMailReaderSaveToFileFormat. -->
+  <enum id="org.gnome.evolution.mail.MailReaderSaveToFileFormat">
+    <value nick='mbox' value='0'/>
+    <value nick='eml'  value='1'/>
+  </enum>
+
+  <!-- Keep this synchronized with EHTMLLinkToText. -->
+  <enum id="org.gnome.evolution.mail.HTMLLinkToText">
+    <value nick='none'                    value='0'/>
+    <value nick='inline'                  value='1'/>
+    <value nick='reference'               value='2'/>
+    <value nick='reference-without-label' value='3'/>
+  </enum>
+
   <schema gettext-domain="evolution" id="org.gnome.evolution.mail" path="/org/gnome/evolution/mail/">
     <key name="prompt-check-if-default-mailer" type="b">
       <default>true</default>
@@ -57,8 +81,8 @@
     </key>
     <key name="composer-editor" type="s">
       <default>''</default>
-      <_summary>Name of the editor to prefer in the message composer</_summary>
-      <_description>If the name doesn’t correspond to any known editor, then the built-in WebKit editor is used.</_description>
+      <_summary>Comma-separated names of the editor to prefer in the message composer</_summary>
+      <_description>If the name doesn’t correspond to any known editor, then the built-in WebKit editor is used. The mode is optional, in which case the editor is used for all the modes it supports. Modes are “plain”, “html”, "markdown-plain", "markdown-html" and "markdown". Example values: “webkit” (to use WebKit for plain and html), “plain:first-editor,html:second-editor” (to use “first-editor” for the “plain” and “second-editor” for “html”)</_description>
     </key>
     <key name="composer-gallery-path" type="s">
       <default>''</default>
@@ -115,10 +139,14 @@
       <_summary>Always request read receipt</_summary>
       <_description>Whether a read receipt request gets added to every message by default.</_description>
     </key>
-    <key name="composer-send-html" type="b">
+    <key name="composer-request-dsn" type="b">
       <default>false</default>
-      <_summary>Send HTML mail by default</_summary>
-      <_description>Send HTML mail by default.</_description>
+      <_summary>Always request Delivery Status Notification</_summary>
+      <_description>Whether a Delivery Status Notification request gets added to every message by default.</_description>
+    </key>
+    <key name="composer-mode" enum="org.gnome.evolution.mail.ContentEditorMode">
+      <default>'plain-text'</default>
+      <_summary>What mode open the composer with</_summary>
     </key>
     <key name="composer-spell-languages" type="as">
       <default>[]</default>
@@ -154,6 +182,16 @@
       <_summary>Show “Reply To” field when sending a mail message</_summary>
       <_description>Show the “Reply To” field when sending a mail message. This is controlled from the View menu when a mail account is chosen.</_description>
     </key>
+    <key name="composer-show-mail-followup-to" type="b">
+      <default>false</default>
+      <_summary>Show “Mail-Followup-To” field when sending a mail message</_summary>
+      <_description>Show the “Mail-Followup-To” field when sending a mail message. This is controlled from the View menu when a mail account is chosen.</_description>
+    </key>
+    <key name="composer-show-mail-reply-to" type="b">
+      <default>false</default>
+      <_summary>Show “Mail-Reply-To” field when sending a mail message</_summary>
+      <_description>Show the “Mail-Reply-To” field when sending a mail message. This is controlled from the View menu when a mail account is chosen.</_description>
+    </key>
     <key name="composer-show-post-from" type="b">
       <default>true</default>
       <_summary>Show “From” field when posting to a newsgroup</_summary>
@@ -163,6 +201,16 @@
       <default>false</default>
       <_summary>Show “Reply To” field when posting to a newsgroup</_summary>
       <_description>Show the “Reply To” field when posting to a newsgroup. This is controlled from the View menu when a news account is chosen.</_description>
+    </key>
+    <key name="composer-show-post-mail-followup-to" type="b">
+      <default>false</default>
+      <_summary>Show “Mail-Followup-To” field when posting to a newsgroup</_summary>
+      <_description>Show the “Mail-Followup-To” field when posting to a newsgroup. This is controlled from the View menu when a news account is chosen.</_description>
+    </key>
+    <key name="composer-show-post-mail-reply-to" type="b">
+      <default>false</default>
+      <_summary>Show “Mail-Reply-To” field when posting to a newsgroup</_summary>
+      <_description>Show the “Mail-Reply-To” field when posting to a newsgroup. This is controlled from the View menu when a news account is chosen.</_description>
     </key>
     <key name="composer-sign-reply-if-signed" type="b">
       <default>false</default>
@@ -181,8 +229,8 @@
     </key>
     <key type="i" name="composer-delay-outbox-flush">
       <default>-1</default>
-      <summary>How long to delay Outbox flush when sending messages through Outbox folder</summary>
-      <description>A delay, in minutes, to wait for the Outbox folder flush. Less than 0 means never flush, 0 means immediately, the rest is the delay interval in minutes.</description>
+      <_summary>How long to delay Outbox flush when sending messages through Outbox folder</_summary>
+      <_description>A delay, in minutes, to wait for the Outbox folder flush. Less than 0 means never flush, 0 means immediately, the rest is the delay interval in minutes.</_description>
     </key>
     <key name="composer-signature-in-new-only" type="b">
       <default>false</default>
@@ -234,6 +282,16 @@
       <_summary>Number of To and CC recipients to ask “prompt-on-many-to-cc-recips” from</_summary>
       <_description>When to ask, when the number of To and CC recipients reaches this value.</_description>
     </key>
+     <key name="composer-show-main-toolbar" type="b">
+      <default>true</default>
+      <_summary>Whether to always show main toolbar</_summary>
+      <_description>If set to “true”, the main toolbar will be visible.</_description>
+    </key>
+    <key name="composer-show-edit-toolbar" type="b">
+      <default>true</default>
+      <_summary>Whether to always show edit toolbar</_summary>
+      <_description>If set to “true”, the edit toolbar will be visible.</_description>
+    </key>
     <key name="composer-toolbar-show-sign-encrypt" type="b">
       <default>false</default>
       <_summary>Whether to always show Sign and Encrypt buttons on the toolbar</_summary>
@@ -253,6 +311,16 @@
       <default>false</default>
       <_summary>Convert UTC time in reply credits to local time</_summary>
       <_description>Whether the time in reply credits should be converted to local time when it’s in UTC in the message.</_description>
+    </key>
+    <key name="composer-reply-credits-to-localtime" type="b">
+      <default>false</default>
+      <_summary>Convert time in reply credits to local time</_summary>
+      <_description>Whether the time in reply credits should be converted to local time. This converts any time, not only UTC times, for which “composer-reply-credits-utc-to-localtime” can be used.</_description>
+    </key>
+    <key name="composer-reply-credits-date-user-format" type="b">
+      <default>true</default>
+      <_summary>Use user date format in reply credits</_summary>
+      <_description>Whether the date in reply credits should be shown in the user date format. If unset, shows the header value from the original message.</_description>
     </key>
     <key name="composer-mark-read-on-reply" type="b">
       <default>true</default>
@@ -482,6 +550,11 @@
       <_summary>Whether to compress thread level</_summary>
       <_description>Set to true to compress thread levels for flat conversations, to make the level not so deep.</_description>
     </key>
+    <key name="thread-flat" type="b">
+      <default>false</default>
+      <_summary>Whether to generate flat threads</_summary>
+      <_description>Set to true to generate flat threads. That is, the thread will have only one level, with no sublevels.</_description>
+    </key>
     <key name="sort-accounts-alpha" type="b">
       <default>true</default>
       <_summary>Sort accounts alphabetically in a folder tree</_summary>
@@ -538,6 +611,11 @@
       <default>true</default>
       <_summary>Prompt when user calls Empty Junk</_summary>
       <_description>Prompt the user when he or she tries to Empty a Junk folder.</_description>
+    </key>
+    <key name="prompt-on-mark-as-junk" type="b">
+      <default>true</default>
+      <_summary>Prompt when user marks message as Junk</_summary>
+      <_description>Prompt the user when he or she tries to mark a message as Junk.</_description>
     </key>
     <key name="prompt-on-invalid-recip" type="b">
       <default>true</default>
@@ -603,6 +681,11 @@
       <default>true</default>
       <_summary>Prompt when sending to many To and CC recipients</_summary>
       <_description>Enable or disable the prompt when sending to many To and CC recipients. The “composer-many-to-cc-recips-num” defines the threshold.</_description>
+    </key>
+    <key name="composer-addresses-accept-html" type="as">
+      <default>[]</default>
+      <_summary>List of addresses, or even parts of addresses, which accept HTML</_summary>
+      <_description>It's a complementary option for “prompt-on-unwanted-html”, containing list of addresses, which accept HTML messages.</_description>
     </key>
     <key name="browser-close-on-reply-policy" enum="org.gnome.evolution.mail.AutomaticActionPolicy">
       <default>'ask'</default>
@@ -698,6 +781,11 @@
       <_summary>Save directory</_summary>
       <_description>Directory for saving mail component files.</_description>
     </key>
+    <key name="save-format" enum="org.gnome.evolution.mail.MailReaderSaveToFileFormat">
+      <default>'mbox'</default>
+      <_summary>Save format</_summary>
+      <_description>Last used format when saving messages to file.</_description>
+    </key>
     <key name="composer-current-folder" type="s">
       <default>''</default>
       <_summary>Composer load/attach directory</_summary>
@@ -734,6 +822,7 @@
     <child name="send-recv-window" schema="org.gnome.evolution.window"/>
     <child name="subscription-window" schema="org.gnome.evolution.window"/>
     <child name="vfolder-window" schema="org.gnome.evolution.window"/>
+    <child name="viewer-window" schema="org.gnome.evolution.window"/>
 
     <key name="local-archive-folder" type="s">
       <default>''</default>
@@ -789,7 +878,7 @@
     <key name="show-subject-above-sender" type="b">
       <default>false</default>
       <_summary>Show Subject above Sender in Messages column</_summary>
-      <_description>Whether to show Subject above Sender (From/To) in the Messages column, usually shown in the Vertical/Wide view of the message list</_description>
+      <_description>Whether to show Subject above Sender (From/To) in the Messages column, usually shown in the Vertical/Wide view of the message list. Change of this option requires restart of the Evolution.</_description>
     </key>
     <key name="composer-visually-wrap-long-lines" type="b">
       <default>false</default>
@@ -800,9 +889,9 @@
       <default>'quoted'</default>
       <_summary>Alternative reply style</_summary>
     </key>
-    <key name="alt-reply-html-format" enum="org.gnome.evolution.mail.ThreeState">
-      <default>'inconsistent'</default>
-      <_summary>Format message in HTML</_summary>
+    <key name="alt-reply-format-mode" enum="org.gnome.evolution.mail.ContentEditorMode">
+      <default>'unknown'</default>
+      <_summary>Composer mode to use.</_summary>
     </key>
     <key name="alt-reply-start-bottom" enum="org.gnome.evolution.mail.ThreeState">
       <default>'inconsistent'</default>
@@ -867,10 +956,49 @@
       <_summary>Whether to preserve expand state of the folders when calling Copy/Move to Folder.</_summary>
       <_description>If enabled, the Copy/Move to Folder dialog will preserve the expand state of the folders in the dialog, otherwise all the folders will be expanded.</_description>
     </key>
+    <key name="print-attachments" type="b">
+      <default>false</default>
+      <_summary>Whether to print attachments.</_summary>
+      <_description>If enabled, and possible, attachment content is printed with the message.</_description>
+    </key>
     <key name="preview-text-size-limit" type="i">
       <default>512</default>
       <_summary>Size limit for text attachments to show</_summary>
       <_description>Defines the size in KB, the limit to show text attachments in the message preview. Anything above this limit will not be possible to show inline.</_description>
+    </key>
+    <key name="show-preview-toolbar" type="b">
+      <default>true</default>
+      <_summary>Show Preview Toolbar</_summary>
+      <_description>Show toolbar above preview panel in the Mail view.</_description>
+    </key>
+    <key name="composer-sanitize-markdown-plaintext-input" type="b">
+      <default>true</default>
+      <_summary>Whether the markdown composer should sanitize input text also for the 'Markdown as Plain text' mode</_summary>
+      <_description>Disabling the sanitization allows to use the Markdown editor as a very simple text editor without mangling the input text.</_description>
+    </key>
+    <key name="show-folder-tree-unread-count" type="b">
+      <default>true</default>
+      <_summary>Show unread count in folder tree</_summary>
+      <_description>Show unread count beside the folder name in the folder tree.</_description>
+    </key>
+    <key name="show-insecure-parts" type="b">
+      <default>false</default>
+      <_summary>Show insecure parts by default</_summary>
+      <_description>Set whether not signed/encrypted parts beside signed/encrypted parts should be shown after mail open. The default is to hide these possibly insecure parts.</_description>
+    </key>
+    <key name="html-link-to-text" enum="org.gnome.evolution.mail.HTMLLinkToText">
+      <default>'reference'</default>
+      <_summary>How to convert links from HTML to plain text</_summary>
+      <_description>Possible values: 'none' - do not store href in the plain text; 'inline' - show href beside the text link, like: "label &lt;href&gt;"; 'reference' - show href as reference to the end of the text, like: "label [1] ...... [1] label href"; 'reference-without-label' - show href as reference to the end of the text without label, like: "label [1] ...... [1] href"</_description>
+    </key>
+    <key name="message-list-sort-on-header-click" enum="org.gnome.evolution.mail.AutomaticActionPolicy">
+      <default>'ask'</default>
+      <_summary>Whether click on a header in the message list can change sort order by the clicked column.</_summary>
+    </key>
+    <key name="composer-attach-separate-messages" type="b">
+      <default>false</default>
+      <_summary>Attach multiple messages as separate files</_summary>
+      <_description>When attaching multiple messages at once, attach them as separate files (when set to 'true'), instead of a single mbox file.</_description>
     </key>
 
     <!-- The following keys are deprecated. -->
@@ -899,6 +1027,11 @@
       <default>'ask'</default>
       <_summary>(Deprecated) Asks whether to close the message window when the user forwards or replies to the message shown in the window</_summary>
       <_description>This key was deprecated in version 3.10 and should no longer be used.  Use “browser-close-on-reply-policy” instead.</_description>
+    </key>
+    <key name="prompt-on-changed-attachment" type="b">
+      <default>true</default>
+      <_summary>Prompt before send when attachment changed on the disk</_summary>
+      <_description>Ask whether can send a message with attachments which changed on the disk since they had been attached to the message.</_description>
     </key>
 
   </schema>

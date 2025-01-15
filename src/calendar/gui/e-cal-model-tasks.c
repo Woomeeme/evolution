@@ -33,10 +33,6 @@
 #include "e-cell-date-edit-text.h"
 #include "misc.h"
 
-#define E_CAL_MODEL_TASKS_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CAL_MODEL_TASKS, ECalModelTasksPrivate))
-
 struct _ECalModelTasksPrivate {
 	gboolean highlight_due_today;
 	gchar *color_due_today;
@@ -58,13 +54,9 @@ static void	e_cal_model_tasks_table_model_init
 
 static ETableModelInterface *table_model_parent_interface;
 
-G_DEFINE_TYPE_WITH_CODE (
-	ECalModelTasks,
-	e_cal_model_tasks,
-	E_TYPE_CAL_MODEL,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_TABLE_MODEL,
-		e_cal_model_tasks_table_model_init))
+G_DEFINE_TYPE_WITH_CODE (ECalModelTasks, e_cal_model_tasks, E_TYPE_CAL_MODEL,
+	G_ADD_PRIVATE (ECalModelTasks)
+	G_IMPLEMENT_INTERFACE (E_TYPE_TABLE_MODEL, e_cal_model_tasks_table_model_init))
 
 /* This makes sure a task is marked as complete.
  * It makes sure the "Date Completed" property is set. If the completed_date
@@ -325,8 +317,13 @@ get_due_status (ECalModelTasks *model,
 		if (i_cal_time_is_date (due_tt)) {
 			gint cmp;
 
-			now_tt = i_cal_time_new_current_with_zone (e_cal_model_get_timezone (E_CAL_MODEL (model)));
-			cmp = i_cal_time_compare_date_only (due_tt, now_tt);
+			zone = e_cal_model_get_timezone (E_CAL_MODEL (model));
+
+			/* The DATE value means it's overdue at the beginning of the day */
+			i_cal_time_adjust (due_tt, -1, 0, 0, 0);
+
+			now_tt = i_cal_time_new_current_with_zone (zone);
+			cmp = i_cal_time_compare_date_only_tz (due_tt, now_tt, zone);
 
 			g_object_unref (now_tt);
 			g_object_unref (due_tt);
@@ -341,32 +338,36 @@ get_due_status (ECalModelTasks *model,
 		} else {
 			ECalModelTasksDueStatus res;
 			ICalParameter *param;
-			const gchar *tzid;
 
-			if (!(param = i_cal_property_get_first_parameter (prop, I_CAL_TZID_PARAMETER))) {
-				g_object_unref (due_tt);
-				g_object_unref (prop);
-				return E_CAL_MODEL_TASKS_DUE_FUTURE;
+			param = i_cal_property_get_first_parameter (prop, I_CAL_TZID_PARAMETER);
+
+			if (param) {
+				const gchar *tzid;
+
+				/* Get the current time in the same timezone as the DUE date.*/
+				tzid = i_cal_parameter_get_tzid (param);
+				if (!e_cal_client_get_timezone_sync (comp_data->client, tzid, &zone, NULL, NULL))
+					zone = NULL;
+
+				g_object_unref (param);
 			}
 
-			/* Get the current time in the same timezone as the DUE date.*/
-			tzid = i_cal_parameter_get_tzid (param);
-			if (!e_cal_client_get_timezone_sync (comp_data->client, tzid, &zone, NULL, NULL))
-				zone = NULL;
-
-			g_object_unref (param);
 			g_object_unref (prop);
 
-			if (zone == NULL) {
-				g_object_unref (due_tt);
-				return E_CAL_MODEL_TASKS_DUE_FUTURE;
+			if (!zone) {
+				if (i_cal_time_is_utc (due_tt))
+					zone = i_cal_timezone_get_utc_timezone ();
+				else
+					zone = e_cal_model_get_timezone (E_CAL_MODEL (model));
 			}
 
 			now_tt = i_cal_time_new_current_with_zone (zone);
+			i_cal_time_set_timezone (now_tt, zone);
+			i_cal_time_set_timezone (due_tt, zone);
 
 			if (i_cal_time_compare (due_tt, now_tt) <= 0)
 				res = E_CAL_MODEL_TASKS_DUE_OVERDUE;
-			else if (i_cal_time_compare_date_only (due_tt, now_tt) == 0)
+			else if (i_cal_time_compare_date_only_tz (due_tt, now_tt, zone) == 0)
 				res = E_CAL_MODEL_TASKS_DUE_TODAY;
 			else
 				res = E_CAL_MODEL_TASKS_DUE_FUTURE;
@@ -629,6 +630,36 @@ set_location (ECalModelComponent *comp_data,
 	}
 }
 
+static gpointer
+get_estimated_duration (ECalModelComponent *comp_data)
+{
+	ICalProperty *prop;
+	gpointer res = NULL;
+
+	prop = i_cal_component_get_first_property (comp_data->icalcomp, I_CAL_ESTIMATEDDURATION_PROPERTY);
+	if (prop) {
+		ICalDuration *duration;
+		gint duration_int;
+
+		duration = i_cal_property_get_estimatedduration (prop);
+		duration_int = duration ? i_cal_duration_as_int (duration) : 0;
+
+		if (duration_int > 0) {
+			gint64 *pvalue;
+
+			pvalue = g_new (gint64, 1);
+			*pvalue = duration_int;
+
+			res = pvalue;
+		}
+
+		g_clear_object (&duration);
+		g_object_unref (prop);
+	}
+
+	return res;
+}
+
 static void
 cal_model_tasks_set_property (GObject *object,
                               guint property_id,
@@ -706,12 +737,10 @@ cal_model_tasks_get_property (GObject *object,
 static void
 cal_model_tasks_finalize (GObject *object)
 {
-	ECalModelTasksPrivate *priv;
+	ECalModelTasks *self = E_CAL_MODEL_TASKS (object);
 
-	priv = E_CAL_MODEL_TASKS_GET_PRIVATE (object);
-
-	g_free (priv->color_due_today);
-	g_free (priv->color_overdue);
+	g_free (self->priv->color_due_today);
+	g_free (self->priv->color_overdue);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_cal_model_tasks_parent_class)->finalize (object);
@@ -768,6 +797,7 @@ cal_model_tasks_store_values_from_model (ECalModel *model,
 	e_cal_model_util_set_value (values, source_model, E_CAL_MODEL_TASKS_FIELD_PRIORITY, row);
 	e_cal_model_util_set_value (values, source_model, E_CAL_MODEL_TASKS_FIELD_URL, row);
 	e_cal_model_util_set_value (values, source_model, E_CAL_MODEL_TASKS_FIELD_LOCATION, row);
+	e_cal_model_util_set_value (values, source_model, E_CAL_MODEL_TASKS_FIELD_ESTIMATED_DURATION, row);
 }
 
 static void
@@ -798,6 +828,7 @@ cal_model_tasks_fill_component_from_values (ECalModel *model,
 	set_priority (comp_data, e_cal_model_util_get_value (values, E_CAL_MODEL_TASKS_FIELD_PRIORITY));
 	set_url (comp_data, e_cal_model_util_get_value (values, E_CAL_MODEL_TASKS_FIELD_URL));
 	set_location (comp_data, e_cal_model_util_get_value (values, E_CAL_MODEL_TASKS_FIELD_LOCATION));
+	/*set_estimated_duration (comp_data, e_cal_model_util_get_value (values, E_CAL_MODEL_TASKS_FIELD_ESTIMATED_DURATION)); - read-only*/
 }
 
 static gint
@@ -849,6 +880,8 @@ cal_model_tasks_value_at (ETableModel *etm,
 		return get_url (comp_data);
 	case E_CAL_MODEL_TASKS_FIELD_LOCATION:
 		return get_location (comp_data);
+	case E_CAL_MODEL_TASKS_FIELD_ESTIMATED_DURATION:
+		return get_estimated_duration (comp_data);
 	}
 
 	return (gpointer) "";
@@ -905,6 +938,9 @@ cal_model_tasks_set_value_at (ETableModel *etm,
 	case E_CAL_MODEL_TASKS_FIELD_LOCATION:
 		set_location (comp_data, value);
 		break;
+	case E_CAL_MODEL_TASKS_FIELD_ESTIMATED_DURATION:
+		/* set_estimated_duration (comp_data, value); - read-only */
+		break;
 	}
 
 	e_cal_model_modify_component (E_CAL_MODEL (model), comp_data, E_CAL_OBJ_MOD_ALL);
@@ -939,6 +975,8 @@ cal_model_tasks_is_cell_editable (ETableModel *etm,
 	case E_CAL_MODEL_TASKS_FIELD_URL :
 	case E_CAL_MODEL_TASKS_FIELD_LOCATION:
 		return TRUE;
+	case E_CAL_MODEL_TASKS_FIELD_ESTIMATED_DURATION:
+		return FALSE;
 	}
 
 	return FALSE;
@@ -970,6 +1008,17 @@ cal_model_tasks_duplicate_value (ETableModel *etm,
 
 	case E_CAL_MODEL_TASKS_FIELD_LOCATION:
 		return g_strdup (value);
+
+	case E_CAL_MODEL_TASKS_FIELD_ESTIMATED_DURATION:
+		if (value) {
+			gint64 *res = g_new (gint64, 1);
+			const gint64 *pvalue = value;
+
+			*res = *pvalue;
+
+			return res;
+		}
+		return NULL;
 	}
 
 	return NULL;
@@ -1002,6 +1051,9 @@ cal_model_tasks_free_value (ETableModel *etm,
 	case E_CAL_MODEL_TASKS_FIELD_COMPLETE :
 	case E_CAL_MODEL_TASKS_FIELD_OVERDUE :
 		break;
+	case E_CAL_MODEL_TASKS_FIELD_ESTIMATED_DURATION:
+		g_free (value);
+		break;
 	}
 }
 
@@ -1028,6 +1080,7 @@ cal_model_tasks_initialize_value (ETableModel *etm,
 	case E_CAL_MODEL_TASKS_FIELD_DUE :
 	case E_CAL_MODEL_TASKS_FIELD_COMPLETE :
 	case E_CAL_MODEL_TASKS_FIELD_OVERDUE :
+	case E_CAL_MODEL_TASKS_FIELD_ESTIMATED_DURATION:
 		return NULL;
 	case E_CAL_MODEL_TASKS_FIELD_PERCENT :
 		return GINT_TO_POINTER (-1);
@@ -1058,6 +1111,7 @@ cal_model_tasks_value_is_empty (ETableModel *etm,
 		return string_is_empty (value);
 	case E_CAL_MODEL_TASKS_FIELD_COMPLETED :
 	case E_CAL_MODEL_TASKS_FIELD_DUE :
+	case E_CAL_MODEL_TASKS_FIELD_ESTIMATED_DURATION:
 		return value ? FALSE : TRUE;
 	case E_CAL_MODEL_TASKS_FIELD_PERCENT :
 		return (GPOINTER_TO_INT (value) < 0) ? TRUE : FALSE;
@@ -1100,6 +1154,12 @@ cal_model_tasks_value_to_string (ETableModel *etm,
 			return g_strdup ("N/A");
 		else
 			return g_strdup_printf ("%i%%", GPOINTER_TO_INT (value));
+	case E_CAL_MODEL_TASKS_FIELD_ESTIMATED_DURATION:
+		if (value) {
+			const gint64 *pvalue = value;
+			return e_cal_util_seconds_to_string (*pvalue);
+		}
+		break;
 	}
 
 	return g_strdup ("");
@@ -1110,8 +1170,6 @@ e_cal_model_tasks_class_init (ECalModelTasksClass *class)
 {
 	GObjectClass *object_class;
 	ECalModelClass *cal_model_class;
-
-	g_type_class_add_private (class, sizeof (ECalModelTasksPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = cal_model_tasks_set_property;
@@ -1186,7 +1244,7 @@ e_cal_model_tasks_table_model_init (ETableModelInterface *iface)
 static void
 e_cal_model_tasks_init (ECalModelTasks *model)
 {
-	model->priv = E_CAL_MODEL_TASKS_GET_PRIVATE (model);
+	model->priv = e_cal_model_tasks_get_instance_private (model);
 
 	model->priv->highlight_due_today = TRUE;
 	model->priv->highlight_overdue = TRUE;

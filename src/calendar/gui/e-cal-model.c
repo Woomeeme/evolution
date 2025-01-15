@@ -45,14 +45,6 @@ struct _ECalModelComponentPrivate {
 	gint icon_index;
 };
 
-#define E_CAL_MODEL_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CAL_MODEL, ECalModelPrivate))
-
-#define E_CAL_MODEL_COMPONENT_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CAL_MODEL_COMPONENT, ECalModelComponentPrivate))
-
 struct _ECalModelPrivate {
 	ECalDataModel *data_model;
 	ESourceRegistry *registry;
@@ -189,11 +181,12 @@ static void e_cal_model_cal_data_model_subscriber_init (ECalDataModelSubscriberI
 static guint signals[LAST_SIGNAL];
 
 G_DEFINE_ABSTRACT_TYPE_WITH_CODE (ECalModel, e_cal_model, G_TYPE_OBJECT,
+	G_ADD_PRIVATE (ECalModel)
 	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL)
 	G_IMPLEMENT_INTERFACE (E_TYPE_TABLE_MODEL, e_cal_model_table_model_init)
 	G_IMPLEMENT_INTERFACE (E_TYPE_CAL_DATA_MODEL_SUBSCRIBER, e_cal_model_cal_data_model_subscriber_init))
 
-G_DEFINE_TYPE (ECalModelComponent, e_cal_model_component, G_TYPE_OBJECT)
+G_DEFINE_TYPE_WITH_PRIVATE (ECalModelComponent, e_cal_model_component, G_TYPE_OBJECT)
 
 static void
 e_cal_model_component_set_icalcomponent (ECalModelComponent *comp_data,
@@ -244,7 +237,6 @@ e_cal_model_component_class_init (ECalModelComponentClass *class)
 	GObjectClass *object_class;
 
 	object_class = (GObjectClass *) class;
-	g_type_class_add_private (class, sizeof (ECalModelComponentPrivate));
 
 	object_class->finalize = e_cal_model_component_finalize;
 }
@@ -252,7 +244,7 @@ e_cal_model_component_class_init (ECalModelComponentClass *class)
 static void
 e_cal_model_component_init (ECalModelComponent *comp)
 {
-	comp->priv = E_CAL_MODEL_COMPONENT_GET_PRIVATE (comp);
+	comp->priv = e_cal_model_component_get_instance_private (comp);
 	comp->priv->icon_index = -1;
 	comp->is_new_component = FALSE;
 }
@@ -323,12 +315,20 @@ get_description (ECalModelComponent *comp_data)
 	ICalProperty *prop;
 	GString *str = NULL;
 
-	for (prop = i_cal_component_get_first_property (comp_data->icalcomp, I_CAL_DESCRIPTION_PROPERTY);
-	     prop;
-	     g_object_unref (prop), prop = i_cal_component_get_next_property (comp_data->icalcomp, I_CAL_DESCRIPTION_PROPERTY)) {
-		if (!str)
-			str = g_string_new (NULL);
-		g_string_append (str, i_cal_property_get_description (prop));
+	if (i_cal_component_isa (comp_data->icalcomp) == I_CAL_VJOURNAL_COMPONENT) {
+		for (prop = i_cal_component_get_first_property (comp_data->icalcomp, I_CAL_DESCRIPTION_PROPERTY);
+		     prop;
+		     g_object_unref (prop), prop = i_cal_component_get_next_property (comp_data->icalcomp, I_CAL_DESCRIPTION_PROPERTY)) {
+			if (!str)
+				str = g_string_new (NULL);
+			g_string_append (str, i_cal_property_get_description (prop));
+		}
+	} else {
+		prop = e_cal_util_component_find_property_for_locale (comp_data->icalcomp, I_CAL_DESCRIPTION_PROPERTY, NULL);
+		if (prop) {
+			str = g_string_new (i_cal_property_get_description (prop));
+			g_clear_object (&prop);
+		}
 	}
 
 	return str ? g_string_free (str, FALSE) : g_strdup ("");
@@ -391,7 +391,7 @@ get_summary (ECalModelComponent *comp_data)
 	ICalProperty *prop;
 	gchar *res = NULL;
 
-	prop = i_cal_component_get_first_property (comp_data->icalcomp, I_CAL_SUMMARY_PROPERTY);
+	prop = e_cal_util_component_find_property_for_locale (comp_data->icalcomp, I_CAL_SUMMARY_PROPERTY, NULL);
 	if (prop)
 		res = g_strdup (i_cal_property_get_summary (prop));
 
@@ -1131,17 +1131,15 @@ cal_model_constructed (GObject *object)
 static void
 cal_model_dispose (GObject *object)
 {
-	ECalModelPrivate *priv;
+	ECalModel *self = E_CAL_MODEL (object);
 
-	priv = E_CAL_MODEL_GET_PRIVATE (object);
+	g_clear_object (&self->priv->data_model);
+	g_clear_object (&self->priv->registry);
+	g_clear_object (&self->priv->shell);
+	g_clear_object (&self->priv->client_cache);
+	g_clear_object (&self->priv->zone);
 
-	g_clear_object (&priv->data_model);
-	g_clear_object (&priv->registry);
-	g_clear_object (&priv->shell);
-	g_clear_object (&priv->client_cache);
-	g_clear_object (&priv->zone);
-
-	g_clear_pointer (&priv->default_source_uid, g_free);
+	g_clear_pointer (&self->priv->default_source_uid, g_free);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_cal_model_parent_class)->dispose (object);
@@ -1150,24 +1148,22 @@ cal_model_dispose (GObject *object)
 static void
 cal_model_finalize (GObject *object)
 {
-	ECalModelPrivate *priv;
+	ECalModel *self = E_CAL_MODEL (object);
 	gint ii;
 
-	priv = E_CAL_MODEL_GET_PRIVATE (object);
+	g_free (self->priv->default_category);
 
-	g_free (priv->default_category);
-
-	for (ii = 0; ii < priv->objects->len; ii++) {
+	for (ii = 0; ii < self->priv->objects->len; ii++) {
 		ECalModelComponent *comp_data;
 
-		comp_data = g_ptr_array_index (priv->objects, ii);
+		comp_data = g_ptr_array_index (self->priv->objects, ii);
 		if (comp_data == NULL) {
 			g_warning ("comp_data is null\n");
 			continue;
 		}
 		g_object_unref (comp_data);
 	}
-	g_ptr_array_free (priv->objects, TRUE);
+	g_ptr_array_free (self->priv->objects, TRUE);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_cal_model_parent_class)->finalize (object);
@@ -1186,16 +1182,19 @@ cal_model_get_color_for_component (ECalModel *model,
 	ICalProperty *prop;
 
 	static AssignedColorData assigned_colors[] = {
-		{ "#BECEDD", NULL }, /* 190 206 221     Blue */
-		{ "#E2F0EF", NULL }, /* 226 240 239     Light Blue */
-		{ "#C6E2B7", NULL }, /* 198 226 183     Green */
-		{ "#E2F0D3", NULL }, /* 226 240 211     Light Green */
-		{ "#E2D4B7", NULL }, /* 226 212 183     Khaki */
-		{ "#EAEAC1", NULL }, /* 234 234 193     Light Khaki */
-		{ "#F0B8B7", NULL }, /* 240 184 183     Pink */
-		{ "#FED4D3", NULL }, /* 254 212 211     Light Pink */
-		{ "#E2C6E1", NULL }, /* 226 198 225     Purple */
-		{ "#F0E2EF", NULL }  /* 240 226 239     Light Purple */
+		/* From the HIG https://developer.gnome.org/hig/reference/palette.html , as of 2023-09-29 */
+		{ "#62a0ea", NULL }, /* Blue 2 */
+		{ "#1c71d8", NULL }, /* Blue 4 */
+		{ "#57e389", NULL }, /* Green 2 */
+		{ "#2ec27e", NULL }, /* Green 4 */
+		{ "#f8e45c", NULL }, /* Yellow 2 */
+		{ "#f5c211", NULL }, /* Yellow 4 */
+		{ "#ffbe6f", NULL }, /* Orange 1 */
+		{ "#ff7800", NULL }, /* Orange 3 */
+		{ "#ed333b", NULL }, /* Red 2 */
+		{ "#c01c28", NULL }, /* Red 4 */
+		{ "#c061cb", NULL }, /* Purple 2 */
+		{ "#813d9c", NULL }  /* Purple 4 */
 	};
 
 	g_return_val_if_fail (E_IS_CAL_MODEL (model), NULL);
@@ -1606,7 +1605,7 @@ cal_model_value_at (ETableModel *etm,
 						ECalComponentAttendee *ca = sl->data;
 						const gchar *text;
 
-						text = itip_strip_mailto (e_cal_component_attendee_get_value (ca));
+						text = e_cal_util_get_attendee_email (ca);
 						if (itip_address_is_user (registry, text)) {
 							if (e_cal_component_attendee_get_delegatedto (ca) != NULL)
 								retval = 3;
@@ -2093,8 +2092,6 @@ static void
 e_cal_model_class_init (ECalModelClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (ECalModelPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = cal_model_set_property;
@@ -2625,7 +2622,7 @@ e_cal_model_cal_data_model_subscriber_init (ECalDataModelSubscriberInterface *if
 static void
 e_cal_model_init (ECalModel *model)
 {
-	model->priv = E_CAL_MODEL_GET_PRIVATE (model);
+	model->priv = e_cal_model_get_instance_private (model);
 
 	/* match none by default */
 	model->priv->start = (time_t) -1;
@@ -3821,78 +3818,9 @@ e_cal_model_get_attendees_status_info (ECalModel *model,
                                        ECalComponent *comp,
                                        ECalClient *cal_client)
 {
-	struct _values {
-		ICalParameterPartstat status;
-		const gchar *caption;
-		gint count;
-	} values[] = {
-		{ I_CAL_PARTSTAT_ACCEPTED,    N_("Accepted"),     0 },
-		{ I_CAL_PARTSTAT_DECLINED,    N_("Declined"),     0 },
-		{ I_CAL_PARTSTAT_TENTATIVE,   N_("Tentative"),    0 },
-		{ I_CAL_PARTSTAT_DELEGATED,   N_("Delegated"),    0 },
-		{ I_CAL_PARTSTAT_NEEDSACTION, N_("Needs action"), 0 },
-		{ I_CAL_PARTSTAT_NONE,        N_("Other"),        0 },
-		{ I_CAL_PARTSTAT_X,           NULL,              -1 }
-	};
-
-	ESourceRegistry *registry;
-	GSList *attendees = NULL, *a;
-	gboolean have = FALSE;
-	gchar *res = NULL;
-	gint i;
-
 	g_return_val_if_fail (E_IS_CAL_MODEL (model), NULL);
 
-	registry = e_cal_model_get_registry (model);
-
-	if (!comp || !e_cal_component_has_attendees (comp) ||
-	    !itip_organizer_is_user_ex (registry, comp, cal_client, TRUE))
-		return NULL;
-
-	attendees = e_cal_component_get_attendees (comp);
-
-	for (a = attendees; a; a = a->next) {
-		ECalComponentAttendee *att = a->data;
-
-		if (att && e_cal_component_attendee_get_cutype (att) == I_CAL_CUTYPE_INDIVIDUAL &&
-		    (e_cal_component_attendee_get_role (att) == I_CAL_ROLE_CHAIR ||
-		     e_cal_component_attendee_get_role (att) == I_CAL_ROLE_REQPARTICIPANT ||
-		     e_cal_component_attendee_get_role (att) == I_CAL_ROLE_OPTPARTICIPANT)) {
-			have = TRUE;
-
-			for (i = 0; values[i].count != -1; i++) {
-				if (e_cal_component_attendee_get_partstat (att) == values[i].status || values[i].status == I_CAL_PARTSTAT_NONE) {
-					values[i].count++;
-					break;
-				}
-			}
-		}
-	}
-
-	if (have) {
-		GString *str = g_string_new ("");
-
-		for (i = 0; values[i].count != -1; i++) {
-			if (values[i].count > 0) {
-				if (str->str && *str->str)
-					g_string_append (str, "   ");
-
-				g_string_append_printf (str, "%s: %d", _(values[i].caption), values[i].count);
-			}
-		}
-
-		g_string_prepend (str, ": ");
-
-		/* To Translators: 'Status' here means the state of the attendees, the resulting string will be in a form:
-		 * Status: Accepted: X   Declined: Y   ... */
-		g_string_prepend (str, _("Status"));
-
-		res = g_string_free (str, FALSE);
-	}
-
-	g_slist_free_full (attendees, e_cal_component_attendee_free);
-
-	return res;
+	return cal_comp_util_dup_attendees_status_info (comp, cal_client, e_cal_model_get_registry (model));
 }
 
 /**
@@ -4364,10 +4292,20 @@ e_cal_model_util_get_datetime_value (ECalModel *model,
 	g_return_val_if_fail (get_time_func != NULL, NULL);
 
 	prop = i_cal_component_get_first_property (comp_data->icalcomp, kind);
-	if (!prop)
-		return NULL;
-
-	tt = get_time_func (prop);
+	if (!prop) {
+		if (kind == I_CAL_DTEND_PROPERTY &&
+		    e_cal_util_component_has_property (comp_data->icalcomp, I_CAL_DURATION_PROPERTY) &&
+		    e_cal_util_component_has_property (comp_data->icalcomp, I_CAL_DTSTART_PROPERTY)) {
+			/* Get the TZID from the DTSTART */
+			prop = i_cal_component_get_first_property (comp_data->icalcomp, I_CAL_DTSTART_PROPERTY);
+			/* The libical calculates the DTEND from the DTSTART+DURATION */
+			tt = i_cal_component_get_dtend (comp_data->icalcomp);
+		} else {
+			return NULL;
+		}
+	} else {
+		tt = get_time_func (prop);
+	}
 
 	if (!tt || !i_cal_time_is_valid_time (tt) || i_cal_time_is_null_time (tt)) {
 		g_clear_object (&prop);
@@ -4385,10 +4323,12 @@ e_cal_model_util_get_datetime_value (ECalModel *model,
 		if (!tzid || !*tzid ||
 		    !e_cal_client_get_timezone_sync (comp_data->client, tzid, &zone, NULL, NULL))
 			zone = NULL;
+
+		if (!zone && i_cal_time_is_utc (tt))
+			zone = i_cal_timezone_get_utc_timezone ();
 	}
 
 	if (e_cal_data_model_get_expand_recurrences (model->priv->data_model)) {
-		gboolean is_date = i_cal_time_is_date (tt);
 		time_t instance_tt = (time_t) 0;
 
 		if (kind == I_CAL_DTSTART_PROPERTY)

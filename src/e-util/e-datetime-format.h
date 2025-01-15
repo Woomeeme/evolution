@@ -38,6 +38,9 @@ typedef enum {
 	DTFormatKindShortDate
 } DTFormatKind;
 
+gchar *		e_datetime_format_dup_config_filename
+						(void);
+void		e_datetime_format_free_memory	(void);
 void		e_datetime_format_add_setup_widget
 						(GtkWidget *table,
 						 gint row,
@@ -68,6 +71,9 @@ void		e_datetime_format_format_tm_inline
 						 gint buffer_size);
 gboolean	e_datetime_format_includes_day_name
 						(const gchar *component,
+						 const gchar *part,
+						 DTFormatKind kind);
+const gchar *	e_datetime_format_get_format	(const gchar *component,
 						 const gchar *part,
 						 DTFormatKind kind);
 

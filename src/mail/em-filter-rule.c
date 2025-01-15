@@ -47,7 +47,7 @@ static gint xml_decode (EFilterRule *fr, xmlNodePtr, ERuleContext *rc);
 static void rule_copy (EFilterRule *dest, EFilterRule *src);
 static GtkWidget *get_widget (EFilterRule *fr, ERuleContext *rc);
 
-G_DEFINE_TYPE (EMFilterRule, em_filter_rule, E_TYPE_FILTER_RULE)
+G_DEFINE_TYPE_WITH_PRIVATE (EMFilterRule, em_filter_rule, E_TYPE_FILTER_RULE)
 
 static void
 em_filter_rule_build_code (EFilterRule *rule,
@@ -94,8 +94,6 @@ em_filter_rule_class_init (EMFilterRuleClass *class)
 	GObjectClass *object_class;
 	EFilterRuleClass *filter_rule_class;
 
-	g_type_class_add_private (class, sizeof (EMFilterRulePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->finalize = em_filter_rule_finalize;
 
@@ -112,7 +110,7 @@ em_filter_rule_class_init (EMFilterRuleClass *class)
 static void
 em_filter_rule_init (EMFilterRule *ff)
 {
-	ff->priv = G_TYPE_INSTANCE_GET_PRIVATE (ff, EM_TYPE_FILTER_RULE, EMFilterRulePrivate);
+	ff->priv = em_filter_rule_get_instance_private (ff);
 }
 
 /**
@@ -370,7 +368,7 @@ part_combobox_changed (GtkComboBox *combobox,
 	}
 	g_return_if_fail (i == index);
 
-	/* dont update if we haven't changed */
+	/* don't update if we haven't changed */
 	if (!strcmp (part->title, data->part->title))
 		return;
 
@@ -486,6 +484,7 @@ event_box_drag_begin (GtkWidget *widget,
 	cairo_surface_set_device_offset (surface, 0, 0);
 
 	gtk_drag_set_icon_surface (context, surface);
+	cairo_surface_destroy (surface);
 }
 
 static gboolean
@@ -735,6 +734,25 @@ do_grab_focus_cb (GtkWidget *widget,
 	}
 }
 
+static gboolean
+scroll_to_new_part_idle_cb (gpointer user_data)
+{
+	GtkScrolledWindow *scrolled_window = user_data;
+	GtkAdjustment *adjustment;
+
+	adjustment = gtk_scrolled_window_get_vadjustment (scrolled_window);
+	if (adjustment) {
+		gdouble upper;
+
+		upper = gtk_adjustment_get_upper (adjustment);
+		gtk_adjustment_set_value (adjustment, upper);
+	}
+
+	g_object_unref (scrolled_window);
+
+	return G_SOURCE_REMOVE;
+}
+
 static void
 more_parts (GtkWidget *button,
             struct _rule_data *data)
@@ -763,19 +781,11 @@ more_parts (GtkWidget *button,
 		/* also scroll down to see new part */
 		w = (GtkWidget *) g_object_get_data (G_OBJECT (button), "scrolled-window");
 		if (w) {
-			GtkAdjustment *adjustment;
-
-			adjustment = gtk_scrolled_window_get_vadjustment (
-				GTK_SCROLLED_WINDOW (w));
-
-			if (adjustment) {
-				gdouble upper;
-
-				upper = gtk_adjustment_get_upper (adjustment);
-				gtk_adjustment_set_value (adjustment, upper);
-			}
-
 			e_util_ensure_scrolled_window_height (GTK_SCROLLED_WINDOW (w));
+
+			/* let the scrolled window some time to recalculate size of its
+			   content and propagate it into the vertical adjustment */
+			g_idle_add (scroll_to_new_part_idle_cb, g_object_ref (w));
 		}
 	}
 }
@@ -886,6 +896,10 @@ filter_rule_fill_account_combo (GtkComboBox *source_combo,
 
 		if (g_strcmp0 (uid, E_MAIL_SESSION_LOCAL_UID) == 0 ||
 		    g_strcmp0 (uid, E_MAIL_SESSION_VFOLDER_UID) == 0)
+			continue;
+
+		if (is_incoming && CAMEL_IS_STORE (service) &&
+		    (camel_store_get_flags (CAMEL_STORE (service)) & CAMEL_STORE_IS_BUILTIN) != 0)
 			continue;
 
 		if ((is_incoming && CAMEL_IS_STORE (service)) ||

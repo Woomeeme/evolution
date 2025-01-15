@@ -45,14 +45,17 @@ struct _ECompEditorTaskPrivate {
 	ECompEditorPropertyPart *completed_date;
 	ECompEditorPropertyPart *percentcomplete;
 	ECompEditorPropertyPart *status;
+	ECompEditorPropertyPart *estimated_duration;
 	ECompEditorPropertyPart *timezone;
 	ECompEditorPropertyPart *description;
 
 	gpointer in_the_past_alert;
 	gpointer insensitive_info_alert;
+	gboolean dtstart_is_unset;
+	gboolean due_is_unset;
 };
 
-G_DEFINE_TYPE (ECompEditorTask, e_comp_editor_task, E_TYPE_COMP_EDITOR)
+G_DEFINE_TYPE_WITH_PRIVATE (ECompEditorTask, e_comp_editor_task, E_TYPE_COMP_EDITOR)
 
 static ICalTimezone *
 ece_task_get_timezone_from_property (ECompEditor *comp_editor,
@@ -219,6 +222,7 @@ ece_task_notify_target_client_cb (GObject *object,
 	gboolean was_allday;
 	gboolean can_recur;
 	gboolean can_reminders;
+	gboolean can_estimated_duration;
 
 	g_return_if_fail (E_IS_COMP_EDITOR_TASK (object));
 
@@ -254,6 +258,9 @@ ece_task_notify_target_client_cb (GObject *object,
 
 	can_recur = !cal_client || e_client_check_capability (E_CLIENT (cal_client), E_CAL_STATIC_CAPABILITY_TASK_CAN_RECUR);
 	gtk_widget_set_visible (GTK_WIDGET (task_editor->priv->recurrence_page), can_recur);
+
+	can_estimated_duration = !cal_client || e_client_check_capability (E_CLIENT (cal_client), E_CAL_STATIC_CAPABILITY_TASK_ESTIMATED_DURATION);
+	e_comp_editor_property_part_set_visible (task_editor->priv->estimated_duration, can_estimated_duration);
 }
 
 static void
@@ -313,9 +320,13 @@ ece_task_dtstart_changed_cb (EDateEdit *date_edit,
 			     ECompEditorTask *task_editor)
 {
 	ECompEditor *comp_editor;
+	gboolean was_unset;
 
 	g_return_if_fail (E_IS_DATE_EDIT (date_edit));
 	g_return_if_fail (E_IS_COMP_EDITOR_TASK (task_editor));
+
+	was_unset = task_editor->priv->dtstart_is_unset;
+	task_editor->priv->dtstart_is_unset = e_date_edit_get_time (date_edit) == (time_t) -1;
 
 	comp_editor = E_COMP_EDITOR (task_editor);
 
@@ -328,6 +339,16 @@ ece_task_dtstart_changed_cb (EDateEdit *date_edit,
 		task_editor->priv->dtstart, task_editor->priv->due_date,
 		TRUE);
 
+	/* When setting DTSTART for the first time, derive the type from the DUE,
+	   otherwise the DUE has changed the type to the DATE only. */
+	if (was_unset) {
+		e_comp_editor_ensure_same_value_type (E_COMP_EDITOR (task_editor),
+			task_editor->priv->due_date, task_editor->priv->dtstart);
+	} else {
+		e_comp_editor_ensure_same_value_type (E_COMP_EDITOR (task_editor),
+			task_editor->priv->dtstart, task_editor->priv->due_date);
+	}
+
 	e_comp_editor_set_updating (comp_editor, FALSE);
 
 	ece_task_check_dates_in_the_past (task_editor);
@@ -338,9 +359,13 @@ ece_task_due_date_changed_cb (EDateEdit *date_edit,
 			      ECompEditorTask *task_editor)
 {
 	ECompEditor *comp_editor;
+	gboolean was_unset;
 
 	g_return_if_fail (E_IS_DATE_EDIT (date_edit));
 	g_return_if_fail (E_IS_COMP_EDITOR_TASK (task_editor));
+
+	was_unset = task_editor->priv->due_is_unset;
+	task_editor->priv->due_is_unset = e_date_edit_get_time (date_edit) == (time_t) -1;
 
 	comp_editor = E_COMP_EDITOR (task_editor);
 
@@ -352,6 +377,16 @@ ece_task_due_date_changed_cb (EDateEdit *date_edit,
 	e_comp_editor_ensure_start_before_end (E_COMP_EDITOR (task_editor),
 		task_editor->priv->dtstart, task_editor->priv->due_date,
 		FALSE);
+
+	/* When setting DUE for the first time, derive the type from the DTSTART,
+	   otherwise the DTSTART has changed the type to the DATE only. */
+	if (was_unset) {
+		e_comp_editor_ensure_same_value_type (E_COMP_EDITOR (task_editor),
+			task_editor->priv->dtstart, task_editor->priv->due_date);
+	} else {
+		e_comp_editor_ensure_same_value_type (E_COMP_EDITOR (task_editor),
+			task_editor->priv->due_date, task_editor->priv->dtstart);
+	}
 
 	e_comp_editor_set_updating (comp_editor, FALSE);
 
@@ -586,25 +621,6 @@ ece_task_fill_component (ECompEditor *comp_editor,
 		return FALSE;
 	}
 
-	if (e_cal_util_component_has_recurrences (component)) {
-		ICalTime *dtstart;
-
-		dtstart = e_comp_editor_property_part_datetime_get_value (E_COMP_EDITOR_PROPERTY_PART_DATETIME (task_editor->priv->dtstart));
-
-		if (!dtstart || i_cal_time_is_null_time (dtstart) || !i_cal_time_is_valid_time (dtstart)) {
-			e_comp_editor_set_validation_error (comp_editor,
-				task_editor->priv->page_general,
-				e_comp_editor_property_part_get_edit_widget (task_editor->priv->dtstart),
-				_("Start date is required for recurring tasks"));
-
-			g_clear_object (&dtstart);
-
-			return FALSE;
-		}
-
-		g_clear_object (&dtstart);
-	}
-
 	if (!e_comp_editor_property_part_datetime_check_validity (
 		E_COMP_EDITOR_PROPERTY_PART_DATETIME (task_editor->priv->due_date), NULL, NULL)) {
 
@@ -642,11 +658,62 @@ ece_task_fill_component (ECompEditor *comp_editor,
 
 	g_clear_object (&itt);
 
+	itt = e_comp_editor_property_part_datetime_get_value (E_COMP_EDITOR_PROPERTY_PART_DATETIME (task_editor->priv->dtstart));
+
+	if (itt && i_cal_time_is_valid_time (itt) && !i_cal_time_is_null_time (itt)) {
+		ICalTime *due;
+
+		due = e_comp_editor_property_part_datetime_get_value (E_COMP_EDITOR_PROPERTY_PART_DATETIME (task_editor->priv->due_date));
+
+		if (due && i_cal_time_is_valid_time (due) && !i_cal_time_is_null_time (due)) {
+			gboolean same;
+
+			if (i_cal_time_is_date (itt))
+				same = i_cal_time_compare_date_only (itt, due) == 0;
+			else
+				same = i_cal_time_compare (itt, due) == 0;
+
+			if (same) {
+				e_comp_editor_set_validation_error (comp_editor,
+					task_editor->priv->page_general,
+					e_comp_editor_property_part_get_edit_widget (task_editor->priv->due_date),
+					_("Due date cannot be the same as the Start date"));
+
+				g_clear_object (&itt);
+				g_clear_object (&due);
+
+				return FALSE;
+			}
+		}
+
+		g_clear_object (&due);
+	}
+
+	g_clear_object (&itt);
+
 	if (!E_COMP_EDITOR_CLASS (e_comp_editor_task_parent_class)->fill_component (comp_editor, component))
 		return FALSE;
 
 	if (e_cal_util_component_has_recurrences (component)) {
 		ECalClient *cal_client;
+		ICalTime *dtstart;
+
+		/* Check this only after the recurrence page updates the component,
+		   like when the component is not recurring anymore. */
+		dtstart = e_comp_editor_property_part_datetime_get_value (E_COMP_EDITOR_PROPERTY_PART_DATETIME (task_editor->priv->dtstart));
+
+		if (!dtstart || i_cal_time_is_null_time (dtstart) || !i_cal_time_is_valid_time (dtstart)) {
+			e_comp_editor_set_validation_error (comp_editor,
+				task_editor->priv->page_general,
+				e_comp_editor_property_part_get_edit_widget (task_editor->priv->dtstart),
+				_("Start date is required for recurring tasks"));
+
+			g_clear_object (&dtstart);
+
+			return FALSE;
+		}
+
+		g_clear_object (&dtstart);
 
 		cal_client = e_comp_editor_get_source_client (comp_editor);
 		if (!cal_client)
@@ -664,6 +731,44 @@ ece_task_fill_component (ECompEditor *comp_editor,
 	}
 
 	return TRUE;
+}
+
+static void
+ece_task_all_day_notify_active_cb (GObject *object,
+				   GParamSpec *param,
+				   gpointer user_data)
+{
+	ECompEditorTask *task_editor = user_data;
+	gboolean active = FALSE, visible = FALSE;
+
+	g_object_get (object,
+		"active", &active,
+		"visible", &visible,
+		NULL);
+
+	if (!active && visible) {
+		EDateEdit *dtstart_date_edit;
+
+		dtstart_date_edit = E_DATE_EDIT (e_comp_editor_property_part_get_edit_widget (task_editor->priv->dtstart));
+
+		if (e_date_edit_get_time (dtstart_date_edit) != (time_t) -1) {
+			EDateEdit *due_date_edit;
+
+			due_date_edit = E_DATE_EDIT (e_comp_editor_property_part_get_edit_widget (task_editor->priv->due_date));
+
+			if (e_date_edit_get_time (due_date_edit) != (time_t) -1) {
+				gint hour, minute;
+
+				if (e_date_edit_get_time_of_day (dtstart_date_edit, &hour, &minute) !=
+				    e_date_edit_get_time_of_day (due_date_edit, &hour, &minute)) {
+					if (e_date_edit_get_time_of_day (dtstart_date_edit, &hour, &minute))
+						e_date_edit_set_time_of_day (due_date_edit, hour, minute);
+					else
+						e_date_edit_set_time_of_day (due_date_edit, -1, -1);
+				}
+			}
+		}
+	}
 }
 
 static void
@@ -784,6 +889,9 @@ ece_task_setup_ui (ECompEditorTask *task_editor)
 		action, "active",
 		edit_widget, "show-time",
 		G_BINDING_INVERT_BOOLEAN);
+
+	e_signal_connect_notify (action, "notify::active",
+		G_CALLBACK (ece_task_all_day_notify_active_cb), task_editor);
 }
 
 static void
@@ -813,7 +921,7 @@ e_comp_editor_task_constructed (GObject *object)
 	part = e_comp_editor_property_part_location_new (focus_tracker);
 	e_comp_editor_page_add_property_part (page, part, 0, 3, 4, 1);
 
-	part = e_comp_editor_property_part_dtstart_new (C_("ECompEditor", "Sta_rt date:"), TRUE, TRUE);
+	part = e_comp_editor_property_part_dtstart_new (C_("ECompEditor", "Sta_rt date:"), TRUE, TRUE, FALSE);
 	e_comp_editor_page_add_property_part (page, part, 0, 4, 2, 1);
 	task_editor->priv->dtstart = part;
 
@@ -860,16 +968,20 @@ e_comp_editor_task_constructed (GObject *object)
 	part = e_comp_editor_property_part_classification_new ();
 	e_comp_editor_page_add_property_part (page, part, 2, 7, 2, 1);
 
-	part = e_comp_editor_property_part_timezone_new ();
+	part = e_comp_editor_property_part_estimated_duration_new ();
 	e_comp_editor_page_add_property_part (page, part, 0, 8, 4, 1);
+	task_editor->priv->estimated_duration = part;
+
+	part = e_comp_editor_property_part_timezone_new ();
+	e_comp_editor_page_add_property_part (page, part, 0, 9, 4, 1);
 	task_editor->priv->timezone = part;
 
 	part = e_comp_editor_property_part_categories_new (focus_tracker);
-	e_comp_editor_page_add_property_part (page, part, 0, 9, 4, 1);
+	e_comp_editor_page_add_property_part (page, part, 0, 10, 4, 1);
 	task_editor->priv->categories = part;
 
 	part = e_comp_editor_property_part_description_new (focus_tracker);
-	e_comp_editor_page_add_property_part (page, part, 0, 10, 4, 1);
+	e_comp_editor_page_add_property_part (page, part, 0, 11, 4, 1);
 	task_editor->priv->description = part;
 
 	e_comp_editor_add_page (comp_editor, C_("ECompEditorPage", "General"), page);
@@ -920,7 +1032,7 @@ e_comp_editor_task_constructed (GObject *object)
 static void
 e_comp_editor_task_init (ECompEditorTask *task_editor)
 {
-	task_editor->priv = G_TYPE_INSTANCE_GET_PRIVATE (task_editor, E_TYPE_COMP_EDITOR_TASK, ECompEditorTaskPrivate);
+	task_editor->priv = e_comp_editor_task_get_instance_private (task_editor);
 }
 
 static void
@@ -928,8 +1040,6 @@ e_comp_editor_task_class_init (ECompEditorTaskClass *klass)
 {
 	GObjectClass *object_class;
 	ECompEditorClass *comp_editor_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorTaskPrivate));
 
 	object_class = G_OBJECT_CLASS (klass);
 	object_class->constructed = e_comp_editor_task_constructed;

@@ -97,7 +97,7 @@ get_editor_content_hash_ready_cb (GObject *source_object,
 	GError *error = NULL;
 
 	g_assert_nonnull (gcd);
-	g_assert (E_IS_CONTENT_EDITOR (source_object));
+	g_assert_true (E_IS_CONTENT_EDITOR (source_object));
 
 	gcd->content_hash = e_content_editor_get_content_finish (E_CONTENT_EDITOR (source_object), result, &error);
 
@@ -114,14 +114,14 @@ test_utils_get_editor_content_hash_sync (EContentEditor *cnt_editor,
 {
 	GetContentData gcd;
 
-	g_assert (E_IS_CONTENT_EDITOR (cnt_editor));
+	g_assert_true (E_IS_CONTENT_EDITOR (cnt_editor));
 
 	gcd.content_hash = NULL;
 	gcd.async_data = test_utils_async_call_prepare ();
 
 	e_content_editor_get_content (cnt_editor, flags, "test-domain", NULL, get_editor_content_hash_ready_cb, &gcd);
 
-	g_assert (test_utils_async_call_wait (gcd.async_data, MAX (event_processing_delay_ms / 25, 1) + 1));
+	g_assert_true (test_utils_async_call_wait (gcd.async_data, MAX (event_processing_delay_ms / 25, 1) + 1));
 	g_assert_nonnull (gcd.content_hash);
 
 	return gcd.content_hash;
@@ -219,10 +219,14 @@ undo_content_test (TestFixture *fixture,
 }
 
 static gboolean
-test_utils_web_process_crashed_cb (WebKitWebView *web_view,
-				   gpointer user_data)
+test_utils_web_process_terminated_cb (WebKitWebView *web_view,
+				      WebKitWebProcessTerminationReason reason,
+				      gpointer user_data)
 {
-	g_warning ("%s:", G_STRFUNC);
+	g_warning ("%s: reason: %s", G_STRFUNC,
+		reason == WEBKIT_WEB_PROCESS_CRASHED ? "crashed" :
+		reason == WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT ? "exceeded memory limit" :
+		reason == WEBKIT_WEB_PROCESS_TERMINATED_BY_API ? "terminated by API" : "unknown reason");
 
 	return FALSE;
 }
@@ -292,23 +296,7 @@ test_utils_html_editor_created_cb (GObject *source_object,
 
 	fixture->focus_tracker = e_focus_tracker_new (GTK_WINDOW (fixture->window));
 
-	e_focus_tracker_set_cut_clipboard_action (fixture->focus_tracker,
-		e_html_editor_get_action (fixture->editor, "cut"));
-
-	e_focus_tracker_set_copy_clipboard_action (fixture->focus_tracker,
-		e_html_editor_get_action (fixture->editor, "copy"));
-
-	e_focus_tracker_set_paste_clipboard_action (fixture->focus_tracker,
-		e_html_editor_get_action (fixture->editor, "paste"));
-
-	e_focus_tracker_set_select_all_action (fixture->focus_tracker,
-		e_html_editor_get_action (fixture->editor, "select-all"));
-
-	e_focus_tracker_set_undo_action (fixture->focus_tracker,
-		e_html_editor_get_action (fixture->editor, "undo"));
-
-	e_focus_tracker_set_redo_action (fixture->focus_tracker,
-		e_html_editor_get_action (fixture->editor, "redo"));
+	e_html_editor_connect_focus_tracker (fixture->editor, fixture->focus_tracker);
 
 	/* Make sure this is off */
 	test_utils_fixture_change_setting_boolean (fixture,
@@ -323,8 +311,8 @@ test_utils_html_editor_created_cb (GObject *source_object,
 		"height-request", 150,
 		NULL);
 
-	g_signal_connect (cnt_editor, "web-process-crashed",
-		G_CALLBACK (test_utils_web_process_crashed_cb), NULL);
+	g_signal_connect (cnt_editor, "web-process-terminated",
+		G_CALLBACK (test_utils_web_process_terminated_cb), NULL);
 
 	if (WEBKIT_IS_WEB_VIEW (cnt_editor)) {
 		WebKitSettings *web_settings;
@@ -717,7 +705,7 @@ test_html_equal_done_cb (GObject *source_object,
 
 	js_value = webkit_javascript_result_get_js_value (js_result);
 	g_assert_nonnull (js_value);
-	g_assert (jsc_value_is_boolean (js_value));
+	g_assert_true (jsc_value_is_boolean (js_value));
 
 	hed->equal = jsc_value_to_boolean (js_value);
 

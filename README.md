@@ -4,20 +4,13 @@
 **Evolution** is the integrated mail, calendar and address book suite from
 the Evolution Team.
 
-See [the Evolution Gnome Wiki page][gnome-wiki] for more information.
+See [the Evolution GNOME Wiki page][gnome-wiki] for more information.
 
-If you are using Evolution, you may wish to subscribe to the Evolution
-users mailing list.  If you are interested in contributing to
-development on it, you should certainly subscribe to [the Evolution
-Hackers mailing list][mailing-list].  Visit
-there to subscribe or view archives of the Evolution mailing lists.
+If you are using Evolution, you may wish to subscribe to [the Evolution
+users mailing list][mailing-list]. Visit there to subscribe or view archives
+of the Evolution mailing list.
 
-If you are planning to work on any part of Evolution, please send mail
-to the mailing list first, to avoid duplicated effort (and to make
-sure that you aren't basing your work on interfaces that are expected
-to change).
-
-There is also an [#evolution] IRC channel.
+There is also a [#gnome-evolution] IRC channel on [Libera.Chat].
 
 Help for Evolution is available in the user manual (select "Help" from
 the menu after running the application), at the
@@ -27,10 +20,11 @@ the menu after running the application), at the
 The rest of this file is dedicated to building Evolution.
 
 [icon]: https://raw.github.com/gnome-design-team/gnome-icons/master/apps/hicolor/48x48/apps/evolution.png "Evolution app icon"
-[gnome-wiki]: https://wiki.gnome.org/Apps/Evolution
-[mailing-list]: https://mail.gnome.org/mailman/listinfo
-[#evolution]: irc://irc.gnome.org/evolution
-[gnome-help]: https://help.gnome.org/users/evolution/stable/
+[gnome-wiki]: https://gitlab.gnome.org/GNOME/evolution/-/wikis/home
+[mailing-list]: https://lists.osuosl.org/mailman/listinfo/evolution-users
+[#gnome-evolution]: ircs://irc.libera.chat:6697/gnome-evolution
+[Libera.Chat]: https://libera.chat/
+[gnome-help]: https://gnome.pages.gitlab.gnome.org/evolution/help/
 
 DEPENDENCIES
 ------------
@@ -49,8 +43,8 @@ Additional dependencies, besides the stock GNOME libraries (the
 dependencies should be compiled in the order they are listed here):
 
 * [evolution-data-server of the same version as the Evolution is][eds]
-* [libsoup 2.42 or later][libsoup]
-* [WebKitGTK+ 2.28.0][webkitgtk]
+* [libsoup 3.0 or later][libsoup]
+* [WebKitGTK 2.34.0][webkitgtk]
 * [Mozilla NSPR/NSS libraries][mozilla]
   These are needed if you want to compile Evolution with SSL and S/MIME
   support. Many distributions ship these as Mozilla development packages.
@@ -155,4 +149,4 @@ ONLINE BUILD MANUAL
 
 An [online build manual][Build Manual] is also available.
 
-[Build Manual]: https://wiki.gnome.org/Apps/Evolution/Building
+[Build Manual]: https://gitlab.gnome.org/GNOME/evolution/-/wikis/Building

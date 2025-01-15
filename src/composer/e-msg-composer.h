@@ -145,6 +145,9 @@ void		e_msg_composer_set_source_headers
 						 CamelMessageFlags flags);
 void		e_msg_composer_attach		(EMsgComposer *composer,
 						 CamelMimePart *mime_part);
+void		e_msg_composer_set_alternative_body
+						(EMsgComposer *composer,
+						 CamelMimePart *mime_part);
 void		e_msg_composer_get_message	(EMsgComposer *composer,
 						 gint io_priority,
 						 GCancellable *cancellable,
@@ -191,7 +194,8 @@ void		e_msg_composer_add_attachments_from_part_list
 						(EMsgComposer *composer,
 						 EMailPartList *part_list,
 						 gboolean just_inlines);
-
+void		e_msg_composer_check_inline_attachments
+						(EMsgComposer *composer);
 
 void		e_msg_composer_request_close	(EMsgComposer *composer);
 gboolean	e_msg_composer_can_close	(EMsgComposer *composer,
@@ -221,6 +225,11 @@ gboolean	e_msg_composer_get_is_reply_or_forward
 void		e_msg_composer_set_is_reply_or_forward
 						(EMsgComposer *composer,
 						 gboolean is_reply_or_forward);
+void		e_msg_composer_check_autocrypt	(EMsgComposer *composer,
+						 CamelMimeMessage *original_message);
+void		e_msg_composer_set_is_imip	(EMsgComposer *composer,
+						 gboolean is_imip);
+gboolean	e_msg_composer_get_is_imip	(EMsgComposer *composer);
 
 G_END_DECLS
 

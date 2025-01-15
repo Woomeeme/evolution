@@ -29,21 +29,19 @@
 #include "mail/em-composer-utils.h"
 #include "mail/em-utils.h"
 
-#define E_MAIL_ATTACHMENT_HANDLER_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_ATTACHMENT_HANDLER, EMailAttachmentHandlerPrivate))
-
 struct _EMailAttachmentHandlerPrivate {
 	EMailBackend *backend;
 };
 
-static gpointer parent_class;
-static GType mail_attachment_handler_type;
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (EMailAttachmentHandler, e_mail_attachment_handler, E_TYPE_ATTACHMENT_HANDLER, 0,
+	G_ADD_PRIVATE_DYNAMIC (EMailAttachmentHandler))
 
 static const gchar *ui =
 "<ui>"
 "  <popup name='context'>"
 "    <placeholder name='custom-actions'>"
+"      <menuitem action='mail-import-pgp-key'/>"
+"      <separator/>"
 "      <menuitem action='mail-message-edit'/>"
 "      <separator/>"
 "      <menuitem action='mail-reply-sender'/>"
@@ -216,9 +214,9 @@ mail_attachment_handler_composer_created_cb (GObject *source_object,
 
 			em_utils_reply_to_message (composer, ccd->message, NULL, NULL, ccd->reply_type, style, NULL, NULL, E_MAIL_REPLY_FLAG_NONE);
 		} else if (ccd->is_forward) {
-			em_utils_forward_message (composer, ccd->message, ccd->forward_style, ccd->folder, NULL);
+			em_utils_forward_message (composer, ccd->message, ccd->forward_style, ccd->folder, NULL, FALSE);
 		} else {
-			em_utils_edit_message (composer, ccd->folder, ccd->message, NULL, TRUE);
+			em_utils_edit_message (composer, ccd->folder, ccd->message, NULL, TRUE, FALSE);
 		}
 	}
 
@@ -229,19 +227,17 @@ static void
 mail_attachment_handler_forward_with_style (EAttachmentHandler *handler,
 					    EMailForwardStyle style)
 {
-	EMailAttachmentHandlerPrivate *priv;
+	EMailAttachmentHandler *self = E_MAIL_ATTACHMENT_HANDLER (handler);
 	CamelMimeMessage *message;
 	CamelFolder *folder;
 	CreateComposerData *ccd;
 	EShell *shell;
 
-	priv = E_MAIL_ATTACHMENT_HANDLER_GET_PRIVATE (handler);
-
 	message = mail_attachment_handler_get_selected_message (handler);
 	g_return_if_fail (message != NULL);
 
 	folder = mail_attachment_handler_guess_folder_ref (handler);
-	shell = e_shell_backend_get_shell (E_SHELL_BACKEND (priv->backend));
+	shell = e_shell_backend_get_shell (E_SHELL_BACKEND (self->priv->backend));
 
 	ccd = g_slice_new0 (CreateComposerData);
 	ccd->message = message;
@@ -270,18 +266,16 @@ static void
 mail_attachment_handler_reply (EAttachmentHandler *handler,
                                EMailReplyType reply_type)
 {
-	EMailAttachmentHandlerPrivate *priv;
+	EMailAttachmentHandler *self = E_MAIL_ATTACHMENT_HANDLER (handler);
 	CamelMimeMessage *message;
 	CreateComposerData *ccd;
 	EShellBackend *shell_backend;
 	EShell *shell;
 
-	priv = E_MAIL_ATTACHMENT_HANDLER_GET_PRIVATE (handler);
-
 	message = mail_attachment_handler_get_selected_message (handler);
 	g_return_if_fail (message != NULL);
 
-	shell_backend = E_SHELL_BACKEND (priv->backend);
+	shell_backend = E_SHELL_BACKEND (self->priv->backend);
 	shell = e_shell_backend_get_shell (shell_backend);
 
 	ccd = g_slice_new0 (CreateComposerData);
@@ -317,18 +311,16 @@ static void
 mail_attachment_handler_message_edit (GtkAction *action,
 				      EAttachmentHandler *handler)
 {
-	EMailAttachmentHandlerPrivate *priv;
+	EMailAttachmentHandler *self = E_MAIL_ATTACHMENT_HANDLER (handler);
 	CamelMimeMessage *message;
 	CamelFolder *folder;
 	CreateComposerData *ccd;
 	EShell *shell;
 
-	priv = E_MAIL_ATTACHMENT_HANDLER_GET_PRIVATE (handler);
-
 	message = mail_attachment_handler_get_selected_message (handler);
 	g_return_if_fail (message != NULL);
 
-	shell = e_shell_backend_get_shell (E_SHELL_BACKEND (priv->backend));
+	shell = e_shell_backend_get_shell (E_SHELL_BACKEND (self->priv->backend));
 	folder = mail_attachment_handler_guess_folder_ref (handler);
 
 	ccd = g_slice_new0 (CreateComposerData);
@@ -362,17 +354,15 @@ static void
 mail_attachment_handler_redirect (GtkAction *action,
 				  EAttachmentHandler *handler)
 {
-	EMailAttachmentHandlerPrivate *priv;
+	EMailAttachmentHandler *self = E_MAIL_ATTACHMENT_HANDLER (handler);
 	CamelMimeMessage *message;
 	CreateComposerData *ccd;
 	EShell *shell;
 
-	priv = E_MAIL_ATTACHMENT_HANDLER_GET_PRIVATE (handler);
-
 	message = mail_attachment_handler_get_selected_message (handler);
 	g_return_if_fail (message != NULL);
 
-	shell = e_shell_backend_get_shell (E_SHELL_BACKEND (priv->backend));
+	shell = e_shell_backend_get_shell (E_SHELL_BACKEND (self->priv->backend));
 
 	ccd = g_slice_new0 (CreateComposerData);
 	ccd->message = message;
@@ -380,6 +370,75 @@ mail_attachment_handler_redirect (GtkAction *action,
 	ccd->is_redirect = TRUE;
 
 	e_msg_composer_new (shell, mail_attachment_handler_composer_created_cb, ccd);
+}
+
+static void
+action_mail_import_pgp_key_cb (GtkAction *action,
+			       EAttachmentHandler *handler)
+{
+	EAttachmentView *view;
+	EAttachment *attachment;
+	EAttachmentStore *store;
+	CamelMimePart *part;
+	GtkTreePath *path;
+	GtkTreeIter iter;
+	GList *list;
+	gpointer parent_window;
+
+	view = e_attachment_handler_get_view (handler);
+	parent_window = gtk_widget_get_toplevel (GTK_WIDGET (view));
+	parent_window = gtk_widget_is_toplevel (parent_window) ? parent_window : NULL;
+
+	list = e_attachment_view_get_selected_paths (view);
+	g_return_if_fail (g_list_length (list) == 1);
+	path = list->data;
+
+	store = e_attachment_view_get_store (view);
+	gtk_tree_model_get_iter (GTK_TREE_MODEL (store), &iter, path);
+	gtk_tree_model_get (GTK_TREE_MODEL (store), &iter, E_ATTACHMENT_STORE_COLUMN_ATTACHMENT, &attachment, -1);
+
+	g_list_free_full (list, (GDestroyNotify) gtk_tree_path_free);
+
+	g_return_if_fail (E_IS_ATTACHMENT (attachment));
+
+	part = e_attachment_ref_mime_part (attachment);
+
+	if (part) {
+		CamelMimePart *mime_part;
+		CamelSession *session;
+		CamelStream *stream;
+		GByteArray *buffer;
+		GError *error = NULL;
+
+		session = CAMEL_SESSION (e_mail_backend_get_session (E_MAIL_ATTACHMENT_HANDLER (handler)->priv->backend));
+		mime_part = e_attachment_ref_mime_part (attachment);
+
+		buffer = g_byte_array_new ();
+		stream = camel_stream_mem_new ();
+		camel_stream_mem_set_byte_array (CAMEL_STREAM_MEM (stream), buffer);
+		camel_data_wrapper_decode_to_stream_sync (camel_medium_get_content (CAMEL_MEDIUM (mime_part)), stream, NULL, NULL);
+		g_object_unref (stream);
+
+		if (!em_utils_import_pgp_key (parent_window, session, buffer->data, buffer->len, &error) &&
+		    !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+			GtkWidget *parent, *alert_sink = NULL;
+
+			for (parent = gtk_widget_get_parent (GTK_WIDGET (view)); parent && !alert_sink; parent = gtk_widget_get_parent (parent)) {
+				if (E_IS_ALERT_SINK (parent))
+					alert_sink = parent;
+			}
+
+			if (alert_sink)
+				e_alert_submit (E_ALERT_SINK (alert_sink), "mail:error-import-pgp-key", error ? error->message : _("Unknown error"), NULL);
+			else
+				g_warning ("Failed to import PGP key: %s", error ? error->message : "Unknown error");
+		}
+
+		g_byte_array_unref (buffer);
+		g_clear_error (&error);
+	}
+
+	g_clear_object (&part);
 }
 
 static GtkActionEntry standard_entries[] = {
@@ -453,6 +512,16 @@ static GtkActionEntry standard_entries[] = {
 	  NULL,
 	  N_("Redirect (bounce) the selected message to someone"),
 	  G_CALLBACK (mail_attachment_handler_redirect) }
+};
+
+static GtkActionEntry custom_entries[] = {
+
+	{ "mail-import-pgp-key",
+	  "stock_signature",
+	  N_("Import OpenP_GP key…"),
+	  NULL,
+	  N_("Import Pretty Good Privacy (OpenPGP) key"),
+	  G_CALLBACK (action_mail_import_pgp_key_cb) }
 };
 
 static void
@@ -572,7 +641,7 @@ mail_attachment_handler_x_uid_list (EAttachmentView *view,
                                     EAttachmentHandler *handler)
 {
 	static GdkAtom atom = GDK_NONE;
-	EMailAttachmentHandlerPrivate *priv;
+	EMailAttachmentHandler *self = E_MAIL_ATTACHMENT_HANDLER (handler);
 	CamelDataWrapper *wrapper;
 	CamelMultipart *multipart;
 	CamelMimePart *mime_part;
@@ -591,12 +660,11 @@ mail_attachment_handler_x_uid_list (EAttachmentView *view,
 		return;
 
 	store = e_attachment_view_get_store (view);
-	priv = E_MAIL_ATTACHMENT_HANDLER_GET_PRIVATE (handler);
 
 	parent = gtk_widget_get_toplevel (GTK_WIDGET (view));
 	parent = gtk_widget_is_toplevel (parent) ? parent : NULL;
 
-	session = e_mail_backend_get_session (priv->backend);
+	session = e_mail_backend_get_session (self->priv->backend);
 
 	em_utils_selection_uidlist_foreach_sync (selection_data, session,
 		gather_x_uid_list_messages_cb, &messages, NULL, &local_error);
@@ -614,50 +682,73 @@ mail_attachment_handler_x_uid_list (EAttachmentView *view,
 
 		g_object_unref (attachment);
 	} else {
-		gint n_messages = g_slist_length (messages);
+		GSettings *settings;
 
 		messages = g_slist_reverse (messages);
+		settings = e_util_ref_settings ("org.gnome.evolution.mail");
 
-		/* Build a multipart/digest message out of the UIDs. */
-		multipart = camel_multipart_new ();
-		wrapper = CAMEL_DATA_WRAPPER (multipart);
-		camel_data_wrapper_set_mime_type (wrapper, "multipart/digest");
-		camel_multipart_set_boundary (multipart, NULL);
+		if (g_settings_get_boolean (settings, "composer-attach-separate-messages")) {
+			for (link = messages; link; link = g_slist_next (link)) {
+				CamelMimeMessage *message = link->data;
 
-		for (link = messages; link; link = g_slist_next (link)) {
+				mime_part = mail_tool_make_message_attachment (message);
+				/* remove it, no need to have "Forwarded Message - $SUBJECT" there */
+				camel_medium_remove_header (CAMEL_MEDIUM (mime_part), "Content-Description");
+				attachment = e_attachment_new ();
+				e_attachment_set_mime_part (attachment, mime_part);
+				e_attachment_store_add_attachment (store, attachment);
+				e_attachment_load_async (
+					attachment, (GAsyncReadyCallback)
+					call_attachment_load_handle_error, parent ? g_object_ref (parent) : NULL);
+				g_object_unref (attachment);
+				g_object_unref (mime_part);
+			}
+		} else {
+			gint n_messages = g_slist_length (messages);
+
+			/* Build a multipart/digest message out of the UIDs. */
+			multipart = camel_multipart_new ();
+			wrapper = CAMEL_DATA_WRAPPER (multipart);
+			camel_data_wrapper_set_mime_type (wrapper, "multipart/digest");
+			camel_multipart_set_boundary (multipart, NULL);
+
+			for (link = messages; link; link = g_slist_next (link)) {
+				mime_part = camel_mime_part_new ();
+				wrapper = CAMEL_DATA_WRAPPER (link->data);
+				camel_mime_part_set_disposition (mime_part, "inline");
+				camel_medium_set_content (
+					CAMEL_MEDIUM (mime_part), wrapper);
+				camel_mime_part_set_content_type (mime_part, "message/rfc822");
+				camel_multipart_add_part (multipart, mime_part);
+				g_object_unref (mime_part);
+			}
+
 			mime_part = camel_mime_part_new ();
-			wrapper = CAMEL_DATA_WRAPPER (link->data);
-			camel_mime_part_set_disposition (mime_part, "inline");
-			camel_medium_set_content (
-				CAMEL_MEDIUM (mime_part), wrapper);
-			camel_mime_part_set_content_type (mime_part, "message/rfc822");
-			camel_multipart_add_part (multipart, mime_part);
+			wrapper = CAMEL_DATA_WRAPPER (multipart);
+			camel_medium_set_content (CAMEL_MEDIUM (mime_part), wrapper);
+
+			description = g_strdup_printf (
+				ngettext (
+					"%d attached message",
+					"%d attached messages",
+					n_messages),
+				n_messages);
+			camel_mime_part_set_description (mime_part, description);
+			g_free (description);
+
+			attachment = e_attachment_new ();
+			e_attachment_set_mime_part (attachment, mime_part);
+			e_attachment_store_add_attachment (store, attachment);
+			e_attachment_load_async (
+				attachment, (GAsyncReadyCallback)
+				call_attachment_load_handle_error, parent ? g_object_ref (parent) : NULL);
+			g_object_unref (attachment);
+
 			g_object_unref (mime_part);
+			g_object_unref (multipart);
 		}
 
-		mime_part = camel_mime_part_new ();
-		wrapper = CAMEL_DATA_WRAPPER (multipart);
-		camel_medium_set_content (CAMEL_MEDIUM (mime_part), wrapper);
-
-		description = g_strdup_printf (
-			ngettext (
-				"%d attached message",
-				"%d attached messages",
-				n_messages),
-			n_messages);
-		camel_mime_part_set_description (mime_part, description);
-		g_free (description);
-
-		attachment = e_attachment_new ();
-		e_attachment_set_mime_part (attachment, mime_part);
-		e_attachment_store_add_attachment (store, attachment);
-		e_attachment_load_async (
-			attachment, (GAsyncReadyCallback)
-			call_attachment_load_handle_error, parent ? g_object_ref (parent) : NULL);
-		g_object_unref (attachment);
-
-		g_object_unref (mime_part);
-		g_object_unref (multipart);
+		g_clear_object (&settings);
 	}
 
  exit:
@@ -685,7 +776,7 @@ mail_attachment_handler_update_actions (EAttachmentView *view,
 	GtkActionGroup *action_group;
 	GtkAction *action;
 	GList *selected;
-	gboolean visible = FALSE, has_list_post = FALSE;
+	gboolean visible = FALSE, has_list_post = FALSE, can_import_pgp_key = FALSE;
 
 	selected = e_attachment_view_get_selected_attachments (view);
 
@@ -703,6 +794,7 @@ mail_attachment_handler_update_actions (EAttachmentView *view,
 	if (mime_part != NULL) {
 		CamelMedium *medium;
 		CamelDataWrapper *content;
+		gchar *mime_type;
 
 		medium = CAMEL_MEDIUM (mime_part);
 		content = camel_medium_get_content (medium);
@@ -711,6 +803,10 @@ mail_attachment_handler_update_actions (EAttachmentView *view,
 		if (visible)
 			has_list_post = camel_medium_get_header (CAMEL_MEDIUM (content), "List-Post") != NULL;
 
+		mime_type = e_attachment_dup_mime_type (attachment);
+		can_import_pgp_key = mime_type && g_ascii_strcasecmp (mime_type, "application/pgp-keys") == 0;
+
+		g_clear_pointer (&mime_type, g_free);
 		g_object_unref (mime_part);
 	}
 
@@ -721,6 +817,9 @@ exit:
 	action = gtk_action_group_get_action (action_group, "mail-reply-list");
 	gtk_action_set_visible (action, has_list_post);
 
+	action = e_attachment_view_get_action (view, "mail-import-pgp-key");
+	gtk_action_set_visible (action, can_import_pgp_key);
+
 	g_list_foreach (selected, (GFunc) g_object_unref, NULL);
 	g_list_free (selected);
 }
@@ -728,20 +827,18 @@ exit:
 static void
 mail_attachment_handler_dispose (GObject *object)
 {
-	EMailAttachmentHandlerPrivate *priv;
+	EMailAttachmentHandler *self = E_MAIL_ATTACHMENT_HANDLER (object);
 
-	priv = E_MAIL_ATTACHMENT_HANDLER_GET_PRIVATE (object);
-
-	g_clear_object (&priv->backend);
+	g_clear_object (&self->priv->backend);
 
 	/* Chain up to parent's dispose() method. */
-	G_OBJECT_CLASS (parent_class)->dispose (object);
+	G_OBJECT_CLASS (e_mail_attachment_handler_parent_class)->dispose (object);
 }
 
 static void
 mail_attachment_handler_constructed (GObject *object)
 {
-	EMailAttachmentHandlerPrivate *priv;
+	EMailAttachmentHandler *self = E_MAIL_ATTACHMENT_HANDLER (object);
 	EShell *shell;
 	EShellBackend *shell_backend;
 	EAttachmentHandler *handler;
@@ -751,14 +848,13 @@ mail_attachment_handler_constructed (GObject *object)
 	GError *error = NULL;
 
 	handler = E_ATTACHMENT_HANDLER (object);
-	priv = E_MAIL_ATTACHMENT_HANDLER_GET_PRIVATE (object);
 
 	/* Chain up to parent's constructed() method. */
-	G_OBJECT_CLASS (parent_class)->constructed (object);
+	G_OBJECT_CLASS (e_mail_attachment_handler_parent_class)->constructed (object);
 
 	shell = e_shell_get_default ();
 	shell_backend = e_shell_get_backend_by_name (shell, "mail");
-	priv->backend = E_MAIL_BACKEND (g_object_ref (shell_backend));
+	self->priv->backend = E_MAIL_BACKEND (g_object_ref (shell_backend));
 
 	view = e_attachment_handler_get_view (handler);
 
@@ -766,6 +862,11 @@ mail_attachment_handler_constructed (GObject *object)
 	gtk_action_group_add_actions (
 		action_group, standard_entries,
 		G_N_ELEMENTS (standard_entries), handler);
+
+	action_group = e_attachment_view_add_action_group (view, "mail-custom");
+	gtk_action_group_add_actions (
+		action_group, custom_entries,
+		G_N_ELEMENTS (custom_entries), handler);
 
 	ui_manager = e_attachment_view_get_ui_manager (view);
 	gtk_ui_manager_add_ui_from_string (ui_manager, ui, -1, &error);
@@ -808,13 +909,10 @@ mail_attachment_handler_get_target_table (EAttachmentHandler *handler,
 }
 
 static void
-mail_attachment_handler_class_init (EMailAttachmentHandlerClass *class)
+e_mail_attachment_handler_class_init (EMailAttachmentHandlerClass *class)
 {
 	GObjectClass *object_class;
 	EAttachmentHandlerClass *handler_class;
-
-	parent_class = g_type_class_peek_parent (class);
-	g_type_class_add_private (class, sizeof (EMailAttachmentHandlerPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->dispose = mail_attachment_handler_dispose;
@@ -826,34 +924,21 @@ mail_attachment_handler_class_init (EMailAttachmentHandlerClass *class)
 }
 
 static void
-mail_attachment_handler_init (EMailAttachmentHandler *handler)
+e_mail_attachment_handler_class_finalize (EMailAttachmentHandlerClass *klass)
 {
-	handler->priv = E_MAIL_ATTACHMENT_HANDLER_GET_PRIVATE (handler);
 }
 
-GType
-e_mail_attachment_handler_get_type (void)
+static void
+e_mail_attachment_handler_init (EMailAttachmentHandler *handler)
 {
-	return mail_attachment_handler_type;
+	handler->priv = e_mail_attachment_handler_get_instance_private (handler);
 }
 
 void
-e_mail_attachment_handler_register_type (GTypeModule *type_module)
+e_mail_attachment_handler_type_register (GTypeModule *type_module)
 {
-	static const GTypeInfo type_info = {
-		sizeof (EMailAttachmentHandlerClass),
-		(GBaseInitFunc) NULL,
-		(GBaseFinalizeFunc) NULL,
-		(GClassInitFunc) mail_attachment_handler_class_init,
-		(GClassFinalizeFunc) NULL,
-		NULL,  /* class_data */
-		sizeof (EMailAttachmentHandler),
-		0,     /* n_preallocs */
-		(GInstanceInitFunc) mail_attachment_handler_init,
-		NULL   /* value_table */
-	};
-
-	mail_attachment_handler_type = g_type_module_register_type (
-		type_module, E_TYPE_ATTACHMENT_HANDLER,
-		"EMailAttachmentHandler", &type_info, 0);
+	/* XXX G_DEFINE_DYNAMIC_TYPE declares a static type registration
+	 *     function, so we have to wrap it with a public function in
+	 *     order to register types from a separate compilation unit. */
+	e_mail_attachment_handler_register_type (type_module);
 }

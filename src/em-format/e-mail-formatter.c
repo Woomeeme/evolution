@@ -15,6 +15,8 @@
  *
  */
 
+#include "evolution-config.h"
+
 #include "e-mail-formatter.h"
 
 #include <string.h>
@@ -32,10 +34,6 @@
 
 #define d(x)
 
-#define E_MAIL_FORMATTER_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_FORMATTER, EMailFormatterPrivate))
-
 #define STYLESHEET_URI "evo-file://$EVOLUTION_WEBKITDATADIR/webview.css"
 
 typedef struct _AsyncContext AsyncContext;
@@ -51,6 +49,8 @@ struct _EMailFormatterPrivate {
 
 	gchar *charset;
 	gchar *default_charset;
+
+	GdkRGBA colors[E_MAIL_FORMATTER_NUM_COLOR_TYPES];
 };
 
 struct _AsyncContext {
@@ -72,8 +72,18 @@ GType e_mail_formatter_source_get_type (void);
 GType e_mail_formatter_text_enriched_get_type (void);
 GType e_mail_formatter_text_html_get_type (void);
 GType e_mail_formatter_text_plain_get_type (void);
+#ifdef HAVE_MARKDOWN
+GType e_mail_formatter_text_markdown_get_type (void);
+#endif
 
-static gpointer e_mail_formatter_parent_class = 0;
+static gpointer e_mail_formatter_parent_class = NULL;
+static gint EMailFormatter_private_offset = 0;
+
+static inline gpointer
+e_mail_formatter_get_instance_private (EMailFormatter *self)
+{
+	return (G_STRUCT_MEMBER_P (self, EMailFormatter_private_offset));
+}
 
 enum {
 	PROP_0,
@@ -357,14 +367,12 @@ e_mail_formatter_get_property (GObject *object,
 static void
 e_mail_formatter_finalize (GObject *object)
 {
-	EMailFormatterPrivate *priv;
+	EMailFormatter *self = E_MAIL_FORMATTER (object);
 
-	priv = E_MAIL_FORMATTER_GET_PRIVATE (object);
+	g_free (self->priv->charset);
+	g_free (self->priv->default_charset);
 
-	g_free (priv->charset);
-	g_free (priv->default_charset);
-
-	g_mutex_clear (&priv->property_lock);
+	g_mutex_clear (&self->priv->property_lock);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_mail_formatter_parent_class)->finalize (object);
@@ -561,6 +569,9 @@ e_mail_formatter_base_init (EMailFormatterClass *class)
 	g_type_ensure (e_mail_formatter_text_enriched_get_type ());
 	g_type_ensure (e_mail_formatter_text_html_get_type ());
 	g_type_ensure (e_mail_formatter_text_plain_get_type ());
+#ifdef HAVE_MARKDOWN
+	g_type_ensure (e_mail_formatter_text_markdown_get_type ());
+#endif
 
 	class->extension_registry = g_object_new (
 		E_TYPE_MAIL_FORMATTER_EXTENSION_REGISTRY, NULL);
@@ -589,10 +600,10 @@ static void
 e_mail_formatter_class_init (EMailFormatterClass *class)
 {
 	GObjectClass *object_class;
-	GdkRGBA *rgba;
 
 	e_mail_formatter_parent_class = g_type_class_peek_parent (class);
-	g_type_class_add_private (class, sizeof (EMailFormatterPrivate));
+	if (EMailFormatter_private_offset != 0)
+		g_type_class_adjust_private_offset (class, &EMailFormatter_private_offset);
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = e_mail_formatter_set_property;
@@ -603,21 +614,6 @@ e_mail_formatter_class_init (EMailFormatterClass *class)
 	class->context_size = sizeof (EMailFormatterContext);
 	class->run = mail_formatter_run;
 	class->update_style = mail_formatter_update_style;
-
-	rgba = &class->colors[E_MAIL_FORMATTER_COLOR_BODY];
-	gdk_rgba_parse (rgba, "#eeeeee");
-
-	rgba = &class->colors[E_MAIL_FORMATTER_COLOR_CONTENT];
-	gdk_rgba_parse (rgba, "#ffffff");
-
-	rgba = &class->colors[E_MAIL_FORMATTER_COLOR_FRAME];
-	gdk_rgba_parse (rgba, "#3f3f3f");
-
-	rgba = &class->colors[E_MAIL_FORMATTER_COLOR_HEADER];
-	gdk_rgba_parse (rgba, "#000000");
-
-	rgba = &class->colors[E_MAIL_FORMATTER_COLOR_TEXT];
-	gdk_rgba_parse (rgba, "#000000");
 
 	g_object_class_install_property (
 		object_class,
@@ -785,15 +781,26 @@ e_mail_formatter_class_init (EMailFormatterClass *class)
 static void
 e_mail_formatter_init (EMailFormatter *formatter)
 {
-	formatter->priv = E_MAIL_FORMATTER_GET_PRIVATE (formatter);
+	GdkRGBA *rgba;
+
+	formatter->priv = e_mail_formatter_get_instance_private (formatter);
 
 	g_mutex_init (&formatter->priv->property_lock);
-}
 
-static void
-e_mail_formatter_extensible_interface_init (EExtensibleInterface *iface)
-{
+	rgba = &formatter->priv->colors[E_MAIL_FORMATTER_COLOR_BODY];
+	gdk_rgba_parse (rgba, "#eeeeee");
 
+	rgba = &formatter->priv->colors[E_MAIL_FORMATTER_COLOR_CONTENT];
+	gdk_rgba_parse (rgba, "#ffffff");
+
+	rgba = &formatter->priv->colors[E_MAIL_FORMATTER_COLOR_FRAME];
+	gdk_rgba_parse (rgba, "#3f3f3f");
+
+	rgba = &formatter->priv->colors[E_MAIL_FORMATTER_COLOR_HEADER];
+	gdk_rgba_parse (rgba, "#000000");
+
+	rgba = &formatter->priv->colors[E_MAIL_FORMATTER_COLOR_TEXT];
+	gdk_rgba_parse (rgba, "#000000");
 }
 
 EMailFormatter *
@@ -822,12 +829,14 @@ e_mail_formatter_get_type (void)
 		};
 
 		const GInterfaceInfo e_extensible_interface_info = {
-			(GInterfaceInitFunc) e_mail_formatter_extensible_interface_init
+			(GInterfaceInitFunc) NULL
 		};
 
 		type = g_type_register_static (
 			G_TYPE_OBJECT,
 			"EMailFormatter", &type_info, 0);
+
+		EMailFormatter_private_offset = g_type_add_instance_private (type, sizeof (EMailFormatterPrivate));
 
 		g_type_add_interface_static (
 			type, E_TYPE_EXTENSIBLE, &e_extensible_interface_info);
@@ -874,13 +883,12 @@ e_mail_formatter_format_sync (EMailFormatter *formatter,
 }
 
 static void
-mail_formatter_format_thread (GSimpleAsyncResult *simple,
-                              GObject *source_object,
+mail_formatter_format_thread (GTask *task,
+                              gpointer source_object,
+                              gpointer task_data,
                               GCancellable *cancellable)
 {
-	AsyncContext *async_context;
-
-	async_context = g_simple_async_result_get_op_res_gpointer (simple);
+	AsyncContext *async_context = task_data;
 
 	e_mail_formatter_format_sync (
 		E_MAIL_FORMATTER (source_object),
@@ -889,6 +897,8 @@ mail_formatter_format_thread (GSimpleAsyncResult *simple,
 		async_context->flags,
 		async_context->mode,
 		cancellable);
+
+	g_task_return_boolean (task, TRUE);
 }
 
 void
@@ -901,7 +911,7 @@ e_mail_formatter_format (EMailFormatter *formatter,
                          GCancellable *cancellable,
                          gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	AsyncContext *async_context;
 	EMailFormatterClass *class;
 
@@ -918,26 +928,18 @@ e_mail_formatter_format (EMailFormatter *formatter,
 	async_context->flags = flags;
 	async_context->mode = mode;
 
-	simple = g_simple_async_result_new (
-		G_OBJECT (formatter), callback,
-		user_data, e_mail_formatter_format);
-
-	g_simple_async_result_set_check_cancellable (simple, cancellable);
-
-	g_simple_async_result_set_op_res_gpointer (
-		simple, async_context, (GDestroyNotify) async_context_free);
+	task = g_task_new (formatter, cancellable, callback, user_data);
+	g_task_set_source_tag (task, e_mail_formatter_format);
+	g_task_set_task_data (task, async_context, (GDestroyNotify) async_context_free);
 
 	if (part_list != NULL) {
 		async_context->part_list = g_object_ref (part_list);
-
-		g_simple_async_result_run_in_thread (
-			simple, mail_formatter_format_thread,
-			G_PRIORITY_DEFAULT, cancellable);
+		g_task_run_in_thread (task, mail_formatter_format_thread);
 	} else {
-		g_simple_async_result_complete_in_idle (simple);
+		g_task_return_boolean (task, TRUE);
 	}
 
-	g_object_unref (simple);
+	g_object_unref (task);
 }
 
 gboolean
@@ -945,17 +947,10 @@ e_mail_formatter_format_finish (EMailFormatter *formatter,
                                 GAsyncResult *result,
                                 GError **error)
 {
-	GSimpleAsyncResult *simple;
+	g_return_val_if_fail (g_task_is_valid (result, formatter), FALSE);
+	g_return_val_if_fail (g_async_result_is_tagged (result, e_mail_formatter_format), FALSE);
 
-	g_return_val_if_fail (
-		g_simple_async_result_is_valid (
-		result, G_OBJECT (formatter),
-		e_mail_formatter_format), FALSE);
-
-	simple = G_SIMPLE_ASYNC_RESULT (result);
-
-	/* Assume success unless a GError is set. */
-	return !g_simple_async_result_propagate_error (simple, error);
+	return g_task_propagate_boolean (G_TASK (result), error);
 }
 
 /**
@@ -1050,6 +1045,35 @@ e_mail_formatter_format_as (EMailFormatter *formatter,
 	return ok;
 }
 
+static gboolean
+emf_data_is_utf16 (CamelMimePart *part,
+		   gboolean *out_be_variant)
+{
+	CamelStream *filtered_stream;
+	CamelMimeFilter *filter;
+	CamelStream *stream;
+	const gchar *charset;
+	gboolean is_utf16;
+
+	g_return_val_if_fail (CAMEL_IS_MIME_PART (part), FALSE);
+
+	stream = camel_stream_null_new ();
+	filtered_stream = camel_stream_filter_new (stream);
+	filter = camel_mime_filter_bestenc_new (CAMEL_BESTENC_GET_CHARSET);
+	camel_stream_filter_add (CAMEL_STREAM_FILTER (filtered_stream), CAMEL_MIME_FILTER (filter));
+	camel_data_wrapper_decode_to_stream_sync (camel_medium_get_content (CAMEL_MEDIUM (part)), filtered_stream, NULL, NULL);
+	g_object_unref (filtered_stream);
+	g_object_unref (stream);
+
+	charset = camel_mime_filter_bestenc_get_best_charset (CAMEL_MIME_FILTER_BESTENC (filter));
+	*out_be_variant = g_strcmp0 (charset, "UTF-16BE") == 0;
+	is_utf16 = *out_be_variant || g_strcmp0 (charset, "UTF-16LE") == 0;
+
+	g_object_unref (filter);
+
+	return is_utf16;
+}
+
 /**
  * em_format_format_text:
  * @part: an #EMailPart to decode
@@ -1070,6 +1094,7 @@ e_mail_formatter_format_text (EMailFormatter *formatter,
 	CamelMimeFilter *windows = NULL;
 	CamelMimePart *mime_part;
 	CamelContentType *mime_type;
+	gboolean utf16_be_variant = FALSE;
 
 	if (g_cancellable_is_cancelled (cancellable))
 		return;
@@ -1077,7 +1102,12 @@ e_mail_formatter_format_text (EMailFormatter *formatter,
 	mime_part = e_mail_part_ref_mime_part (part);
 	mime_type = camel_data_wrapper_get_mime_type_field (CAMEL_DATA_WRAPPER (mime_part));
 
-	if (formatter->priv->charset != NULL) {
+	if (emf_data_is_utf16 (mime_part, &utf16_be_variant)) {
+		if (utf16_be_variant)
+			charset = "UTF-16BE";
+		else
+			charset = "UTF-16LE";
+	} else if (formatter->priv->charset != NULL) {
 		charset = formatter->priv->charset;
 	} else if (mime_type != NULL
 		   && (charset = camel_content_type_param (mime_type, "charset"))
@@ -1201,15 +1231,10 @@ const GdkRGBA *
 e_mail_formatter_get_color (EMailFormatter *formatter,
                             EMailFormatterColor type)
 {
-	EMailFormatterClass *klass;
-
 	g_return_val_if_fail (E_IS_MAIL_FORMATTER (formatter), NULL);
 	g_return_val_if_fail (type < E_MAIL_FORMATTER_NUM_COLOR_TYPES, NULL);
 
-	klass = E_MAIL_FORMATTER_GET_CLASS (formatter);
-	g_return_val_if_fail (klass != NULL, NULL);
-
-	return &(klass->colors[type]);
+	return &(formatter->priv->colors[type]);
 }
 
 void
@@ -1217,7 +1242,6 @@ e_mail_formatter_set_color (EMailFormatter *formatter,
                             EMailFormatterColor type,
                             const GdkRGBA *color)
 {
-	EMailFormatterClass *klass;
 	GdkRGBA *format_color;
 	const gchar *property_name;
 
@@ -1225,10 +1249,7 @@ e_mail_formatter_set_color (EMailFormatter *formatter,
 	g_return_if_fail (type < E_MAIL_FORMATTER_NUM_COLOR_TYPES);
 	g_return_if_fail (color != NULL);
 
-	klass = E_MAIL_FORMATTER_GET_CLASS (formatter);
-	g_return_if_fail (klass != NULL);
-
-	format_color = &(klass->colors[type]);
+	format_color = &(formatter->priv->colors[type]);
 
 	if (gdk_rgba_equal (color, format_color))
 		return;

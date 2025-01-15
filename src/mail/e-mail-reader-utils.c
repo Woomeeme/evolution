@@ -70,11 +70,14 @@ struct _AsyncContext {
 	gint filter_type;
 	gboolean replace;
 	gboolean keep_signature;
+	GSList *hidden_parts; /* EMailPart, to have set ::is_hidden = FALSE; */
 };
 
 static void
 async_context_free (AsyncContext *async_context)
 {
+	GSList *link;
+
 	g_clear_object (&async_context->activity);
 	g_clear_object (&async_context->folder);
 	g_clear_object (&async_context->message);
@@ -87,6 +90,15 @@ async_context_free (AsyncContext *async_context)
 
 	g_free (async_context->folder_name);
 	g_free (async_context->message_uid);
+
+	for (link = async_context->hidden_parts; link; link = g_slist_next (link)) {
+		EMailPart *part = link->data;
+
+		part->is_hidden = FALSE;
+	}
+
+	g_slist_free_full (async_context->hidden_parts, g_object_unref);
+	async_context->hidden_parts = NULL;
 
 	g_slice_free (AsyncContext, async_context);
 }
@@ -137,7 +149,7 @@ e_mail_reader_confirm_delete (EMailReader *reader)
 
 	dialog = e_alert_dialog_new_for_args (
 		window, "mail:ask-delete-vfolder-msg",
-		camel_folder_get_full_name (folder), NULL);
+		camel_folder_get_full_display_name (folder), NULL);
 
 	container = e_alert_dialog_get_content_area (E_ALERT_DIALOG (dialog));
 
@@ -189,7 +201,7 @@ mail_reader_delete_folder_cb (GObject *source_object,
 	} else if (local_error != NULL) {
 		e_alert_submit (
 			alert_sink, "mail:no-delete-folder",
-			camel_folder_get_full_name (folder),
+			camel_folder_get_full_display_name (folder),
 			local_error->message, NULL);
 		g_error_free (local_error);
 
@@ -1359,7 +1371,7 @@ e_mail_reader_mark_selected_ignore_thread (EMailReader *reader,
 			alert_sink = e_mail_reader_get_alert_sink (reader);
 
 			activity = e_alert_sink_submit_thread_job (alert_sink, description, alert_id,
-				camel_folder_get_full_name (folder), mail_reader_utils_mark_ignore_thread_thread,
+				camel_folder_get_full_display_name (folder), mail_reader_utils_mark_ignore_thread_thread,
 				mit, mark_ignore_thread_data_free);
 
 
@@ -1536,8 +1548,7 @@ mail_reader_print_message_cb (GObject *source_object,
 	activity = async_context->activity;
 	alert_sink = e_activity_get_alert_sink (activity);
 
-	e_mail_printer_print_finish (
-		E_MAIL_PRINTER (source_object), result, &local_error);
+	em_utils_print_part_list_finish (source_object, result, &local_error);
 
 	if (e_activity_handle_cancellation (activity, local_error)) {
 		g_error_free (local_error);
@@ -1565,15 +1576,11 @@ mail_reader_print_parse_message_cb (GObject *source_object,
 {
 	EMailReader *reader;
 	EMailDisplay *mail_display;
-	EMailFormatter *formatter;
 	EActivity *activity;
 	GCancellable *cancellable;
-	EMailPrinter *printer;
 	EMailPartList *part_list;
-	EMailRemoteContent *remote_content;
 	AsyncContext *async_context;
 	GError *local_error = NULL;
-	gchar *export_basename;
 
 	reader = E_MAIL_READER (source_object);
 	async_context = (AsyncContext *) user_data;
@@ -1595,35 +1602,13 @@ mail_reader_print_parse_message_cb (GObject *source_object,
 	}
 
 	mail_display = e_mail_reader_get_mail_display (reader);
-	formatter = e_mail_display_get_formatter (mail_display);
-	remote_content = e_mail_display_ref_remote_content (mail_display);
-
-	printer = e_mail_printer_new (part_list, remote_content);
-	export_basename = em_utils_build_export_basename (
-		CAMEL_FOLDER (async_context->folder),
-		e_mail_part_list_get_message_uid (part_list),
-		NULL);
-	e_util_make_safe_filename (export_basename);
-	e_mail_printer_set_export_filename (printer, export_basename);
-	g_free (export_basename);
-
-	if (e_mail_display_get_mode (mail_display) == E_MAIL_FORMATTER_MODE_SOURCE)
-		e_mail_printer_set_mode (printer, E_MAIL_FORMATTER_MODE_SOURCE);
-
-	g_clear_object (&remote_content);
-	g_clear_object (&part_list);
 
 	e_activity_set_text (activity, _("Printing"));
 
-	e_mail_printer_print (
-		printer,
-		async_context->print_action,
-		formatter,
-		cancellable,
-		mail_reader_print_message_cb,
-		async_context);
+	em_utils_print_part_list (part_list, mail_display, async_context->print_action,
+		cancellable, mail_reader_print_message_cb, async_context);
 
-	g_object_unref (printer);
+	g_clear_object (&part_list);
 }
 
 static void
@@ -1926,12 +1911,22 @@ e_mail_reader_remove_duplicates (EMailReader *reader)
 	g_ptr_array_unref (uids);
 }
 
+static gboolean
+emr_utils_get_skip_insecure_parts (EMailReader *reader)
+{
+	if (!reader)
+		return TRUE;
+
+	return e_mail_display_get_skip_insecure_parts (e_mail_reader_get_mail_display (reader));
+}
+
 typedef struct _CreateComposerData {
 	EMailReader *reader;
 	CamelFolder *folder;
 	CamelMimeMessage *message;
 	const gchar *message_uid; /* Allocated on the string pool, use camel_pstring_strdup/free */
 	gboolean keep_signature;
+	gboolean replace;
 
 	EMailPartList *part_list;
 	EMailReplyType reply_type;
@@ -1940,6 +1935,7 @@ typedef struct _CreateComposerData {
 	EMailPartValidityFlags validity_pgp_sum;
 	EMailPartValidityFlags validity_smime_sum;
 	gboolean is_selection;
+	gboolean skip_insecure_parts;
 
 	EMailForwardStyle forward_style;
 
@@ -1996,7 +1992,7 @@ mail_reader_edit_messages_composer_created_cb (GObject *source_object,
 
 		em_utils_edit_message (
 			composer, ccd->folder, ccd->message, ccd->message_uid,
-			ccd->keep_signature);
+			ccd->keep_signature, ccd->replace);
 
 		e_mail_reader_composer_created (
 			ccd->reader, composer, ccd->message);
@@ -2018,6 +2014,7 @@ mail_reader_edit_messages_cb (GObject *source_object,
 	GHashTable *hash_table;
 	GHashTableIter iter;
 	gpointer key, value;
+	gboolean skip_insecure_parts;
 	AsyncContext *async_context;
 	GError *local_error = NULL;
 
@@ -2050,6 +2047,7 @@ mail_reader_edit_messages_cb (GObject *source_object,
 
 	backend = e_mail_reader_get_backend (async_context->reader);
 	shell = e_shell_backend_get_shell (E_SHELL_BACKEND (backend));
+	skip_insecure_parts = emr_utils_get_skip_insecure_parts (async_context->reader);
 
 	/* Open each message in its own composer window. */
 
@@ -2062,10 +2060,10 @@ mail_reader_edit_messages_cb (GObject *source_object,
 		ccd->reader = g_object_ref (async_context->reader);
 		ccd->folder = g_object_ref (folder);
 		ccd->message = g_object_ref (CAMEL_MIME_MESSAGE (value));
+		ccd->message_uid = camel_pstring_strdup ((const gchar *) key);
 		ccd->keep_signature = async_context->keep_signature;
-
-		if (async_context->replace)
-			ccd->message_uid = camel_pstring_strdup ((const gchar *) key);
+		ccd->replace = async_context->replace;
+		ccd->skip_insecure_parts = skip_insecure_parts;
 
 		e_msg_composer_new (shell, mail_reader_edit_messages_composer_created_cb, ccd);
 	}
@@ -2201,6 +2199,7 @@ mail_reader_forward_attachment_cb (GObject *source_object,
 	ccd->attached_part = part;
 	ccd->attached_subject = subject;
 	ccd->attached_uids = async_context->uids ? g_ptr_array_ref (async_context->uids) : NULL;
+	ccd->skip_insecure_parts = emr_utils_get_skip_insecure_parts (async_context->reader);
 
 	backend = e_mail_reader_get_backend (async_context->reader);
 	shell = e_shell_backend_get_shell (E_SHELL_BACKEND (backend));
@@ -2232,7 +2231,8 @@ mail_reader_forward_message_composer_created_cb (GObject *source_object,
 		em_utils_forward_message (
 			composer, ccd->message,
 			ccd->forward_style,
-			ccd->folder, ccd->message_uid);
+			ccd->folder, ccd->message_uid,
+			ccd->skip_insecure_parts);
 
 		e_mail_reader_composer_created (
 			ccd->reader, composer, ccd->message);
@@ -2254,6 +2254,7 @@ mail_reader_forward_messages_cb (GObject *source_object,
 	GHashTable *hash_table;
 	GHashTableIter iter;
 	gpointer key, value;
+	gboolean skip_insecure_parts;
 	AsyncContext *async_context;
 	GError *local_error = NULL;
 
@@ -2287,6 +2288,8 @@ mail_reader_forward_messages_cb (GObject *source_object,
 		goto exit;
 	}
 
+	skip_insecure_parts = emr_utils_get_skip_insecure_parts (async_context->reader);
+
 	/* Create a new composer window for each message. */
 
 	g_hash_table_iter_init (&iter, hash_table);
@@ -2305,6 +2308,7 @@ mail_reader_forward_messages_cb (GObject *source_object,
 		ccd->message = g_object_ref (message);
 		ccd->message_uid = camel_pstring_strdup (message_uid);
 		ccd->forward_style = async_context->forward_style;
+		ccd->skip_insecure_parts = skip_insecure_parts;
 
 		e_msg_composer_new (shell, mail_reader_forward_message_composer_created_cb, ccd);
 	}
@@ -2475,9 +2479,15 @@ mail_reader_reply_to_message_composer_created_cb (GObject *source_object,
 		g_warning ("%s: failed to create msg composer: %s", G_STRFUNC, error->message);
 		g_clear_error (&error);
 	} else {
+		guint32 add_flags = 0;
+
+		if (!ccd->is_selection && ccd->skip_insecure_parts)
+			add_flags = E_MAIL_REPLY_FLAG_SKIP_INSECURE_PARTS;
+
 		em_utils_reply_to_message (
 			composer, ccd->message, ccd->folder, ccd->message_uid,
-			ccd->reply_type, ccd->reply_style, ccd->is_selection ? NULL : ccd->part_list, ccd->address, E_MAIL_REPLY_FLAG_NONE);
+			ccd->reply_type, ccd->reply_style, ccd->is_selection ? NULL : ccd->part_list, ccd->address,
+			(ccd->reply_type == E_MAIL_REPLY_TO_SENDER ? E_MAIL_REPLY_FLAG_FORCE_SENDER_REPLY : E_MAIL_REPLY_FLAG_NONE) | add_flags);
 
 		em_composer_utils_update_security (composer, ccd->validity_pgp_sum, ccd->validity_smime_sum);
 
@@ -2552,6 +2562,7 @@ typedef struct _SelectionOrMessageData {
 	const gchar *message_uid; /* Allocated on the string pool, use camel_pstring_strdup/free */
 	gboolean is_selection;
 	gboolean selection_is_html;
+	gboolean skip_insecure_parts;
 } SelectionOrMessageData;
 
 static void
@@ -2782,7 +2793,7 @@ e_mail_reader_utils_get_selection_or_message (EMailReader *reader,
 	if (preloaded_message)
 		smd->preloaded_message = g_object_ref (preloaded_message);
 
-	if (gtk_widget_get_visible (GTK_WIDGET (web_view)) &&
+	if (gtk_widget_is_visible (GTK_WIDGET (web_view)) &&
 	    e_web_view_has_selection (web_view)) {
 		EMailPartList *part_list;
 		CamelMimeMessage *message = NULL;
@@ -2884,6 +2895,7 @@ reply_to_message_got_message_cb (GObject *source_object,
 	ccd->reader = g_object_ref (reader);
 	ccd->reply_type = reply_type;
 	ccd->reply_style = e_mail_reader_get_reply_style (reader);
+	ccd->skip_insecure_parts = emr_utils_get_skip_insecure_parts (reader);
 
 	ccd->message = e_mail_reader_utils_get_selection_or_message_finish (reader, result,
 			&ccd->is_selection, &ccd->folder, &ccd->message_uid, &ccd->part_list,
@@ -2969,6 +2981,103 @@ mail_reader_save_messages_cb (GObject *source_object,
 	async_context_free (async_context);
 }
 
+static void
+emru_file_chooser_filter_changed_cb (GtkFileChooser *file_chooser,
+				     GParamSpec *param,
+				     gpointer user_data)
+{
+	GtkFileFilter *filter;
+	const gchar *extension = NULL;
+	gchar *current_name;
+	GtkFileFilterInfo file_info = { 0, };
+
+	g_return_if_fail (GTK_IS_FILE_CHOOSER (file_chooser));
+
+	filter = gtk_file_chooser_get_filter (file_chooser);
+	if (!filter)
+		return;
+
+	file_info.contains = GTK_FILE_FILTER_FILENAME | GTK_FILE_FILTER_MIME_TYPE;
+	file_info.filename = "message.eml";
+	file_info.mime_type = "message/rfc822";
+
+	if (gtk_file_filter_filter (filter, &file_info))
+		extension = ".eml";
+
+	if (!extension) {
+		file_info.filename = "message.mbox";
+		file_info.mime_type = "application/mbox";
+
+		if (gtk_file_filter_filter (filter, &file_info))
+			extension = ".mbox";
+	}
+
+	if (!extension)
+		return;
+
+	current_name = gtk_file_chooser_get_current_name (file_chooser);
+	if (!current_name)
+		return;
+
+	if (!g_str_has_suffix (current_name, extension) &&
+	    (g_str_has_suffix (current_name, ".eml") ||
+	     g_str_has_suffix (current_name, ".mbox"))) {
+		gchar *ptr, *tmp;
+
+		ptr = strrchr (current_name, '.');
+		*ptr = '\0';
+
+		tmp = g_strconcat (current_name, extension, NULL);
+
+		gtk_file_chooser_set_current_name (file_chooser, tmp);
+
+		g_free (tmp);
+	}
+
+	g_free (current_name);
+}
+
+static void
+emru_setup_filters (GtkFileChooserNative *file_chooser_native,
+		    gpointer user_data)
+{
+	const gchar *default_extension = user_data;
+	GtkFileChooser *file_chooser;
+
+	file_chooser = GTK_FILE_CHOOSER (file_chooser_native);
+
+	if (g_strcmp0 (default_extension, ".eml") == 0) {
+		GSList *filters, *link;
+		GtkFileFilterInfo file_info = { 0, };
+
+		file_info.contains = GTK_FILE_FILTER_FILENAME | GTK_FILE_FILTER_MIME_TYPE;
+		file_info.filename = "message.eml";
+		file_info.mime_type = "message/rfc822";
+
+		filters = gtk_file_chooser_list_filters (file_chooser);
+
+		for (link = filters; link; link = g_slist_next (link)) {
+			GtkFileFilter *filter = link->data;
+
+			if (gtk_file_filter_filter (filter, &file_info)) {
+				gtk_file_chooser_set_filter (file_chooser, filter);
+				break;
+			}
+		}
+
+		g_slist_free (filters);
+	}
+
+	/* This does not seem to work for GtkFileChooserNative */
+	g_signal_connect (file_chooser, "notify::filter",
+		G_CALLBACK (emru_file_chooser_filter_changed_cb), NULL);
+}
+
+typedef enum _EMailReaderSaveToFileFormat {
+	E_MAIL_READER_SAVE_TO_FILE_FORMAT_MBOX = 0,
+	E_MAIL_READER_SAVE_TO_FILE_FORMAT_EML
+} EMailReaderSaveToFileFormat;
+
 void
 e_mail_reader_save_messages (EMailReader *reader)
 {
@@ -2984,7 +3093,9 @@ e_mail_reader_save_messages (EMailReader *reader)
 	GPtrArray *uids;
 	const gchar *message_uid;
 	const gchar *title;
+	const gchar *default_extension;
 	gchar *suggestion = NULL;
+	EMailReaderSaveToFileFormat file_format;
 
 	folder = e_mail_reader_ref_folder (reader);
 	backend = e_mail_reader_get_backend (reader);
@@ -2997,10 +3108,21 @@ e_mail_reader_save_messages (EMailReader *reader)
 
 		message_list = e_mail_reader_get_message_list (reader);
 		message_list_sort_uids (MESSAGE_LIST (message_list), uids);
+		file_format = E_MAIL_READER_SAVE_TO_FILE_FORMAT_MBOX;
+	} else {
+		GSettings *settings;
+
+		settings = e_util_ref_settings ("org.gnome.evolution.mail");
+		file_format = g_settings_get_enum (settings, "save-format");
+		g_clear_object (&settings);
 	}
 
-	message_uid = g_ptr_array_index (uids, 0);
+	if (file_format == E_MAIL_READER_SAVE_TO_FILE_FORMAT_EML)
+		default_extension = ".eml";
+	else
+		default_extension = ".mbox";
 
+	message_uid = g_ptr_array_index (uids, 0);
 	title = ngettext ("Save Message", "Save Messages", uids->len);
 
 	/* Suggest as a filename the subject of the first message. */
@@ -3010,7 +3132,7 @@ e_mail_reader_save_messages (EMailReader *reader)
 
 		subject = camel_message_info_get_subject (info);
 		if (subject != NULL)
-			suggestion = g_strconcat (subject, ".mbox", NULL);
+			suggestion = g_strconcat (subject, default_extension, NULL);
 		g_clear_object (&info);
 	}
 
@@ -3023,7 +3145,7 @@ e_mail_reader_save_messages (EMailReader *reader)
 		 * subject.  The extension ".mbox" is appended to the
 		 * string; for example "Message.mbox". */
 		basename = ngettext ("Message", "Messages", uids->len);
-		suggestion = g_strconcat (basename, ".mbox", NULL);
+		suggestion = g_strconcat (basename, default_extension, NULL);
 	}
 
 	shell_backend = E_SHELL_BACKEND (backend);
@@ -3031,10 +3153,34 @@ e_mail_reader_save_messages (EMailReader *reader)
 
 	destination = e_shell_run_save_dialog (
 		shell, title, suggestion,
-		"*.mbox:application/mbox,message/rfc822", NULL, NULL);
+		uids->len > 1 ? "*.mbox:application/mbox,message/rfc822" :
+		"*.mbox:application/mbox;*.eml:message/rfc822",
+		uids->len > 1 ? NULL : emru_setup_filters, (gpointer) default_extension);
 
 	if (destination == NULL)
 		goto exit;
+
+	if (uids->len == 1 && g_file_peek_path (destination)) {
+		const gchar *path = g_file_peek_path (destination);
+		gsize len = strlen (path);
+
+		if (len > 4) {
+			EMailReaderSaveToFileFormat chosen_file_format;
+
+			if (g_ascii_strncasecmp (path + len - 4, ".eml", 4) == 0)
+				chosen_file_format = E_MAIL_READER_SAVE_TO_FILE_FORMAT_EML;
+			else
+				chosen_file_format = E_MAIL_READER_SAVE_TO_FILE_FORMAT_MBOX;
+
+			if (file_format != chosen_file_format) {
+				GSettings *settings;
+
+				settings = e_util_ref_settings ("org.gnome.evolution.mail");
+				g_settings_set_enum (settings, "save-format", chosen_file_format);
+				g_clear_object (&settings);
+			}
+		}
+	}
 
 	/* Save messages asynchronously. */
 

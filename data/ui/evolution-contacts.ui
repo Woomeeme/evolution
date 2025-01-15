@@ -24,6 +24,15 @@
     </menu>
     <menu action='view-menu'>
       <menuitem action='address-book-manage-groups'/>
+      <menu action='gal-view-menu'>
+        <placeholder name='gal-customize-view-placeholder'>
+          <menu action='contact-cards-sort-by-menu'>
+            <menuitem action='contact-cards-sort-by-file-as'/>
+            <menuitem action='contact-cards-sort-by-given-name'/>
+            <menuitem action='contact-cards-sort-by-family-name'/>
+          </menu>
+        </placeholder>
+      </menu>
       <placeholder name='view-custom-menus'>
         <menu action='contact-preview-menu'>
           <menuitem action='contact-preview'/>
@@ -42,6 +51,8 @@
         <separator/>
         <menuitem action='contact-copy'/>
         <menuitem action='contact-move'/>
+        <separator/>
+        <menuitem action='contact-bulk-edit'/>
         <separator/>
         <menuitem action='address-book-copy'/>
         <menuitem action='address-book-move'/>
@@ -97,6 +108,8 @@
     <menuitem action='contact-search-advanced-hidden'/>
     <menuitem action='contact-search-name-contains'/>
     <menuitem action='contact-search-email-begins-with'/>
+    <menuitem action='contact-search-email-contains'/>
+    <menuitem action='contact-search-phone-contains'/>
     <menuitem action='contact-search-any-field-contains'/>
     <separator/>
     <menuitem action='search-advanced'/>

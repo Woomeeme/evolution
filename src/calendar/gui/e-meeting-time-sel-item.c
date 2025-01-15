@@ -126,9 +126,9 @@ e_meeting_time_selector_item_init (EMeetingTimeSelectorItem *mts_item)
 	mts_item->mts = NULL;
 
 	/* Create the cursors. */
-	mts_item->normal_cursor = gdk_cursor_new (GDK_LEFT_PTR);
-	mts_item->resize_cursor = gdk_cursor_new (GDK_SB_H_DOUBLE_ARROW);
-	mts_item->busy_cursor = gdk_cursor_new (GDK_WATCH);
+	mts_item->normal_cursor = gdk_cursor_new_from_name (gdk_display_get_default (), "default");
+	mts_item->resize_cursor = gdk_cursor_new_from_name (gdk_display_get_default (), "ew-resize");
+	mts_item->busy_cursor = gdk_cursor_new_from_name (gdk_display_get_default (), "wait");
 	mts_item->last_cursor_set = NULL;
 
 	item->x1 = 0;
@@ -386,6 +386,7 @@ e_meeting_time_selector_item_paint_day_top (EMeetingTimeSelectorItem *mts_item,
 	gchar *str;
 	gint hour, hour_x, hour_y;
 	PangoLayout *layout;
+	GdkRGBA rgba;
 	struct tm tm_time;
 
 	cairo_save (cr);
@@ -450,6 +451,9 @@ e_meeting_time_selector_item_paint_day_top (EMeetingTimeSelectorItem *mts_item,
 		str = g_strconcat (buffer, " ", str, NULL);
 		g_free (tmp);
 	}
+
+	e_utils_get_theme_color (GTK_WIDGET (mts), "theme_fg_color", E_UTILS_DEFAULT_THEME_FG_COLOR, &rgba);
+	gdk_cairo_set_source_rgba (cr, &rgba);
 
 	cairo_save (cr);
 

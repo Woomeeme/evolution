@@ -141,6 +141,13 @@ merge_cb (GObject *source_object,
 	}
 
 	if (error != NULL) {
+		e_alert_run_dialog_for_args (
+			e_shell_get_active_window (NULL),
+			"addressbook:load-error",
+			e_source_get_display_name (qa->source),
+			error->message,
+			NULL);
+
 		if (qa->cb)
 			qa->cb (NULL, qa->closure);
 		g_error_free (error);
@@ -155,7 +162,7 @@ merge_cb (GObject *source_object,
 
 		eab_merging_book_add_contact (
 			registry, E_BOOK_CLIENT (client),
-			qa->contact, NULL, NULL);
+			qa->contact, NULL, NULL, FALSE);
 
 		g_object_unref (registry);
 	} else {
@@ -188,7 +195,7 @@ quick_add_merge_contact (QuickAdd *qa)
 
 	e_client_cache_get_client (
 		qa->client_cache, qa->source,
-		E_SOURCE_EXTENSION_ADDRESS_BOOK, 30,
+		E_SOURCE_EXTENSION_ADDRESS_BOOK, (guint32) -1,
 		qa->cancellable, merge_cb, qa);
 }
 
@@ -238,9 +245,12 @@ ce_have_contact (EBookClient *book_client,
 	if (error != NULL) {
 		if (book_client)
 			g_object_unref (book_client);
-		g_warning (
-			"Failed to find contact, status %d (%s).",
-			error->code, error->message);
+		e_alert_run_dialog_for_args (
+			e_shell_get_active_window (NULL),
+			"addressbook:generic-error",
+			_("Failed to find contact"),
+			error->message,
+			NULL);
 		quick_add_unref (qa);
 	} else {
 		EShell *shell;
@@ -308,7 +318,12 @@ ce_have_book (GObject *source_object,
 	}
 
 	if (error != NULL) {
-		g_warning ("%s", error->message);
+		e_alert_run_dialog_for_args (
+			e_shell_get_active_window (NULL),
+			"addressbook:load-error",
+			e_source_get_display_name (qa->source),
+			error->message,
+			NULL);
 		quick_add_unref (qa);
 		g_error_free (error);
 		return;
@@ -335,7 +350,7 @@ edit_contact (QuickAdd *qa)
 
 	e_client_cache_get_client (
 		qa->client_cache, qa->source,
-		E_SOURCE_EXTENSION_ADDRESS_BOOK, 30,
+		E_SOURCE_EXTENSION_ADDRESS_BOOK, (guint32) -1,
 		qa->cancellable, ce_have_book, qa);
 }
 
@@ -758,11 +773,16 @@ e_contact_quick_add_vcard (EClientCache *client_cache,
 			g_list_free (emails);
 		}
 	} else {
+		e_alert_run_dialog_for_args (
+			e_shell_get_active_window (NULL),
+			"addressbook:generic-error",
+			_("Failed to parse vCard data"),
+			qa->vcard,
+			NULL);
 		if (cb)
 			cb (NULL, closure);
 
 		quick_add_unref (qa);
-		g_warning ("Contact's vCard parsing failed!");
 		return;
 	}
 

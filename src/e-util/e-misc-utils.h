@@ -141,7 +141,7 @@ void		e_utils_get_theme_color_color	(GtkWidget *widget,
 void		e_utils_shade_color		(const GdkRGBA *a,
 						 GdkRGBA *b,
 						 gdouble mult);
-
+gdouble		e_utils_get_color_brightness	(const GdkRGBA *rgba);
 GdkRGBA		e_utils_get_text_color_for_background
 						(const GdkRGBA *bg_rgba);
 
@@ -249,6 +249,14 @@ gboolean	e_binding_transform_text_non_null
 						 const GValue *source_value,
 						 GValue *target_value,
 						 gpointer user_data);
+gboolean	e_binding_transform_text_to_uri	(GBinding *binding,
+						 const GValue *source_value,
+						 GValue *target_value,
+						 gpointer not_used);
+gboolean	e_binding_transform_uri_to_text	(GBinding *binding,
+						 const GValue *source_value,
+						 GValue *target_value,
+						 gpointer not_used);
 
 GBinding *	e_binding_bind_object_text_property
 						(gpointer source,
@@ -280,15 +288,13 @@ void		e_signal_disconnect_notify_handler
 
 GSettings *	e_util_ref_settings		(const gchar *schema_id);
 void		e_util_cleanup_settings		(void);
+GdkPixbuf *	e_misc_util_ref_pixbuf		(const gchar *filename,
+						 GError **error);
 gboolean	e_util_prompt_user		(GtkWindow *parent,
 						 const gchar *settings_schema,
 						 const gchar *promptkey,
 						 const gchar *tag,
 						 ...);
-void		e_util_run_simple_async_result_in_thread
-						(GSimpleAsyncResult *simple,
-						 GSimpleAsyncThreadFunc func,
-						 GCancellable *cancellable);
 gboolean	e_util_is_running_gnome		(void);
 gboolean	e_util_is_running_flatpak	(void);
 void		e_util_set_entry_issue_hint	(GtkWidget *entry,
@@ -316,6 +322,7 @@ void		e_util_resize_window_for_screen	(GtkWindow *window,
 						 const GSList *children); /* GtkWidget * */
 gboolean	e_util_query_ldap_root_dse_sync	(const gchar *host,
 						 guint16 port,
+						 ESourceLDAPSecurity security,
 						 gchar ***out_root_dse,
 						 GCancellable *cancellable,
 						 GError **error);
@@ -329,6 +336,9 @@ gboolean	e_util_can_preview_filename	(const gchar *filename);
 void		e_util_markup_append_escaped	(GString *buffer,
 						 const gchar *format,
 						 ...) G_GNUC_PRINTF (2, 3);
+void		e_util_markup_append_escaped_text
+						(GString *buffer,
+						 const gchar *text);
 
 typedef struct _ESupportedLocales {
 	const gchar *code;	/* like 'en' */
@@ -342,6 +352,14 @@ const ESupportedLocales *
 void		e_util_ensure_scrolled_window_height
 						(GtkScrolledWindow *scrolled_window);
 void		e_util_make_safe_filename	(gchar *filename);
+gboolean	e_util_setup_toolbar_icon_size	(GtkToolbar *toolbar,
+						 GtkIconSize default_size);
+gboolean	e_util_get_use_header_bar	(void);
+void		e_open_map_uri			(GtkWindow *parent,
+						 const gchar *location);
+gboolean	e_util_link_requires_reference	(const gchar *href,
+						 const gchar *text);
+void		e_util_call_malloc_trim_limited	(void);
 
 G_END_DECLS
 

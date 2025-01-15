@@ -26,14 +26,6 @@
 #include <camel/camel.h>
 #include <e-util/e-util.h>
 
-#define E_MAIL_LABEL_LIST_STORE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_LABEL_LIST_STORE, EMailLabelListStorePrivate))
-
-#define E_MAIL_LABEL_LIST_STORE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_LABEL_LIST_STORE, EMailLabelListStorePrivate))
-
 enum {
 	CHANGED,
 	LAST_SIGNAL
@@ -66,13 +58,9 @@ static void	labels_settings_changed_cb	(GSettings *settings,
 						 const gchar *key,
 						 gpointer user_data);
 
-G_DEFINE_TYPE_WITH_CODE (
-	EMailLabelListStore,
-	e_mail_label_list_store,
-	GTK_TYPE_LIST_STORE,
-	G_IMPLEMENT_INTERFACE (
-		GTK_TYPE_TREE_MODEL,
-		e_mail_label_list_store_interface_init))
+G_DEFINE_TYPE_WITH_CODE (EMailLabelListStore, e_mail_label_list_store, GTK_TYPE_LIST_STORE,
+	G_ADD_PRIVATE (EMailLabelListStore)
+	G_IMPLEMENT_INTERFACE (GTK_TYPE_TREE_MODEL, e_mail_label_list_store_interface_init))
 
 static gchar *
 mail_label_list_store_tag_from_name (const gchar *label_name)
@@ -203,34 +191,28 @@ mail_label_list_store_get_stock_id (EMailLabelListStore *store,
 static void
 mail_label_list_store_dispose (GObject *object)
 {
-	EMailLabelListStorePrivate *priv;
+	EMailLabelListStore *self = E_MAIL_LABEL_LIST_STORE (object);
 
-	priv = E_MAIL_LABEL_LIST_STORE_GET_PRIVATE (object);
-
-	if (priv->idle_changed_id) {
-		g_source_remove (priv->idle_changed_id);
-		priv->idle_changed_id = 0;
+	if (self->priv->idle_changed_id) {
+		g_source_remove (self->priv->idle_changed_id);
+		self->priv->idle_changed_id = 0;
 	}
 
-	g_clear_object (&priv->mail_settings);
+	g_clear_object (&self->priv->mail_settings);
 
 	/* Chain up to parent's dispose() method. */
-	G_OBJECT_CLASS (e_mail_label_list_store_parent_class)->
-		dispose (object);
+	G_OBJECT_CLASS (e_mail_label_list_store_parent_class)->dispose (object);
 }
 
 static void
 mail_label_list_store_finalize (GObject *object)
 {
-	EMailLabelListStorePrivate *priv;
+	EMailLabelListStore *self = E_MAIL_LABEL_LIST_STORE (object);
 
-	priv = E_MAIL_LABEL_LIST_STORE_GET_PRIVATE (object);
-
-	g_hash_table_destroy (priv->tag_index);
+	g_hash_table_destroy (self->priv->tag_index);
 
 	/* Chain up to parent's finalize() method. */
-	G_OBJECT_CLASS (e_mail_label_list_store_parent_class)->
-		finalize (object);
+	G_OBJECT_CLASS (e_mail_label_list_store_parent_class)->finalize (object);
 }
 
 static gboolean
@@ -361,8 +343,6 @@ labels_settings_changed_cb (GSettings *settings,
 	gtk_list_store_clear (GTK_LIST_STORE (store));
 
 	for (i = 0; strv[i] != NULL; i++) {
-		GtkTreeIter iter;
-
 		gtk_list_store_insert_with_values (
 			GTK_LIST_STORE (store), &iter, -1, 0, strv[i], -1);
 	}
@@ -415,8 +395,6 @@ e_mail_label_list_store_class_init (EMailLabelListStoreClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (EMailLabelListStorePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->dispose = mail_label_list_store_dispose;
 	object_class->finalize = mail_label_list_store_finalize;
@@ -450,7 +428,7 @@ e_mail_label_list_store_init (EMailLabelListStore *store)
 		(GDestroyNotify) g_free,
 		(GDestroyNotify) gtk_tree_iter_free);
 
-	store->priv = E_MAIL_LABEL_LIST_STORE_GET_PRIVATE (store);
+	store->priv = e_mail_label_list_store_get_instance_private (store);
 	store->priv->tag_index = tag_index;
 
 	/* XXX While it may seem awkward to cram the label name and color
@@ -682,6 +660,38 @@ e_mail_label_list_store_lookup (EMailLabelListStore *store,
 	*iter = *stored_iter;
 
 	return TRUE;
+}
+
+gboolean
+e_mail_label_list_store_lookup_by_name (EMailLabelListStore *store,
+					const gchar *name,
+					GtkTreeIter *out_iter)
+{
+	GHashTableIter hash_iter;
+	GtkTreeIter *stored_iter;
+	gpointer value;
+
+	g_return_val_if_fail (E_IS_MAIL_LABEL_LIST_STORE (store), FALSE);
+	g_return_val_if_fail (name != NULL, FALSE);
+
+	g_hash_table_iter_init (&hash_iter, store->priv->tag_index);
+	while (g_hash_table_iter_next (&hash_iter, NULL, &value)) {
+		gchar *stored_name;
+
+		stored_iter = value;
+		stored_name = e_mail_label_list_store_get_name (store, stored_iter);
+
+		if (g_strcmp0 (stored_name, name) == 0) {
+			g_free (stored_name);
+			if (out_iter)
+				*out_iter = *stored_iter;
+			return TRUE;
+		}
+
+		g_free (stored_name);
+	}
+
+	return FALSE;
 }
 
 gboolean

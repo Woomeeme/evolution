@@ -26,29 +26,59 @@
 
 #include <libxml/parser.h>
 
+#include "e-card-view.h"
 #include "gal-view-minicard.h"
 
-G_DEFINE_TYPE (
-	GalViewMinicard,
-	gal_view_minicard,
-	GAL_TYPE_VIEW)
+struct _GalViewMinicard {
+	GalView parent;
+
+	GWeakRef content_object_ref;
+	gdouble column_width;
+	ECardsSortBy sort_by;
+};
+
+G_DEFINE_TYPE (GalViewMinicard, gal_view_minicard, GAL_TYPE_VIEW)
 
 static void
-view_minicard_column_width_changed (EAddressbookView *address_view,
-                                    gdouble width)
+view_minicard_update_sort_fields (GalViewMinicard *self)
 {
-	GalView *view;
-	GalViewInstance *view_instance;
-	GalViewMinicard *view_minicard;
+	ECardView *card_view;
 
-	view_instance = e_addressbook_view_get_view_instance (address_view);
-	view = gal_view_instance_get_current_view (view_instance);
-	view_minicard = GAL_VIEW_MINICARD (view);
+	card_view = g_weak_ref_get (&self->content_object_ref);
 
-	if (view_minicard->column_width != width) {
-		view_minicard->column_width = width;
-		gal_view_changed (view);
+	if (!card_view)
+		return;
+
+	if (self->sort_by == E_CARDS_SORT_BY_GIVEN_NAME) {
+		EBookClientViewSortFields sort_fields[] = {
+			{ E_CONTACT_GIVEN_NAME, E_BOOK_CURSOR_SORT_ASCENDING },
+			{ E_CONTACT_FAMILY_NAME, E_BOOK_CURSOR_SORT_ASCENDING },
+			{ E_CONTACT_FILE_AS, E_BOOK_CURSOR_SORT_ASCENDING },
+			{ E_CONTACT_FIELD_LAST, E_BOOK_CURSOR_SORT_ASCENDING }
+		};
+
+		e_card_view_set_sort_fields (card_view, sort_fields);
+	} else if (self->sort_by == E_CARDS_SORT_BY_FAMILY_NAME) {
+		EBookClientViewSortFields sort_fields[] = {
+			{ E_CONTACT_FAMILY_NAME, E_BOOK_CURSOR_SORT_ASCENDING },
+			{ E_CONTACT_GIVEN_NAME, E_BOOK_CURSOR_SORT_ASCENDING },
+			{ E_CONTACT_FILE_AS, E_BOOK_CURSOR_SORT_ASCENDING },
+			{ E_CONTACT_FIELD_LAST, E_BOOK_CURSOR_SORT_ASCENDING }
+		};
+
+		e_card_view_set_sort_fields (card_view, sort_fields);
+	} else /* if (self->sort_by == E_CARDS_SORT_BY_FILE_AS) */ {
+		EBookClientViewSortFields sort_fields[] = {
+			{ E_CONTACT_FILE_AS, E_BOOK_CURSOR_SORT_ASCENDING },
+			{ E_CONTACT_FAMILY_NAME, E_BOOK_CURSOR_SORT_ASCENDING },
+			{ E_CONTACT_GIVEN_NAME, E_BOOK_CURSOR_SORT_ASCENDING },
+			{ E_CONTACT_FIELD_LAST, E_BOOK_CURSOR_SORT_ASCENDING }
+		};
+
+		e_card_view_set_sort_fields (card_view, sort_fields);
 	}
+
+	g_object_unref (card_view);
 }
 
 static void
@@ -57,6 +87,8 @@ view_minicard_finalize (GObject *object)
 	GalViewMinicard *view = GAL_VIEW_MINICARD (object);
 
 	gal_view_minicard_detach (view);
+
+	g_weak_ref_clear (&view->content_object_ref);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (gal_view_minicard_parent_class)->finalize (object);
@@ -69,6 +101,7 @@ view_minicard_load (GalView *view,
 	GalViewMinicard *view_minicard;
 	xmlDoc *doc;
 	xmlNode *root;
+	gchar *sort_by;
 
 	view_minicard = GAL_VIEW_MINICARD (view);
 
@@ -79,7 +112,18 @@ view_minicard_load (GalView *view,
 	view_minicard->column_width =
 		e_xml_get_double_prop_by_name_with_default (
 		root, (guchar *) "column_width", 225);
+
+	sort_by = e_xml_get_string_prop_by_name (root, (const xmlChar *) "sort_by");
+	if (g_strcmp0 (sort_by, "given-name") == 0)
+		view_minicard->sort_by = E_CARDS_SORT_BY_GIVEN_NAME;
+	else if (g_strcmp0 (sort_by, "family-name") == 0)
+		view_minicard->sort_by = E_CARDS_SORT_BY_FAMILY_NAME;
+	else /*if (g_strcmp0 (sort_by, "file-as") == 0)*/
+		view_minicard->sort_by = E_CARDS_SORT_BY_FILE_AS;
+
 	xmlFreeDoc (doc);
+
+	view_minicard_update_sort_fields (view_minicard);
 }
 
 static void
@@ -97,6 +141,20 @@ view_minicard_save (GalView *view,
 	e_xml_set_double_prop_by_name (
 		root, (guchar *) "column_width",
 		view_minicard->column_width);
+
+	switch (view_minicard->sort_by) {
+	default:
+	case E_CARDS_SORT_BY_FILE_AS:
+		e_xml_set_string_prop_by_name (root, (const xmlChar *) "sort_by", "file-as");
+		break;
+	case E_CARDS_SORT_BY_GIVEN_NAME:
+		e_xml_set_string_prop_by_name (root, (const xmlChar *) "sort_by", "given-name");
+		break;
+	case E_CARDS_SORT_BY_FAMILY_NAME:
+		e_xml_set_string_prop_by_name (root, (const xmlChar *) "sort_by", "family-name");
+		break;
+	}
+
 	xmlDocSetRootElement (doc, root);
 	e_xml_save_file (filename, doc);
 	xmlFreeDoc (doc);
@@ -113,6 +171,7 @@ view_minicard_clone (GalView *view)
 
 	view_minicard = GAL_VIEW_MINICARD (view);
 	GAL_VIEW_MINICARD (clone)->column_width = view_minicard->column_width;
+	GAL_VIEW_MINICARD (clone)->sort_by = view_minicard->sort_by;
 
 	return clone;
 }
@@ -137,10 +196,11 @@ gal_view_minicard_class_init (GalViewMinicardClass *class)
 static void
 gal_view_minicard_init (GalViewMinicard *gvm)
 {
+	/* Left just in case it would be useful in the future, but it's unused now */
 	gvm->column_width = 225.0;
+	gvm->sort_by = E_CARDS_SORT_BY_FILE_AS;
 
-	gvm->emvw = NULL;
-	gvm->emvw_column_width_changed_id = 0;
+	g_weak_ref_init (&gvm->content_object_ref, NULL);
 }
 
 /**
@@ -162,24 +222,19 @@ void
 gal_view_minicard_attach (GalViewMinicard *view,
                           EAddressbookView *address_view)
 {
-	GObject *object;
+	GObject *content_object;
 
 	g_return_if_fail (GAL_IS_VIEW_MINICARD (view));
 	g_return_if_fail (E_IS_ADDRESSBOOK_VIEW (address_view));
 
-	object = e_addressbook_view_get_view_object (address_view);
-	g_return_if_fail (E_IS_MINICARD_VIEW_WIDGET (object));
+	content_object = e_addressbook_view_get_content_object (address_view);
+	g_return_if_fail (E_IS_CARD_VIEW (content_object));
 
 	gal_view_minicard_detach (view);
-	view->emvw = E_MINICARD_VIEW_WIDGET (g_object_ref (object));
 
-	g_object_set (view->emvw, "column-width", view->column_width, NULL);
+	g_weak_ref_set (&view->content_object_ref, content_object);
 
-	view->emvw_column_width_changed_id =
-		g_signal_connect_swapped (
-			view->emvw, "column-width-changed",
-			G_CALLBACK (view_minicard_column_width_changed),
-			address_view);
+	view_minicard_update_sort_fields (view);
 }
 
 void
@@ -187,15 +242,29 @@ gal_view_minicard_detach (GalViewMinicard *view)
 {
 	g_return_if_fail (GAL_IS_VIEW_MINICARD (view));
 
-	if (view->emvw == NULL)
+	g_weak_ref_set (&view->content_object_ref, NULL);
+}
+
+ECardsSortBy
+gal_view_minicard_get_sort_by (GalViewMinicard *self)
+{
+	g_return_val_if_fail (GAL_IS_VIEW_MINICARD (self), E_CARDS_SORT_BY_FILE_AS);
+
+	return self->sort_by;
+}
+
+void
+gal_view_minicard_set_sort_by (GalViewMinicard *self,
+			       ECardsSortBy sort_by)
+{
+	g_return_if_fail (GAL_IS_VIEW_MINICARD (self));
+
+	if (self->sort_by == sort_by)
 		return;
 
-	if (view->emvw_column_width_changed_id > 0) {
-		g_signal_handler_disconnect (
-			view->emvw, view->emvw_column_width_changed_id);
-		view->emvw_column_width_changed_id = 0;
-	}
+	self->sort_by = sort_by;
 
-	g_object_unref (view->emvw);
-	view->emvw = NULL;
+	view_minicard_update_sort_fields (self);
+
+	gal_view_changed (GAL_VIEW (self));
 }

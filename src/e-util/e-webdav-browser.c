@@ -38,6 +38,8 @@
 #include "e-alert-bar.h"
 #include "e-alert-dialog.h"
 #include "e-alert-sink.h"
+#include "e-color-combo.h"
+#include "e-misc-utils.h"
 #include "e-spell-text-view.h"
 
 #include "e-webdav-browser.h"
@@ -71,7 +73,7 @@ struct _EWebDAVBrowserPrivate {
 	GtkWidget *create_edit_popover;
 	GtkWidget *create_edit_name_entry;
 	GtkWidget *create_edit_color_label;
-	GtkWidget *create_edit_color_chooser;
+	GtkWidget *create_edit_color_combo;
 	GtkWidget *create_edit_order_label;
 	GtkWidget *create_edit_order_spin;
 	GtkWidget *create_edit_support_label;
@@ -96,6 +98,7 @@ static void webdav_browser_alert_sink_init (EAlertSinkInterface *iface);
 static void webdav_browser_change_busy_state (EWebDAVBrowser *webdav_browser, gboolean is_busy);
 
 G_DEFINE_TYPE_WITH_CODE (EWebDAVBrowser, e_webdav_browser, GTK_TYPE_GRID,
+	G_ADD_PRIVATE (EWebDAVBrowser)
 	G_IMPLEMENT_INTERFACE (E_TYPE_ALERT_SINK, webdav_browser_alert_sink_init))
 
 typedef enum {
@@ -111,7 +114,8 @@ typedef enum {
 	E_EDITING_FLAG_CAN_DELETE	= 1 << 8,
 	E_EDITING_FLAG_IS_BOOK		= 1 << 9,
 	E_EDITING_FLAG_IS_CALENDAR	= 1 << 10,
-	E_EDITING_FLAG_IS_COLLECTION	= 1 << 11
+	E_EDITING_FLAG_IS_COLLECTION	= 1 << 11,
+	E_EDITING_FLAG_HAS_CALENDAR_COMPONENTS	= 1 << 12
 } EEditingFlags;
 
 enum {
@@ -358,11 +362,11 @@ webdav_browser_manage_login_errors (EWebDAVBrowser *webdav_browser,
 	led.flag = NULL;
 	led.repeat = FALSE;
 
-	if (g_error_matches (error, SOUP_HTTP_ERROR, SOUP_STATUS_SSL_FAILED) &&
+	if (g_error_matches (error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE) &&
 	    e_soup_session_get_ssl_error_details (E_SOUP_SESSION (session), &led.certificate_pem, &led.certificate_errors)) {
 		led.run_trust_prompt = TRUE;
 		led.flag = e_flag_new ();
-	} else if (g_error_matches (error, SOUP_HTTP_ERROR, SOUP_STATUS_UNAUTHORIZED)) {
+	} else if (g_error_matches (error, E_SOUP_SESSION_ERROR, SOUP_STATUS_UNAUTHORIZED)) {
 		led.flag = e_flag_new ();
 	}
 
@@ -486,8 +490,9 @@ webdav_browser_update_ui (EWebDAVBrowser *webdav_browser)
 
 				gtk_tree_model_get (model, &parent_iter, COLUMN_UINT_EDITING_FLAGS, &parent_editing_flags, -1);
 
-				rd->editing_flags = (parent_editing_flags & ~(E_EDITING_FLAG_IS_BOOK | E_EDITING_FLAG_IS_CALENDAR | E_EDITING_FLAG_IS_COLLECTION)) |
-						    (rd->editing_flags & (E_EDITING_FLAG_IS_BOOK | E_EDITING_FLAG_IS_CALENDAR | E_EDITING_FLAG_IS_COLLECTION));
+				rd->editing_flags =
+					(parent_editing_flags & ~(E_EDITING_FLAG_IS_BOOK | E_EDITING_FLAG_IS_CALENDAR | E_EDITING_FLAG_HAS_CALENDAR_COMPONENTS | E_EDITING_FLAG_IS_COLLECTION)) |
+					(rd->editing_flags & (E_EDITING_FLAG_IS_BOOK | E_EDITING_FLAG_IS_CALENDAR | E_EDITING_FLAG_HAS_CALENDAR_COMPONENTS | E_EDITING_FLAG_IS_COLLECTION));
 			}
 		}
 
@@ -508,8 +513,9 @@ webdav_browser_update_ui (EWebDAVBrowser *webdav_browser)
 		if (rd->resource->kind == E_WEBDAV_RESOURCE_KIND_ADDRESSBOOK) {
 			icon_name = "x-office-address-book";
 			g_string_append (type_info, _("Address book"));
-		} else if (rd->resource->kind == E_WEBDAV_RESOURCE_KIND_CALENDAR) {
-			icon_name = "x-office-calendar";
+		} else if (rd->resource->kind == E_WEBDAV_RESOURCE_KIND_CALENDAR ||
+			rd->resource->kind == E_WEBDAV_RESOURCE_KIND_SCHEDULE_INBOX ||
+			rd->resource->kind == E_WEBDAV_RESOURCE_KIND_SCHEDULE_OUTBOX) {
 
 			#define append_if_set(_flag, _str) \
 				if ((rd->resource->supports & (_flag)) != 0) { \
@@ -528,8 +534,18 @@ webdav_browser_update_ui (EWebDAVBrowser *webdav_browser)
 				g_string_prepend (type_info, " (");
 				g_string_append_c (type_info, ')');
 			}
-
-			g_string_prepend (type_info, _("Calendar"));
+			if (rd->resource->kind == E_WEBDAV_RESOURCE_KIND_CALENDAR) {
+				icon_name = "x-office-calendar";
+				g_string_prepend (type_info, _("Calendar"));
+			} else if (rd->resource->kind == E_WEBDAV_RESOURCE_KIND_SCHEDULE_INBOX) {
+				icon_name = "mail-inbox";
+				g_string_prepend (type_info, _("Scheduling Inbox"));
+				/* Scheduling Inbox collections MUST NOT contain any types of collection resources. */
+				is_loaded_row = 1;
+			} else {
+				icon_name = "mail-outbox";
+				g_string_prepend (type_info, _("Scheduling Outbox"));
+			}
 
 		} else if (rd->resource->kind == E_WEBDAV_RESOURCE_KIND_COLLECTION) {
 			icon_name = "folder";
@@ -712,7 +728,7 @@ typedef struct _SearchHomeData {
 static gboolean
 webdav_browser_search_home_hrefs_cb (EWebDAVSession *webdav,
 				     xmlNodePtr prop_node,
-				     const SoupURI *request_uri,
+				     const GUri *request_uri,
 				     const gchar *href,
 				     guint status_code,
 				     gpointer user_data)
@@ -899,12 +915,13 @@ webdav_browser_gather_href_resources_sync (EWebDAVBrowser *webdav_browser,
 				GHashTable *allows = NULL;
 				guint32 editing_flags = E_EDITING_FLAG_NONE;
 				ResourceData *rd;
-				gchar *tmp;
 
 				if (!resource ||
 				    !resource->href || (
 				    resource->kind != E_WEBDAV_RESOURCE_KIND_ADDRESSBOOK &&
 				    resource->kind != E_WEBDAV_RESOURCE_KIND_CALENDAR &&
+				    resource->kind != E_WEBDAV_RESOURCE_KIND_SCHEDULE_INBOX &&
+				    resource->kind != E_WEBDAV_RESOURCE_KIND_SCHEDULE_OUTBOX &&
 				    resource->kind != E_WEBDAV_RESOURCE_KIND_COLLECTION &&
 				    resource->kind != E_WEBDAV_RESOURCE_KIND_PRINCIPAL)) {
 					continue;
@@ -928,12 +945,18 @@ webdav_browser_gather_href_resources_sync (EWebDAVBrowser *webdav_browser,
 					editing_flags |= E_EDITING_FLAG_IS_BOOK;
 
 				if (resource->kind == E_WEBDAV_RESOURCE_KIND_CALENDAR)
-					editing_flags |= E_EDITING_FLAG_IS_CALENDAR;
+					editing_flags |= E_EDITING_FLAG_IS_CALENDAR | E_EDITING_FLAG_HAS_CALENDAR_COMPONENTS;
+
+				else if (resource->kind == E_WEBDAV_RESOURCE_KIND_SCHEDULE_INBOX ||
+					 resource->kind == E_WEBDAV_RESOURCE_KIND_SCHEDULE_OUTBOX)
+					editing_flags |= E_EDITING_FLAG_IS_COLLECTION | E_EDITING_FLAG_HAS_CALENDAR_COMPONENTS;
 
 				if (resource->kind == E_WEBDAV_RESOURCE_KIND_COLLECTION)
 					editing_flags |= E_EDITING_FLAG_IS_COLLECTION;
 
 				if (!g_str_has_suffix (resource->href, "/")) {
+					gchar *tmp;
+
 					tmp = g_strconcat (resource->href, "/", NULL);
 
 					g_free (resource->href);
@@ -942,9 +965,13 @@ webdav_browser_gather_href_resources_sync (EWebDAVBrowser *webdav_browser,
 
 				/* Because for example Google server returns the '@' sometimes encoded and sometimes not,
 				   which breaks lookup based on href in the code. */
-				tmp = soup_uri_normalize (resource->href, "@");
-				g_free (resource->href);
-				resource->href = tmp;
+				if (strstr (resource->href, "%40")) {
+					GString *tmp;
+
+					tmp = e_str_replace_string (resource->href, "%40", "@");
+					g_free (resource->href);
+					resource->href = g_string_free (tmp, FALSE);
+				}
 
 				rd = g_slice_new0 (ResourceData);
 				rd->editing_flags = editing_flags;
@@ -1154,22 +1181,21 @@ webdav_browser_search_user_home_thread (EAlertSinkThreadJobData *job_data,
 	source = e_soup_session_get_source (E_SOUP_SESSION (session));
 	if (source && e_source_has_extension (source, E_SOURCE_EXTENSION_WEBDAV_BACKEND)) {
 		ESourceWebdav *webdav_extension;
-		SoupURI *suri;
+		GUri *guri;
 
 		webdav_extension = e_source_get_extension (source, E_SOURCE_EXTENSION_WEBDAV_BACKEND);
-		suri = e_source_webdav_dup_soup_uri (webdav_extension);
+		guri = e_source_webdav_dup_uri (webdav_extension);
 
-		if (suri) {
+		if (guri) {
 			gchar *path;
 
-			soup_uri_set_user (suri, NULL);
-			path = soup_uri_to_string (suri, FALSE);
+			path = g_uri_to_string_partial (guri, G_URI_HIDE_USERINFO | G_URI_HIDE_PASSWORD);
 			if (path) {
 				shd.home_hrefs = g_slist_prepend (shd.home_hrefs, g_strdup (path));
 				g_hash_table_insert (shd.covered_home_hrefs, path, NULL);
 			}
 
-			path = g_strdup (soup_uri_get_path (suri));
+			path = g_strdup (g_uri_get_path (guri));
 			if (path) {
 				gint len, pos;
 				gint levels_back = 0;
@@ -1187,8 +1213,8 @@ webdav_browser_search_user_home_thread (EAlertSinkThreadJobData *job_data,
 
 						path[pos + 1] = '\0';
 
-						soup_uri_set_path (suri, path);
-						shd.todo_hrefs = g_slist_prepend (shd.todo_hrefs, soup_uri_to_string (suri, FALSE));
+						e_util_change_uri_component (&guri, SOUP_URI_PATH, path);
+						shd.todo_hrefs = g_slist_prepend (shd.todo_hrefs, g_uri_to_string_partial (guri, G_URI_HIDE_PASSWORD));
 					}
 				}
 
@@ -1196,19 +1222,18 @@ webdav_browser_search_user_home_thread (EAlertSinkThreadJobData *job_data,
 			}
 		}
 
-		if (suri && (!soup_uri_get_path (suri) || !strstr (soup_uri_get_path (suri), "/.well-known/"))) {
-			soup_uri_set_path (suri, "/.well-known/caldav");
-			shd.todo_hrefs = g_slist_prepend (shd.todo_hrefs, soup_uri_to_string (suri, FALSE));
+		if (guri && (!g_uri_get_path (guri) || !strstr (g_uri_get_path (guri), "/.well-known/"))) {
+			e_util_change_uri_component (&guri, SOUP_URI_PATH, "/.well-known/caldav");
+			shd.todo_hrefs = g_slist_prepend (shd.todo_hrefs, g_uri_to_string_partial (guri, G_URI_HIDE_PASSWORD));
 
-			soup_uri_set_path (suri, "/.well-known/carddav");
-			shd.todo_hrefs = g_slist_prepend (shd.todo_hrefs, soup_uri_to_string (suri, FALSE));
+			e_util_change_uri_component (&guri, SOUP_URI_PATH, "/.well-known/carddav");
+			shd.todo_hrefs = g_slist_prepend (shd.todo_hrefs, g_uri_to_string_partial (guri, G_URI_HIDE_PASSWORD));
 		}
 
-		if (suri) {
-			soup_uri_set_path (suri, "");
-			shd.todo_hrefs = g_slist_prepend (shd.todo_hrefs, soup_uri_to_string (suri, FALSE));
-
-			soup_uri_free (suri);
+		if (guri) {
+			e_util_change_uri_component (&guri, SOUP_URI_PATH, "");
+			shd.todo_hrefs = g_slist_prepend (shd.todo_hrefs, g_uri_to_string_partial (guri, G_URI_HIDE_PASSWORD));
+			g_uri_unref (guri);
 		}
 	}
 
@@ -1251,22 +1276,20 @@ webdav_browser_search_user_home_thread (EAlertSinkThreadJobData *job_data,
 
 	if (!shd.home_hrefs) {
 		ESourceWebdav *webdav_extension;
-		SoupURI *suri;
+		GUri *guri;
 
 		webdav_extension = e_source_get_extension (source, E_SOURCE_EXTENSION_WEBDAV_BACKEND);
-		suri = e_source_webdav_dup_soup_uri (webdav_extension);
+		guri = e_source_webdav_dup_uri (webdav_extension);
 
-		if (suri) {
+		if (guri) {
 			gchar *path;
 
-			soup_uri_set_user (suri, NULL);
-
-			path = g_strdup (soup_uri_get_path (suri));
+			path = g_uri_to_string_partial (guri, G_URI_HIDE_USERINFO | G_URI_HIDE_PASSWORD);
 			if (path) {
 				gint len, pos;
 				gint levels_back = 0;
 
-				shd.home_hrefs = g_slist_prepend (shd.home_hrefs, soup_uri_to_string (suri, FALSE));
+				shd.home_hrefs = g_slist_prepend (shd.home_hrefs, g_strdup (path));
 
 				/* There is no guarantee that the parent folder is a WebDAV collection,
 				   but let's try it, just in case. */
@@ -1283,8 +1306,8 @@ webdav_browser_search_user_home_thread (EAlertSinkThreadJobData *job_data,
 
 						path[pos + 1] = '\0';
 
-						soup_uri_set_path (suri, path);
-						href = soup_uri_to_string (suri, FALSE);
+						e_util_change_uri_component (&guri, SOUP_URI_PATH, path);
+						href = g_uri_to_string_partial (guri, G_URI_HIDE_USERINFO | G_URI_HIDE_PASSWORD);
 
 						if (!g_hash_table_contains (shd.covered_home_hrefs, href))
 							shd.home_hrefs = g_slist_prepend (shd.home_hrefs, href);
@@ -1296,7 +1319,7 @@ webdav_browser_search_user_home_thread (EAlertSinkThreadJobData *job_data,
 				g_free (path);
 			}
 
-			soup_uri_free (suri);
+			g_uri_unref (guri);
 		}
 	}
 
@@ -1701,14 +1724,20 @@ webdav_browser_save_changes_thread (EAlertSinkThreadJobData *job_data,
 			else
 				changes = g_slist_append (changes, e_webdav_property_change_new_remove (E_WEBDAV_NS_CARDDAV, "addressbook-description"));
 		} else if ((scd->supports & (E_WEBDAV_RESOURCE_SUPPORTS_EVENTS | E_WEBDAV_RESOURCE_SUPPORTS_MEMOS | E_WEBDAV_RESOURCE_SUPPORTS_TASKS)) != 0) {
-			gchar *color;
+			if (scd->rgba.alpha <= 1.0 - 1e-9) {
+				changes = g_slist_append (changes, e_webdav_property_change_new_remove (E_WEBDAV_NS_ICAL, "calendar-color"));
+			} else {
+				gchar *color;
 
-			color = g_strdup_printf ("#%02x%02x%02x",
-				(gint) CLAMP (scd->rgba.red * 0xFF, 0, 0xFF),
-				(gint) CLAMP (scd->rgba.green * 0xFF, 0, 0xFF),
-				(gint) CLAMP (scd->rgba.blue * 0xFF, 0, 0xFF));
+				color = g_strdup_printf ("#%02x%02x%02x",
+					(gint) CLAMP (scd->rgba.red * 0xFF, 0, 0xFF),
+					(gint) CLAMP (scd->rgba.green * 0xFF, 0, 0xFF),
+					(gint) CLAMP (scd->rgba.blue * 0xFF, 0, 0xFF));
 
-			changes = g_slist_append (changes, e_webdav_property_change_new_set (E_WEBDAV_NS_ICAL, "calendar-color", color));
+				changes = g_slist_append (changes, e_webdav_property_change_new_set (E_WEBDAV_NS_ICAL, "calendar-color", color));
+
+				g_free (color);
+			}
 
 			if (scd->order >= 0) {
 				gchar order_str[64];
@@ -1724,31 +1753,29 @@ webdav_browser_save_changes_thread (EAlertSinkThreadJobData *job_data,
 				changes = g_slist_append (changes, e_webdav_property_change_new_set (E_WEBDAV_NS_CALDAV, "calendar-description", scd->description));
 			else
 				changes = g_slist_append (changes, e_webdav_property_change_new_remove (E_WEBDAV_NS_CALDAV, "calendar-description"));
-
-			g_free (color);
 		}
 
 		success = e_webdav_session_update_properties_sync (session, scd->href, changes, cancellable, error);
 
 		g_slist_free_full (changes, e_webdav_property_change_free);
 	} else {
-		SoupURI *suri;
+		GUri *guri;
 		GString *path;
 		gchar *encoded;
 
-		suri = soup_uri_new (scd->href);
-		path = g_string_new (soup_uri_get_path (suri));
+		guri = g_uri_parse (scd->href, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+		path = g_string_new (g_uri_get_path (guri));
 
 		if (path->len && path->str[path->len - 1] != '/')
 			g_string_append_c (path, '/');
 
-		encoded = soup_uri_encode (scd->name, NULL);
+		encoded = g_uri_escape_string (scd->name, NULL, FALSE);
 		g_string_append (path, encoded);
 		g_free (encoded);
 
-		soup_uri_set_path (suri, path->str);
+		e_util_change_uri_component (&guri, SOUP_URI_PATH, path->str);
 
-		new_href = soup_uri_to_string (suri, FALSE);
+		new_href = g_uri_to_string_partial (guri, G_URI_HIDE_PASSWORD);
 
 		if ((scd->supports & E_WEBDAV_RESOURCE_SUPPORTS_CONTACTS) != 0) {
 			success = e_webdav_session_mkcol_addressbook_sync (session, new_href,
@@ -1792,7 +1819,7 @@ webdav_browser_save_changes_thread (EAlertSinkThreadJobData *job_data,
 		}
 
 		g_string_free (path, TRUE);
-		soup_uri_free (suri);
+		g_uri_unref (guri);
 	}
 
 	if (success) {
@@ -1916,7 +1943,7 @@ webdav_browser_save_clicked (EWebDAVBrowser *webdav_browser,
 	scd->is_edit = is_edit;
 	scd->load_first = !webdav_browser_get_selected_loaded (webdav_browser);
 	scd->name = text;
-	gtk_color_chooser_get_rgba (GTK_COLOR_CHOOSER (webdav_browser->priv->create_edit_color_chooser), &scd->rgba);
+	e_color_combo_get_current_color (E_COLOR_COMBO (webdav_browser->priv->create_edit_color_combo), &scd->rgba);
 	scd->order = gtk_spin_button_get_value (GTK_SPIN_BUTTON (webdav_browser->priv->create_edit_order_spin));
 	scd->supports = supports;
 	scd->description = gtk_text_buffer_get_text (buffer, &start, &end, FALSE);
@@ -2027,23 +2054,25 @@ webdav_browser_edit_collection_save_clicked_cb (GtkWidget *button,
 
 static void
 webdav_browser_prepare_popover (EWebDAVBrowser *webdav_browser,
-				gboolean for_book,
-				gboolean for_calendar)
+				guint32 editing_flags)
 {
 	GdkRGBA rgba;
+	gboolean for_book = (editing_flags & E_EDITING_FLAG_IS_BOOK) != 0;
+	gboolean for_calendar = (editing_flags & E_EDITING_FLAG_IS_CALENDAR) != 0;
+	gboolean has_calendar_components = (editing_flags & E_EDITING_FLAG_HAS_CALENDAR_COMPONENTS) != 0;
 
 	g_return_if_fail (E_IS_WEBDAV_BROWSER (webdav_browser));
 
 	gtk_widget_hide (webdav_browser->priv->create_edit_popover);
 
 	gtk_widget_set_visible (webdav_browser->priv->create_edit_color_label, for_calendar);
-	gtk_widget_set_visible (webdav_browser->priv->create_edit_color_chooser, for_calendar);
+	gtk_widget_set_visible (webdav_browser->priv->create_edit_color_combo, for_calendar);
 	gtk_widget_set_visible (webdav_browser->priv->create_edit_order_label, for_calendar);
 	gtk_widget_set_visible (webdav_browser->priv->create_edit_order_spin, for_calendar);
-	gtk_widget_set_visible (webdav_browser->priv->create_edit_support_label, for_calendar);
-	gtk_widget_set_visible (webdav_browser->priv->create_edit_event_check, for_calendar);
-	gtk_widget_set_visible (webdav_browser->priv->create_edit_memo_check, for_calendar);
-	gtk_widget_set_visible (webdav_browser->priv->create_edit_task_check, for_calendar);
+	gtk_widget_set_visible (webdav_browser->priv->create_edit_support_label, has_calendar_components);
+	gtk_widget_set_visible (webdav_browser->priv->create_edit_event_check, has_calendar_components);
+	gtk_widget_set_visible (webdav_browser->priv->create_edit_memo_check, has_calendar_components);
+	gtk_widget_set_visible (webdav_browser->priv->create_edit_task_check, has_calendar_components);
 	gtk_widget_set_visible (webdav_browser->priv->create_edit_description_label, for_book || for_calendar);
 	gtk_widget_set_visible (webdav_browser->priv->create_edit_description_scrolled_window, for_book || for_calendar);
 
@@ -2054,13 +2083,13 @@ webdav_browser_prepare_popover (EWebDAVBrowser *webdav_browser,
 
 	gtk_widget_hide (webdav_browser->priv->create_edit_hint_popover);
 
-	rgba.red = 0;
-	rgba.green = 0;
-	rgba.blue = 0;
-	rgba.alpha = 1;
+	rgba.red = 0.0;
+	rgba.green = 0.0;
+	rgba.blue = 0.0;
+	rgba.alpha = 0.001;
 
 	gtk_entry_set_text (GTK_ENTRY (webdav_browser->priv->create_edit_name_entry), "");
-	gtk_color_chooser_set_rgba (GTK_COLOR_CHOOSER (webdav_browser->priv->create_edit_color_chooser), &rgba);
+	e_color_combo_set_current_color (E_COLOR_COMBO (webdav_browser->priv->create_edit_color_combo), &rgba);
 	gtk_spin_button_set_value (GTK_SPIN_BUTTON (webdav_browser->priv->create_edit_order_spin), -1);
 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (webdav_browser->priv->create_edit_event_check), FALSE);
 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (webdav_browser->priv->create_edit_memo_check), FALSE);
@@ -2098,8 +2127,8 @@ webdav_browser_create_clicked_cb (GtkWidget *button,
 	}
 
 	webdav_browser_prepare_popover (webdav_browser,
-		button == webdav_browser->priv->create_book_button,
-		button == webdav_browser->priv->create_calendar_button);
+		(button == webdav_browser->priv->create_book_button ? E_EDITING_FLAG_IS_BOOK : 0) |
+		(button == webdav_browser->priv->create_calendar_button ? E_EDITING_FLAG_IS_CALENDAR | E_EDITING_FLAG_HAS_CALENDAR_COMPONENTS: 0));
 
 	gtk_popover_set_relative_to (GTK_POPOVER (webdav_browser->priv->create_edit_popover), button);
 
@@ -2154,13 +2183,11 @@ webdav_browser_edit_clicked_cb (GtkWidget *button,
 		COLUMN_UINT_SUPPORTS, &supports,
 		-1);
 
-	webdav_browser_prepare_popover (webdav_browser,
-		(editing_flags & E_EDITING_FLAG_IS_BOOK) != 0,
-		(editing_flags & E_EDITING_FLAG_IS_CALENDAR) != 0);
+	webdav_browser_prepare_popover (webdav_browser, editing_flags);
 
-	if ((editing_flags & E_EDITING_FLAG_IS_CALENDAR) != 0) {
-		if (color_is_set && rgba)
-			gtk_color_chooser_set_rgba (GTK_COLOR_CHOOSER (webdav_browser->priv->create_edit_color_chooser), rgba);
+	if ((editing_flags & (E_EDITING_FLAG_IS_CALENDAR | E_EDITING_FLAG_HAS_CALENDAR_COMPONENTS)) != 0) {
+		if (color_is_set && rgba && ((editing_flags & E_EDITING_FLAG_IS_CALENDAR) != 0))
+			e_color_combo_set_current_color (E_COLOR_COMBO (webdav_browser->priv->create_edit_color_combo), rgba);
 
 		gtk_spin_button_set_value (GTK_SPIN_BUTTON (webdav_browser->priv->create_edit_order_spin), order);
 
@@ -2405,20 +2432,20 @@ webdav_browser_refresh (EWebDAVBrowser *webdav_browser)
 	if (webdav_browser->priv->session) {
 		ESource *source;
 		ESourceWebdav *webdav_extension;
-		SoupURI *suri;
+		GUri *guri;
 
 		source = e_soup_session_get_source (E_SOUP_SESSION (webdav_browser->priv->session));
 		g_return_if_fail (E_IS_SOURCE (source));
 		g_return_if_fail (e_source_has_extension (source, E_SOURCE_EXTENSION_WEBDAV_BACKEND));
 
 		webdav_extension = e_source_get_extension (source, E_SOURCE_EXTENSION_WEBDAV_BACKEND);
-		suri = e_source_webdav_dup_soup_uri (webdav_extension);
+		guri = e_source_webdav_dup_uri (webdav_extension);
 
-		g_return_if_fail (suri != NULL);
+		g_return_if_fail (guri != NULL);
 
-		gtk_label_set_text (webdav_browser->priv->url_label, soup_uri_get_host (suri));
+		gtk_label_set_text (webdav_browser->priv->url_label, g_uri_get_host (guri));
 
-		soup_uri_free (suri);
+		g_uri_unref (guri);
 
 		webdav_browser_search_user_home (webdav_browser);
 	} else {
@@ -2543,6 +2570,7 @@ webdav_browser_create_popover (EWebDAVBrowser *webdav_browser)
 {
 	GtkWidget *widget, *label;
 	GtkGrid *grid;
+	GdkRGBA rgba;
 
 	g_return_if_fail (E_IS_WEBDAV_BROWSER (webdav_browser));
 	g_return_if_fail (webdav_browser->priv->create_edit_popover == NULL);
@@ -2568,10 +2596,15 @@ webdav_browser_create_popover (EWebDAVBrowser *webdav_browser)
 	webdav_browser->priv->create_edit_color_label = widget;
 	label = widget;
 
-	widget = gtk_color_button_new ();
+	rgba.red = 0.0;
+	rgba.green = 0.0;
+	rgba.blue = 0.0;
+	rgba.alpha = 0.001;
+
+	widget = e_color_combo_new_defaults (&rgba, C_("ECompEditor", "None"));
 	gtk_label_set_mnemonic_widget (GTK_LABEL (label), widget);
 	gtk_grid_attach (grid, widget, 1, 1, 1, 1);
-	webdav_browser->priv->create_edit_color_chooser = widget;
+	webdav_browser->priv->create_edit_color_combo = widget;
 
 	/* Translators: It's 'order' as 'sorting order' */
 	widget = gtk_label_new_with_mnemonic (_("_Order:"));
@@ -2892,8 +2925,6 @@ e_webdav_browser_class_init (EWebDAVBrowserClass *klass)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (klass, sizeof (EWebDAVBrowserPrivate));
-
 	object_class = G_OBJECT_CLASS (klass);
 	object_class->set_property = webdav_browser_set_property;
 	object_class->get_property = webdav_browser_get_property;
@@ -2948,7 +2979,7 @@ webdav_browser_alert_sink_init (EAlertSinkInterface *iface)
 static void
 e_webdav_browser_init (EWebDAVBrowser *webdav_browser)
 {
-	webdav_browser->priv = G_TYPE_INSTANCE_GET_PRIVATE (webdav_browser, E_TYPE_WEBDAV_BROWSER, EWebDAVBrowserPrivate);
+	webdav_browser->priv = e_webdav_browser_get_instance_private (webdav_browser);
 
 	g_mutex_init (&webdav_browser->priv->property_lock);
 

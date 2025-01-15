@@ -28,12 +28,9 @@
 #include "e-dialog-widgets.h"
 #include "e-misc-utils.h"
 
-#define E_SEARCH_BAR_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_SEARCH_BAR, ESearchBarPrivate))
-
 struct _ESearchBarPrivate {
 	EWebView *web_view;
+	GtkWidget *hide_button;
 	GtkWidget *entry;
 	GtkWidget *case_sensitive_button;
 	GtkWidget *wrapped_next_box;
@@ -47,12 +44,14 @@ struct _ESearchBarPrivate {
 	gchar *active_search;
 
 	gboolean search_forward;
+	gboolean can_hide;
 };
 
 enum {
 	PROP_0,
 	PROP_ACTIVE_SEARCH,
 	PROP_CASE_SENSITIVE,
+	PROP_CAN_HIDE,
 	PROP_TEXT,
 	PROP_WEB_VIEW
 };
@@ -65,10 +64,7 @@ enum {
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE (
-	ESearchBar,
-	e_search_bar,
-	GTK_TYPE_BOX)
+G_DEFINE_TYPE_WITH_PRIVATE (ESearchBar, e_search_bar, GTK_TYPE_BOX)
 
 static void
 search_bar_update_matches (ESearchBar *search_bar,
@@ -261,7 +257,7 @@ web_view_load_changed_cb (WebKitWebView *webkit_web_view,
 	if (load_event != WEBKIT_LOAD_FINISHED)
 		return;
 
-	if (gtk_widget_get_visible (GTK_WIDGET (search_bar))) {
+	if (gtk_widget_is_visible (GTK_WIDGET (search_bar))) {
 		if (search_bar->priv->active_search != NULL) {
 			e_web_view_disable_highlights (search_bar->priv->web_view);
 			search_bar_find (search_bar, TRUE);
@@ -307,6 +303,12 @@ search_bar_set_property (GObject *object,
                          GParamSpec *pspec)
 {
 	switch (property_id) {
+		case PROP_CAN_HIDE:
+			e_search_bar_set_can_hide (
+				E_SEARCH_BAR (object),
+				g_value_get_boolean (value));
+			return;
+
 		case PROP_CASE_SENSITIVE:
 			e_search_bar_set_case_sensitive (
 				E_SEARCH_BAR (object),
@@ -342,6 +344,12 @@ search_bar_get_property (GObject *object,
 				E_SEARCH_BAR (object)));
 			return;
 
+		case PROP_CAN_HIDE:
+			g_value_set_boolean (
+				value, e_search_bar_get_can_hide (
+				E_SEARCH_BAR (object)));
+			return;
+
 		case PROP_CASE_SENSITIVE:
 			g_value_set_boolean (
 				value, e_search_bar_get_case_sensitive (
@@ -367,24 +375,21 @@ search_bar_get_property (GObject *object,
 static void
 search_bar_dispose (GObject *object)
 {
-	ESearchBarPrivate *priv;
+	ESearchBar *self = E_SEARCH_BAR (object);
 
-	priv = E_SEARCH_BAR_GET_PRIVATE (object);
-
-	if (priv->web_view != NULL) {
-		g_signal_handlers_disconnect_by_data (priv->web_view, object);
-
-		g_object_unref (priv->web_view);
-		priv->web_view = NULL;
+	if (self->priv->web_view) {
+		g_signal_handlers_disconnect_by_data (self->priv->web_view, object);
+		g_clear_object (&self->priv->web_view);
 	}
 
-	g_clear_object (&priv->entry);
-	g_clear_object (&priv->case_sensitive_button);
-	g_clear_object (&priv->prev_button);
-	g_clear_object (&priv->next_button);
-	g_clear_object (&priv->wrapped_next_box);
-	g_clear_object (&priv->wrapped_prev_box);
-	g_clear_object (&priv->matches_label);
+	g_clear_object (&self->priv->hide_button);
+	g_clear_object (&self->priv->entry);
+	g_clear_object (&self->priv->case_sensitive_button);
+	g_clear_object (&self->priv->prev_button);
+	g_clear_object (&self->priv->next_button);
+	g_clear_object (&self->priv->wrapped_next_box);
+	g_clear_object (&self->priv->wrapped_prev_box);
+	g_clear_object (&self->priv->matches_label);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_search_bar_parent_class)->dispose (object);
@@ -393,11 +398,9 @@ search_bar_dispose (GObject *object)
 static void
 search_bar_finalize (GObject *object)
 {
-	ESearchBarPrivate *priv;
+	ESearchBar *self = E_SEARCH_BAR (object);
 
-	priv = E_SEARCH_BAR_GET_PRIVATE (object);
-
-	g_free (priv->active_search);
+	g_free (self->priv->active_search);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_search_bar_parent_class)->finalize (object);
@@ -406,13 +409,11 @@ search_bar_finalize (GObject *object)
 static void
 search_bar_constructed (GObject *object)
 {
-	ESearchBarPrivate *priv;
-
-	priv = E_SEARCH_BAR_GET_PRIVATE (object);
+	ESearchBar *self = E_SEARCH_BAR (object);
 
 	e_binding_bind_property (
 		object, "case-sensitive",
-		priv->case_sensitive_button, "active",
+		self->priv->case_sensitive_button, "active",
 		G_BINDING_BIDIRECTIONAL |
 		G_BINDING_SYNC_CREATE);
 
@@ -459,7 +460,8 @@ search_bar_key_press_event (GtkWidget *widget,
 {
 	GtkWidgetClass *widget_class;
 
-	if (event->keyval == GDK_KEY_Escape) {
+	if (event->keyval == GDK_KEY_Escape &&
+	    e_search_bar_get_can_hide (E_SEARCH_BAR (widget))) {
 		gtk_widget_hide (widget);
 		return TRUE;
 	}
@@ -492,8 +494,6 @@ e_search_bar_class_init (ESearchBarClass *class)
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
 
-	g_type_class_add_private (class, sizeof (ESearchBarPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = search_bar_set_property;
 	object_class->get_property = search_bar_get_property;
@@ -517,6 +517,16 @@ e_search_bar_class_init (ESearchBarClass *class)
 			NULL,
 			FALSE,
 			G_PARAM_READABLE));
+
+	g_object_class_install_property (
+		object_class,
+		PROP_CAN_HIDE,
+		g_param_spec_boolean (
+			"can-hide",
+			"Can Hide",
+			NULL,
+			TRUE,
+			G_PARAM_READWRITE));
 
 	g_object_class_install_property (
 		object_class,
@@ -575,7 +585,8 @@ e_search_bar_init (ESearchBar *search_bar)
 	GtkWidget *widget;
 	GtkWidget *container;
 
-	search_bar->priv = E_SEARCH_BAR_GET_PRIVATE (search_bar);
+	search_bar->priv = e_search_bar_get_instance_private (search_bar);
+	search_bar->priv->can_hide = TRUE;
 
 	gtk_box_set_spacing (GTK_BOX (search_bar), 12);
 	gtk_container_set_border_width (GTK_CONTAINER (search_bar), 6);
@@ -596,6 +607,7 @@ e_search_bar_init (ESearchBar *search_bar)
 	gtk_button_set_relief (GTK_BUTTON (widget), GTK_RELIEF_NONE);
 	gtk_widget_set_tooltip_text (widget, _("Close the find bar"));
 	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+	search_bar->priv->hide_button = g_object_ref (widget);
 	gtk_widget_show (widget);
 
 	g_signal_connect_swapped (
@@ -824,4 +836,41 @@ e_search_bar_set_text (ESearchBar *search_bar,
 
 	/* This will trigger a "notify::text" signal. */
 	gtk_entry_set_text (entry, text);
+}
+
+gboolean
+e_search_bar_get_can_hide (ESearchBar *search_bar)
+{
+	g_return_val_if_fail (E_IS_SEARCH_BAR (search_bar), FALSE);
+
+	return search_bar->priv->can_hide;
+}
+
+void
+e_search_bar_set_can_hide (ESearchBar *search_bar,
+			   gboolean can_hide)
+{
+	g_return_if_fail (E_IS_SEARCH_BAR (search_bar));
+
+	if (!search_bar->priv->can_hide == !can_hide)
+		return;
+
+	search_bar->priv->can_hide = can_hide;
+
+	gtk_widget_set_visible (search_bar->priv->hide_button, can_hide);
+	if (!can_hide)
+		gtk_widget_show (GTK_WIDGET (search_bar));
+
+	g_object_notify (G_OBJECT (search_bar), "can-hide");
+}
+
+void
+e_search_bar_focus_entry (ESearchBar *search_bar)
+{
+	g_return_if_fail (E_IS_SEARCH_BAR (search_bar));
+
+	if (!gtk_widget_get_visible (GTK_WIDGET (search_bar)))
+		return;
+
+	gtk_widget_grab_focus (search_bar->priv->entry);
 }

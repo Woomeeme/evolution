@@ -23,16 +23,13 @@
 
 #include <libebackend/libebackend.h>
 
-#include <shell/e-shell.h>
-#include <shell/e-shell-window.h>
+#include "shell/e-shell.h"
+#include "shell/e-shell-window.h"
+#include "libemail-engine/libemail-engine.h"
 
 #include "e-mail-parser-extension.h"
 #include "e-mail-part-attachment.h"
 #include "e-mail-part-utils.h"
-
-#define E_MAIL_PARSER_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_PARSER, EMailParserPrivate))
 
 #define d(x)
 
@@ -76,8 +73,18 @@ GType e_mail_parser_text_plain_get_type (void);
 #ifdef ENABLE_SMIME
 GType e_mail_parser_application_smime_get_type (void);
 #endif
+#ifdef HAVE_MARKDOWN
+GType e_mail_parser_text_markdown_get_type (void);
+#endif
 
-static gpointer parent_class;
+static gpointer e_mail_parser_parent_class = NULL;
+static gint EMailParser_private_offset = 0;
+
+static inline gpointer
+e_mail_parser_get_instance_private (EMailParser *self)
+{
+	return (G_STRUCT_MEMBER_P (self, EMailParser_private_offset));
+}
 
 static void
 mail_parser_move_security_before_headers (GQueue *part_queue)
@@ -141,6 +148,78 @@ mail_parser_move_security_before_headers (GQueue *part_queue)
 }
 
 static void
+e_mail_parser_extract_autocrypt_keys (CamelMimeMessage *message,
+				      EMailPartList *part_list,
+				      GCancellable *cancellable)
+{
+	GPtrArray *keys = NULL;
+	CamelGpgContext *gpgctx = NULL;
+	gboolean done = FALSE;
+	guint idx;
+
+	for (idx = 0; !done; idx++) {
+		guint8 *keydata = NULL;
+		gsize keydata_size = 0;
+
+		done = !em_utils_decode_autocrypt_header (message, idx, NULL, &keydata, &keydata_size);
+
+		if (!done && keydata) {
+			GSList *infos = NULL, *link;
+			gboolean keydata_used = FALSE;
+
+			if (!gpgctx)
+				gpgctx = CAMEL_GPG_CONTEXT (camel_gpg_context_new (NULL));
+
+			if (camel_gpg_context_get_key_data_info_sync (gpgctx, keydata, keydata_size, 0, &infos, cancellable, NULL) && infos) {
+				for (link = infos; link && !g_cancellable_is_cancelled (cancellable); link = g_slist_next (link)) {
+					CamelGpgKeyInfo *nfo = link->data;
+
+					if (nfo && keys) {
+						guint ii;
+
+						for (ii = 0; ii < keys->len; ii++) {
+							EMailAutocryptKey *ackey = g_ptr_array_index (keys, ii);
+
+							if (ackey && ackey->info &&
+							    g_strcmp0 (camel_gpg_key_info_get_id (ackey->info), camel_gpg_key_info_get_id (nfo)) == 0) {
+								/* a key with the same ID is already part of the 'keys' => skip it */
+								nfo = NULL;
+								break;
+							}
+						}
+					}
+
+					/* add it only if the key is not already imported */
+					if (nfo && !camel_gpg_context_has_public_key_sync (gpgctx, camel_gpg_key_info_get_id (nfo), cancellable, NULL)) {
+						EMailAutocryptKey *ackey;
+
+						ackey = e_mail_autocrypt_key_new (nfo, keydata_used ? g_memdup2 (keydata, keydata_size) : keydata, keydata_size);
+
+						if (!keys)
+							keys = g_ptr_array_new_with_free_func ((GDestroyNotify) e_mail_autocrypt_key_free);
+
+						g_ptr_array_add (keys, ackey);
+
+						/* stole the nfo */
+						link->data = NULL;
+						keydata_used = TRUE;
+					}
+				}
+
+				g_slist_free_full (infos, (GDestroyNotify) camel_gpg_key_info_free);
+			}
+
+			if (!keydata_used)
+				g_free (keydata);
+		}
+	}
+
+	g_clear_object (&gpgctx);
+
+	e_mail_part_list_take_autocrypt_keys (part_list, keys);
+}
+
+static void
 mail_parser_run (EMailParser *parser,
                  EMailPartList *part_list,
                  GCancellable *cancellable)
@@ -163,6 +242,7 @@ mail_parser_run (EMailParser *parser,
 	g_mutex_unlock (&parser->priv->mutex);
 
 	message = e_mail_part_list_get_message (part_list);
+	e_mail_parser_extract_autocrypt_keys (message, part_list, cancellable);
 
 	reg = e_mail_parser_get_extension_registry (parser);
 
@@ -278,16 +358,14 @@ e_mail_parser_get_property (GObject *object,
 static void
 e_mail_parser_finalize (GObject *object)
 {
-	EMailParserPrivate *priv;
+	EMailParser *self = E_MAIL_PARSER (object);
 
-	priv = E_MAIL_PARSER_GET_PRIVATE (object);
-
-	g_clear_object (&priv->session);
-	g_hash_table_destroy (priv->ongoing_part_lists);
-	g_mutex_clear (&priv->mutex);
+	g_clear_object (&self->priv->session);
+	g_hash_table_destroy (self->priv->ongoing_part_lists);
+	g_mutex_clear (&self->priv->mutex);
 
 	/* Chain up to parent's finalize() method. */
-	G_OBJECT_CLASS (parent_class)->finalize (object);
+	G_OBJECT_CLASS (e_mail_parser_parent_class)->finalize (object);
 }
 
 static void
@@ -323,6 +401,9 @@ e_mail_parser_base_init (EMailParserClass *class)
 #ifdef ENABLE_SMIME
 	g_type_ensure (e_mail_parser_application_smime_get_type ());
 #endif
+#ifdef HAVE_MARKDOWN
+	g_type_ensure (e_mail_parser_text_markdown_get_type ());
+#endif
 
 	class->extension_registry = g_object_new (
 		E_TYPE_MAIL_PARSER_EXTENSION_REGISTRY, NULL);
@@ -342,8 +423,9 @@ e_mail_parser_class_init (EMailParserClass *class)
 {
 	GObjectClass *object_class;
 
-	parent_class = g_type_class_peek_parent (class);
-	g_type_class_add_private (class, sizeof (EMailParserPrivate));
+	e_mail_parser_parent_class = g_type_class_peek_parent (class);
+	if (EMailParser_private_offset != 0)
+		g_type_class_adjust_private_offset (class, &EMailParser_private_offset);
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->finalize = e_mail_parser_finalize;
@@ -365,7 +447,7 @@ e_mail_parser_class_init (EMailParserClass *class)
 static void
 e_mail_parser_init (EMailParser *parser)
 {
-	parser->priv = E_MAIL_PARSER_GET_PRIVATE (parser);
+	parser->priv = e_mail_parser_get_instance_private (parser);
 	parser->priv->ongoing_part_lists = g_hash_table_new (g_direct_hash, g_direct_equal);
 
 	g_mutex_init (&parser->priv->mutex);
@@ -393,6 +475,8 @@ e_mail_parser_get_type (void)
 		type = g_type_register_static (
 			G_TYPE_OBJECT, "EMailParser",
 			&type_info, 0);
+
+		EMailParser_private_offset = g_type_add_instance_private (type, sizeof (EMailParserPrivate));
 	}
 
 	return type;
@@ -474,17 +558,18 @@ e_mail_parser_parse_sync (EMailParser *parser,
 }
 
 static void
-mail_parser_parse_thread (GSimpleAsyncResult *simple,
-                          GObject *source_object,
+mail_parser_parse_thread (GTask *task,
+                          gpointer source_object,
+                          gpointer task_data,
                           GCancellable *cancellable)
 {
-	EMailPartList *part_list;
-
-	part_list = g_simple_async_result_get_op_res_gpointer (simple);
+	EMailPartList *part_list = task_data;
 
 	mail_parser_run (
 		E_MAIL_PARSER (source_object),
 		part_list, cancellable);
+
+	g_task_return_pointer (task, g_object_ref (part_list), g_object_unref);
 }
 
 /**
@@ -506,7 +591,7 @@ e_mail_parser_parse (EMailParser *parser,
                      GCancellable *cancellable,
                      gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	EMailPartList *part_list;
 
 	g_return_if_fail (E_IS_MAIL_PARSER (parser));
@@ -514,20 +599,13 @@ e_mail_parser_parse (EMailParser *parser,
 
 	part_list = e_mail_part_list_new (message, message_uid, folder);
 
-	simple = g_simple_async_result_new (
-		G_OBJECT (parser), callback,
-		user_data, e_mail_parser_parse);
+	task = g_task_new (parser, cancellable, callback, user_data);
+	g_task_set_source_tag (task, e_mail_parser_parse);
+	g_task_set_task_data (task, part_list, g_object_unref);
 
-	g_simple_async_result_set_check_cancellable (simple, cancellable);
+	g_task_run_in_thread (task, mail_parser_parse_thread);
 
-	g_simple_async_result_set_op_res_gpointer (
-		simple, part_list, (GDestroyNotify) g_object_unref);
-
-	g_simple_async_result_run_in_thread (
-		simple, mail_parser_parse_thread,
-		G_PRIORITY_DEFAULT, cancellable);
-
-	g_object_unref (simple);
+	g_object_unref (task);
 }
 
 EMailPartList *
@@ -535,16 +613,12 @@ e_mail_parser_parse_finish (EMailParser *parser,
                             GAsyncResult *result,
                             GError **error)
 {
-	GSimpleAsyncResult *simple;
 	EMailPartList *part_list;
 
-	g_return_val_if_fail (
-		g_simple_async_result_is_valid (
-		result, G_OBJECT (parser), e_mail_parser_parse), NULL);
+	g_return_val_if_fail (g_task_is_valid (result, parser), FALSE);
+	g_return_val_if_fail (g_async_result_is_tagged (result, e_mail_parser_parse), FALSE);
 
-	simple = G_SIMPLE_ASYNC_RESULT (result);
-	part_list = g_simple_async_result_get_op_res_gpointer (simple);
-
+	part_list = g_task_propagate_pointer (G_TASK (result), error);
 	if (camel_debug_start ("emformat:parser")) {
 		GQueue queue = G_QUEUE_INIT;
 
@@ -785,10 +859,9 @@ e_mail_parser_wrap_as_attachment (EMailParser *parser,
 	EMailPartAttachment *empa;
 	EAttachment *attachment;
 	EMailPart *first_part;
-	const gchar *snoop_mime_type;
+	gchar *guessed_mime_type = NULL;
 	GQueue *extensions;
 	CamelContentType *ct;
-	gchar *mime_type;
 	CamelDataWrapper *dw;
 	GByteArray *ba;
 	gsize size;
@@ -796,9 +869,10 @@ e_mail_parser_wrap_as_attachment (EMailParser *parser,
 
 	ct = camel_mime_part_get_content_type (part);
 	extensions = NULL;
-	snoop_mime_type = NULL;
 	if (ct) {
 		EMailExtensionRegistry *reg;
+		gchar *mime_type;
+
 		mime_type = camel_content_type_simple (ct);
 
 		reg = e_mail_parser_get_extension_registry (parser);
@@ -807,25 +881,22 @@ e_mail_parser_wrap_as_attachment (EMailParser *parser,
 
 		if (camel_content_type_is (ct, "text", "*") ||
 		    camel_content_type_is (ct, "message", "*"))
-			snoop_mime_type = mime_type;
+			guessed_mime_type = mime_type;
 		else
 			g_free (mime_type);
 	}
 
-	if (!snoop_mime_type)
-		snoop_mime_type = e_mail_part_snoop_type (part);
+	if (!guessed_mime_type)
+		guessed_mime_type = e_mail_part_guess_mime_type (part);
 
 	if (!extensions) {
 		EMailExtensionRegistry *reg;
 
 		reg = e_mail_parser_get_extension_registry (parser);
-		extensions = e_mail_extension_registry_get_for_mime_type (
-			reg, snoop_mime_type);
+		extensions = e_mail_extension_registry_get_for_mime_type (reg, guessed_mime_type);
 
-		if (!extensions) {
-			extensions = e_mail_extension_registry_get_fallback (
-				reg, snoop_mime_type);
-		}
+		if (!extensions)
+			extensions = e_mail_extension_registry_get_fallback (reg, guessed_mime_type);
 	}
 
 	part_id_len = part_id->len;
@@ -834,7 +905,7 @@ e_mail_parser_wrap_as_attachment (EMailParser *parser,
 	empa = e_mail_part_attachment_new (part, part_id->str);
 	empa->shown = extensions && (!g_queue_is_empty (extensions) &&
 		e_mail_part_is_inline (part, extensions));
-	empa->snoop_mime_type = snoop_mime_type;
+	e_mail_part_attachment_take_guessed_mime_type (empa, guessed_mime_type);
 
 	first_part = g_queue_peek_head (parts_queue);
 	if (first_part != NULL && !E_IS_MAIL_PART_ATTACHMENT (first_part)) {
@@ -877,8 +948,7 @@ e_mail_parser_wrap_as_attachment (EMailParser *parser,
 
 		if (file_info == NULL) {
 			file_info = g_file_info_new ();
-			g_file_info_set_content_type (
-				file_info, empa->snoop_mime_type);
+			g_file_info_set_content_type (file_info, e_mail_part_attachment_get_guessed_mime_type (empa));
 		}
 
 		g_file_info_set_size (file_info, size);

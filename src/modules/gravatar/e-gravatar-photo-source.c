@@ -15,19 +15,17 @@
  *
  */
 
-#include "e-gravatar-photo-source.h"
+#include "evolution-config.h"
 
 #include <libsoup/soup.h>
 #include <libedataserver/libedataserver.h>
 
-#define E_GRAVATAR_PHOTO_SOURCE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_GRAVATAR_PHOTO_SOURCE, EGravatarPhotoSourcePrivate))
+#include "e-util/e-util.h"
+#include "e-gravatar-photo-source.h"
 
 #define AVATAR_BASE_URI "https://seccdn.libravatar.org/avatar/"
 
-struct _EGravatarPhotoSourcePrivate
-{
+struct _EGravatarPhotoSourcePrivate {
 	gboolean enabled;
 };
 
@@ -47,14 +45,9 @@ struct _AsyncContext {
 static void	e_gravatar_photo_source_interface_init
 					(EPhotoSourceInterface *iface);
 
-G_DEFINE_DYNAMIC_TYPE_EXTENDED (
-	EGravatarPhotoSource,
-	e_gravatar_photo_source,
-	G_TYPE_OBJECT,
-	0,
-	G_IMPLEMENT_INTERFACE_DYNAMIC (
-		E_TYPE_PHOTO_SOURCE,
-		e_gravatar_photo_source_interface_init))
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (EGravatarPhotoSource, e_gravatar_photo_source, G_TYPE_OBJECT, 0,
+	G_ADD_PRIVATE_DYNAMIC (EGravatarPhotoSource)
+	G_IMPLEMENT_INTERFACE_DYNAMIC (E_TYPE_PHOTO_SOURCE, e_gravatar_photo_source_interface_init))
 
 static void
 async_context_free (AsyncContext *async_context)
@@ -66,12 +59,12 @@ async_context_free (AsyncContext *async_context)
 }
 
 static void
-gravatar_photo_source_get_photo_thread (GSimpleAsyncResult *simple,
-                                        GObject *source_object,
+gravatar_photo_source_get_photo_thread (ESimpleAsyncResult *simple,
+                                        gpointer source_object,
                                         GCancellable *cancellable)
 {
 	AsyncContext *async_context;
-	SoupRequest *request;
+	SoupMessage *message;
 	SoupSession *session;
 	GInputStream *stream = NULL;
 	gchar *hash;
@@ -83,7 +76,7 @@ gravatar_photo_source_get_photo_thread (GSimpleAsyncResult *simple,
 	if (!e_gravatar_photo_source_get_enabled (E_GRAVATAR_PHOTO_SOURCE (source_object)))
 		return;
 
-	async_context = g_simple_async_result_get_op_res_gpointer (simple);
+	async_context = e_simple_async_result_get_op_pointer (simple);
 
 	hash = e_gravatar_get_hash (async_context->email_address);
 	uri = g_strdup_printf ("%s%s?d=404", AVATAR_BASE_URI, hash);
@@ -94,10 +87,10 @@ gravatar_photo_source_get_photo_thread (GSimpleAsyncResult *simple,
 	session = soup_session_new ();
 
 	/* We control the URI so there should be no error. */
-	request = soup_session_request (session, uri, NULL);
-	g_return_if_fail (request != NULL);
+	message = soup_message_new (SOUP_METHOD_GET, uri);
+	g_return_if_fail (message != NULL);
 
-	stream = soup_request_send (request, cancellable, &local_error);
+	stream = soup_session_send (session, message, cancellable, &local_error);
 
 	/* Sanity check. */
 	g_return_if_fail (
@@ -108,22 +101,16 @@ gravatar_photo_source_get_photo_thread (GSimpleAsyncResult *simple,
 	 *     We need to check the status code on the SoupMessage
 	 *     to make sure the we're not getting an error message. */
 	if (stream != NULL) {
-		SoupMessage *message;
-
-		message = soup_request_http_get_message (
-			SOUP_REQUEST_HTTP (request));
-
-		if (SOUP_STATUS_IS_SUCCESSFUL (message->status_code)) {
+		if (SOUP_STATUS_IS_SUCCESSFUL (soup_message_get_status (message))) {
 			async_context->stream = g_object_ref (stream);
 
-		} else if (message->status_code != SOUP_STATUS_NOT_FOUND) {
+		} else if (soup_message_get_status (message) != SOUP_STATUS_NOT_FOUND) {
 			local_error = g_error_new_literal (
-				SOUP_HTTP_ERROR,
-				message->status_code,
-				message->reason_phrase);
+				E_SOUP_SESSION_ERROR,
+				soup_message_get_status (message),
+				soup_message_get_reason_phrase (message));
 		}
 
-		g_object_unref (message);
 		g_object_unref (stream);
 	}
 
@@ -132,12 +119,12 @@ gravatar_photo_source_get_photo_thread (GSimpleAsyncResult *simple,
 
 		domain = g_quark_to_string (local_error->domain);
 		g_debug ("Error: %s (%s)", local_error->message, domain);
-		g_simple_async_result_take_error (simple, local_error);
+		e_simple_async_result_take_error (simple, local_error);
 	}
 
 	g_debug ("Request complete");
 
-	g_clear_object (&request);
+	g_clear_object (&message);
 	g_clear_object (&session);
 
 	g_free (hash);
@@ -151,24 +138,24 @@ gravatar_photo_source_get_photo (EPhotoSource *photo_source,
                                  GAsyncReadyCallback callback,
                                  gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	ESimpleAsyncResult *simple;
 	AsyncContext *async_context;
 
 	async_context = g_slice_new0 (AsyncContext);
 	async_context->email_address = g_strdup (email_address);
 
-	simple = g_simple_async_result_new (
+	simple = e_simple_async_result_new (
 		G_OBJECT (photo_source), callback,
 		user_data, gravatar_photo_source_get_photo);
 
-	g_simple_async_result_set_check_cancellable (simple, cancellable);
+	e_simple_async_result_set_check_cancellable (simple, cancellable);
 
-	g_simple_async_result_set_op_res_gpointer (
+	e_simple_async_result_set_op_pointer (
 		simple, async_context, (GDestroyNotify) async_context_free);
 
-	g_simple_async_result_run_in_thread (
-		simple, gravatar_photo_source_get_photo_thread,
-		G_PRIORITY_DEFAULT, cancellable);
+	e_simple_async_result_run_in_thread (
+		simple, G_PRIORITY_LOW,
+		gravatar_photo_source_get_photo_thread, cancellable);
 
 	g_object_unref (simple);
 }
@@ -180,18 +167,18 @@ gravatar_photo_source_get_photo_finish (EPhotoSource *photo_source,
                                         gint *out_priority,
                                         GError **error)
 {
-	GSimpleAsyncResult *simple;
+	ESimpleAsyncResult *simple;
 	AsyncContext *async_context;
 
 	g_return_val_if_fail (
-		g_simple_async_result_is_valid (
+		e_simple_async_result_is_valid (
 		result, G_OBJECT (photo_source),
 		gravatar_photo_source_get_photo), FALSE);
 
-	simple = G_SIMPLE_ASYNC_RESULT (result);
-	async_context = g_simple_async_result_get_op_res_gpointer (simple);
+	simple = E_SIMPLE_ASYNC_RESULT (result);
+	async_context = e_simple_async_result_get_op_pointer (simple);
 
-	if (g_simple_async_result_propagate_error (simple, error))
+	if (e_simple_async_result_propagate_error (simple, error))
 		return FALSE;
 
 	if (async_context->stream != NULL) {
@@ -245,8 +232,6 @@ e_gravatar_photo_source_class_init (EGravatarPhotoSourceClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (EGravatarPhotoSourcePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = gravatar_photo_source_set_property;
 	object_class->get_property = gravatar_photo_source_get_property;
@@ -280,7 +265,7 @@ e_gravatar_photo_source_init (EGravatarPhotoSource *photo_source)
 {
 	GSettings *settings;
 
-	photo_source->priv = E_GRAVATAR_PHOTO_SOURCE_GET_PRIVATE (photo_source);
+	photo_source->priv = e_gravatar_photo_source_get_instance_private (photo_source);
 
 	settings = e_util_ref_settings ("org.gnome.evolution.mail");
 

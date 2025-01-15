@@ -37,10 +37,6 @@
 
 #define d(x)
 
-#define EM_FOLDER_SELECTOR_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), EM_TYPE_FOLDER_SELECTOR, EMFolderSelectorPrivate))
-
 #define DEFAULT_BUTTON_LABEL N_("_OK")
 
 struct _EMFolderSelectorPrivate {
@@ -50,6 +46,9 @@ struct _EMFolderSelectorPrivate {
 	GtkWidget *caption_label;
 	GtkWidget *content_area;
 	GtkWidget *tree_view_frame;
+	GtkWidget *folder_tree_view;
+	GtkWidget *search_tree_view;
+	gchar *search_text; /* case-folded search text */
 
 	gchar *selected_uri;
 
@@ -79,13 +78,291 @@ static guint signals[LAST_SIGNAL];
 static void	em_folder_selector_alert_sink_init
 					(EAlertSinkInterface *interface);
 
-G_DEFINE_TYPE_WITH_CODE (
-	EMFolderSelector,
-	em_folder_selector,
-	GTK_TYPE_DIALOG,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_ALERT_SINK,
-		em_folder_selector_alert_sink_init))
+G_DEFINE_TYPE_WITH_CODE (EMFolderSelector, em_folder_selector, GTK_TYPE_DIALOG,
+	G_ADD_PRIVATE (EMFolderSelector)
+	G_IMPLEMENT_INTERFACE (E_TYPE_ALERT_SINK, em_folder_selector_alert_sink_init))
+
+enum {
+	FILTER_COL_STRING_DISPLAY_NAME,
+	FILTER_COL_OBJECT_STORE,
+	FILTER_COL_STRING_FOLDER_NAME,
+	FILTER_COL_STRING_CASEFOLDED_NAME,
+	FILTER_COL_STRING_ICON_NAME,
+	FILTER_COL_GICON_CUSTOM_ICON,
+	N_FILTER_COLS
+};
+
+static void
+folder_selector_search_row_activated_cb (GtkTreeView *tree_view,
+					 GtkTreePath *path,
+					 GtkTreeViewColumn *column,
+					 gpointer user_data)
+{
+	EMFolderSelector *selector = user_data;
+	GtkTreeModel *model;
+	GtkTreeIter iter;
+	CamelStore *store;
+	gchar *folder_name;
+
+	model = gtk_tree_view_get_model (tree_view);
+
+	if (!gtk_tree_model_get_iter (model, &iter, path))
+		return;
+
+	gtk_tree_model_get (model, &iter,
+		FILTER_COL_OBJECT_STORE, &store,
+		FILTER_COL_STRING_FOLDER_NAME, &folder_name,
+		-1);
+
+	em_folder_selector_set_selected (selector, store, folder_name);
+
+	g_clear_object (&store);
+	g_free (folder_name);
+
+	gtk_dialog_response (GTK_DIALOG (selector), GTK_RESPONSE_OK);
+}
+
+static void
+folder_selector_search_selection_changed_cb (GtkTreeSelection *selection,
+					     gpointer user_data)
+{
+	EMFolderSelector *selector = user_data;
+	GtkTreeModel *model;
+	GtkTreeIter iter;
+	CamelStore *store;
+	gchar *folder_name;
+
+	if (!gtk_tree_selection_get_selected (selection, &model, &iter)) {
+		g_signal_emit (selector, signals[FOLDER_SELECTED], 0, NULL, NULL);
+		return;
+	}
+
+	gtk_tree_model_get (model, &iter,
+		FILTER_COL_OBJECT_STORE, &store,
+		FILTER_COL_STRING_FOLDER_NAME, &folder_name,
+		-1);
+
+	em_folder_selector_set_selected (selector, store, folder_name);
+
+	g_clear_object (&store);
+	g_free (folder_name);
+}
+
+static void
+folder_selector_render_icon (GtkTreeViewColumn *column,
+			     GtkCellRenderer *renderer,
+			     GtkTreeModel *model,
+			     GtkTreeIter *iter,
+			     gpointer user_data)
+{
+	GIcon *icon, *custom_icon = NULL;
+	gchar *icon_name = NULL;
+
+	gtk_tree_model_get (model, iter,
+		FILTER_COL_STRING_ICON_NAME, &icon_name,
+		FILTER_COL_GICON_CUSTOM_ICON, &custom_icon,
+		-1);
+
+	if (!icon_name && !custom_icon)
+		return;
+
+	if (custom_icon)
+		icon = g_object_ref (custom_icon);
+	else
+		icon = g_themed_icon_new (icon_name);
+
+	g_object_set (renderer, "gicon", icon, NULL);
+
+	g_clear_object (&custom_icon);
+	g_object_unref (icon);
+	g_free (icon_name);
+}
+
+static gboolean
+folder_selector_filter_model_cb (GtkTreeModel *tree_model,
+				 GtkTreeIter *iter,
+				 gpointer user_data)
+{
+	EMFolderSelector *selector = user_data;
+	gchar *casefolded;
+	gboolean match;
+
+	/* If there's no search string let everything through. */
+	if (!selector->priv->search_text)
+		return TRUE;
+
+	gtk_tree_model_get (tree_model, iter,
+		FILTER_COL_STRING_CASEFOLDED_NAME, &casefolded,
+		-1);
+
+	match = (casefolded != NULL) && (*casefolded != '\0') &&
+		(strstr (casefolded, selector->priv->search_text) != NULL);
+
+	g_free (casefolded);
+
+	return match;
+}
+
+static gboolean
+folder_selector_traverse_model_cb (GtkTreeModel *model,
+				   GtkTreePath *path,
+				   GtkTreeIter *iter,
+				   gpointer user_data)
+{
+	GtkListStore *list_store = user_data;
+	CamelStore *store = NULL;
+	GIcon *icon_obj = NULL;
+	guint folder_flags = 0;
+	gchar *display_name = NULL;
+	gchar *full_name = NULL;
+	gchar *icon_name = NULL;
+	gboolean is_folder = FALSE;
+
+	gtk_tree_model_get (model, iter,
+		COL_BOOL_IS_FOLDER, &is_folder,
+		COL_UINT_FLAGS, &folder_flags,
+		-1);
+
+	if (is_folder && !(folder_flags & CAMEL_FOLDER_NOSELECT)) {
+		gtk_tree_model_get (model, iter,
+			COL_STRING_DISPLAY_NAME, &display_name,
+			COL_OBJECT_CAMEL_STORE, &store,
+			COL_STRING_FULL_NAME, &full_name,
+			COL_STRING_ICON_NAME, &icon_name,
+			COL_GICON_CUSTOM_ICON, &icon_obj,
+			-1);
+
+		if (display_name && store && full_name) {
+			GtkTreeIter added;
+			gboolean is_path;
+			gchar *casefolded;
+			gchar *tmp;
+
+			is_path = strchr (full_name, '/') != NULL;
+			tmp = g_strdup_printf ("%s : %s", camel_service_get_display_name (CAMEL_SERVICE (store)),
+				is_path ? full_name : display_name);
+			casefolded = g_utf8_casefold (is_path ? full_name : display_name, -1);
+
+			gtk_list_store_append (list_store, &added);
+			gtk_list_store_set (list_store, &added,
+				FILTER_COL_STRING_DISPLAY_NAME, tmp,
+				FILTER_COL_OBJECT_STORE, store,
+				FILTER_COL_STRING_FOLDER_NAME, full_name,
+				FILTER_COL_STRING_CASEFOLDED_NAME, casefolded,
+				FILTER_COL_STRING_ICON_NAME, icon_name,
+				FILTER_COL_GICON_CUSTOM_ICON, icon_obj,
+				-1);
+
+			g_free (casefolded);
+			g_free (tmp);
+		}
+	}
+
+	g_clear_object (&store);
+	g_clear_object (&icon_obj);
+	g_free (display_name);
+	g_free (full_name);
+	g_free (icon_name);
+
+	return FALSE;
+}
+
+static void
+folder_selector_search_changed_cb (GtkSearchEntry *search_entry,
+				   gpointer user_data)
+{
+	EMFolderSelector *selector = user_data;
+	gchar *search_casefolded;
+
+	search_casefolded = g_utf8_casefold (gtk_entry_get_text (GTK_ENTRY (search_entry)), -1);
+
+	if (g_strcmp0 (search_casefolded, selector->priv->search_text ? selector->priv->search_text : "") == 0) {
+		g_free (search_casefolded);
+		return;
+	}
+
+	g_clear_pointer (&selector->priv->search_text, g_free);
+	if (search_casefolded && *search_casefolded)
+		selector->priv->search_text = search_casefolded;
+	else
+		g_free (search_casefolded);
+
+	if (selector->priv->search_text) {
+		GtkTreeModel *model;
+
+		if (!selector->priv->search_tree_view) {
+			GtkCellRenderer *renderer;
+			GtkListStore *list_store;
+			GtkTreeModel *filter_model;
+			GtkTreeView *tree_view;
+			GtkTreeSelection *selection;
+			GtkTreeViewColumn *column;
+
+			list_store = gtk_list_store_new (N_FILTER_COLS,
+				G_TYPE_STRING, /* FILTER_COL_STRING_DISPLAY_NAME */
+				CAMEL_TYPE_STORE, /* FILTER_COL_OBJECT_STORE */
+				G_TYPE_STRING, /* FILTER_COL_STRING_FOLDER_NAME */
+				G_TYPE_STRING, /* FILTER_COL_STRING_CASEFOLDED_NAME */
+				G_TYPE_STRING, /* FILTER_COL_STRING_ICON_NAME */
+				G_TYPE_ICON); /* FILTER_COL_GICON_CUSTOM_ICON */
+
+			model = gtk_tree_view_get_model (GTK_TREE_VIEW (selector->priv->folder_tree_view));
+			gtk_tree_model_foreach (model, folder_selector_traverse_model_cb, list_store);
+
+			filter_model = gtk_tree_model_filter_new (GTK_TREE_MODEL (list_store), NULL);
+			gtk_tree_model_filter_set_visible_func (GTK_TREE_MODEL_FILTER (filter_model),
+				folder_selector_filter_model_cb, selector, NULL);
+			selector->priv->search_tree_view = g_object_ref_sink (gtk_tree_view_new_with_model (filter_model));
+			tree_view = GTK_TREE_VIEW (selector->priv->search_tree_view);
+			gtk_tree_view_set_search_column (tree_view, FILTER_COL_STRING_DISPLAY_NAME);
+			gtk_tree_view_set_headers_visible (tree_view, FALSE);
+			g_object_unref (filter_model);
+			g_object_unref (list_store);
+
+			column = gtk_tree_view_column_new ();
+			gtk_tree_view_column_set_expand (column, TRUE);
+			gtk_tree_view_column_set_sizing (column, GTK_TREE_VIEW_COLUMN_AUTOSIZE);
+			gtk_tree_view_append_column (tree_view, column);
+
+			renderer = gtk_cell_renderer_pixbuf_new ();
+			gtk_tree_view_column_pack_start (column, renderer, FALSE);
+			gtk_tree_view_column_set_cell_data_func (column, renderer, folder_selector_render_icon, NULL, NULL);
+
+			renderer = gtk_cell_renderer_text_new ();
+			gtk_tree_view_column_pack_start (column, renderer, TRUE);
+			gtk_tree_view_column_add_attribute (column, renderer, "text", FILTER_COL_STRING_DISPLAY_NAME);
+			g_object_set (renderer, "editable", FALSE, NULL);
+
+			g_signal_connect (tree_view, "row-activated",
+				G_CALLBACK (folder_selector_search_row_activated_cb), selector);
+
+			selection = gtk_tree_view_get_selection (tree_view);
+			g_signal_connect_object (selection, "changed",
+				G_CALLBACK (folder_selector_search_selection_changed_cb), selector, 0);
+		}
+
+		e_tree_view_frame_set_tree_view (E_TREE_VIEW_FRAME (selector->priv->tree_view_frame),
+			GTK_TREE_VIEW (selector->priv->search_tree_view));
+
+		model = gtk_tree_view_get_model (GTK_TREE_VIEW (selector->priv->search_tree_view));
+		gtk_tree_model_filter_refilter (GTK_TREE_MODEL_FILTER (model));
+	} else {
+		e_tree_view_frame_set_tree_view (E_TREE_VIEW_FRAME (selector->priv->tree_view_frame),
+			GTK_TREE_VIEW (selector->priv->folder_tree_view));
+	}
+}
+
+static void
+folder_selector_stop_search_cb (GtkSearchEntry *search_entry,
+				gpointer user_data)
+{
+	EMFolderSelector *selector = user_data;
+
+	if (g_strcmp0 (gtk_entry_get_text (GTK_ENTRY (search_entry)), "") == 0)
+		gtk_dialog_response (GTK_DIALOG (selector), GTK_RESPONSE_CANCEL);
+	else
+		gtk_entry_set_text (GTK_ENTRY (search_entry), "");
+}
 
 static void
 folder_selector_selected_cb (EMFolderTree *emft,
@@ -264,19 +541,19 @@ folder_selector_get_property (GObject *object,
 static void
 folder_selector_dispose (GObject *object)
 {
-	EMFolderSelectorPrivate *priv;
+	EMFolderSelector *self = EM_FOLDER_SELECTOR (object);
 
-	priv = EM_FOLDER_SELECTOR_GET_PRIVATE (object);
+	if (self->priv->model && self->priv->model != em_folder_tree_model_get_default ())
+		em_folder_tree_model_remove_all_stores (self->priv->model);
 
-	if (priv->model && priv->model != em_folder_tree_model_get_default ())
-		em_folder_tree_model_remove_all_stores (priv->model);
-
-	g_clear_object (&priv->model);
-	g_clear_object (&priv->alert_bar);
-	g_clear_object (&priv->activity_bar);
-	g_clear_object (&priv->caption_label);
-	g_clear_object (&priv->content_area);
-	g_clear_object (&priv->tree_view_frame);
+	g_clear_object (&self->priv->model);
+	g_clear_object (&self->priv->alert_bar);
+	g_clear_object (&self->priv->activity_bar);
+	g_clear_object (&self->priv->caption_label);
+	g_clear_object (&self->priv->content_area);
+	g_clear_object (&self->priv->tree_view_frame);
+	g_clear_object (&self->priv->folder_tree_view);
+	g_clear_object (&self->priv->search_tree_view);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (em_folder_selector_parent_class)->dispose (object);
@@ -285,13 +562,12 @@ folder_selector_dispose (GObject *object)
 static void
 folder_selector_finalize (GObject *object)
 {
-	EMFolderSelectorPrivate *priv;
+	EMFolderSelector *self = EM_FOLDER_SELECTOR (object);
 
-	priv = EM_FOLDER_SELECTOR_GET_PRIVATE (object);
-
-	g_free (priv->selected_uri);
-	g_free (priv->caption);
-	g_free (priv->default_button_label);
+	g_free (self->priv->selected_uri);
+	g_free (self->priv->caption);
+	g_free (self->priv->default_button_label);
+	g_free (self->priv->search_text);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (em_folder_selector_parent_class)->finalize (object);
@@ -327,6 +603,16 @@ folder_selector_constructed (GObject *object)
 	gtk_widget_show (widget);
 
 	container = widget;
+
+	widget = gtk_search_entry_new ();
+	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+	gtk_entry_set_placeholder_text (GTK_ENTRY (widget), _("Search for folder…"));
+	gtk_widget_show (widget);
+
+	g_signal_connect (widget, "search-changed",
+		G_CALLBACK (folder_selector_search_changed_cb), selector);
+	g_signal_connect (widget, "stop-search",
+		G_CALLBACK (folder_selector_stop_search_cb), selector);
 
 	gtk_dialog_add_buttons (
 		GTK_DIALOG (selector),
@@ -394,6 +680,8 @@ folder_selector_constructed (GObject *object)
 	gtk_widget_grab_focus (widget);
 	gtk_widget_show (widget);
 
+	selector->priv->folder_tree_view = g_object_ref (widget);
+
 	g_signal_connect (
 		widget, "folder-selected",
 		G_CALLBACK (folder_selector_selected_cb), selector);
@@ -441,19 +729,15 @@ static void
 folder_selector_submit_alert (EAlertSink *alert_sink,
                               EAlert *alert)
 {
-	EMFolderSelectorPrivate *priv;
+	EMFolderSelector *self = EM_FOLDER_SELECTOR (alert_sink);
 
-	priv = EM_FOLDER_SELECTOR_GET_PRIVATE (alert_sink);
-
-	e_alert_bar_submit_alert (E_ALERT_BAR (priv->alert_bar), alert);
+	e_alert_bar_submit_alert (E_ALERT_BAR (self->priv->alert_bar), alert);
 }
 
 static void
 em_folder_selector_class_init (EMFolderSelectorClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EMFolderSelectorPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = folder_selector_set_property;
@@ -543,7 +827,7 @@ em_folder_selector_alert_sink_init (EAlertSinkInterface *interface)
 static void
 em_folder_selector_init (EMFolderSelector *selector)
 {
-	selector->priv = EM_FOLDER_SELECTOR_GET_PRIVATE (selector);
+	selector->priv = em_folder_selector_get_instance_private (selector);
 
 	selector->priv->default_button_label =
 		g_strdup (gettext (DEFAULT_BUTTON_LABEL));
@@ -558,6 +842,7 @@ em_folder_selector_new (GtkWindow *parent,
 	return g_object_new (
 		EM_TYPE_FOLDER_SELECTOR,
 		"transient-for", parent,
+		"use-header-bar", e_util_get_use_header_bar (),
 		"model", model, NULL);
 }
 
@@ -767,15 +1052,9 @@ em_folder_selector_get_content_area (EMFolderSelector *selector)
 EMFolderTree *
 em_folder_selector_get_folder_tree (EMFolderSelector *selector)
 {
-	ETreeViewFrame *tree_view_frame;
-	GtkTreeView *tree_view;
-
 	g_return_val_if_fail (EM_IS_FOLDER_SELECTOR (selector), NULL);
 
-	tree_view_frame = E_TREE_VIEW_FRAME (selector->priv->tree_view_frame);
-	tree_view = e_tree_view_frame_get_tree_view (tree_view_frame);
-
-	return EM_FOLDER_TREE (tree_view);
+	return EM_FOLDER_TREE (selector->priv->folder_tree_view);
 }
 
 /**
@@ -806,16 +1085,49 @@ em_folder_selector_get_selected (EMFolderSelector *selector,
 
 	g_return_val_if_fail (EM_IS_FOLDER_SELECTOR (selector), FALSE);
 
-	folder_tree = em_folder_selector_get_folder_tree (selector);
+	if (selector->priv->search_text) {
+		GtkTreeView *tree_view = GTK_TREE_VIEW (selector->priv->search_tree_view);
+		GtkTreeModel *model = NULL;
+		GtkTreeIter iter;
+		CamelStore *store = NULL;
+		gchar *folder_name = NULL;
 
-	if (em_folder_tree_store_root_selected (folder_tree, out_store)) {
-		if (out_folder_name != NULL)
-			*out_folder_name = NULL;
+		if (!gtk_tree_selection_get_selected (gtk_tree_view_get_selection (tree_view), &model, &iter))
+			return FALSE;
+
+		gtk_tree_model_get (model, &iter,
+			FILTER_COL_OBJECT_STORE, &store,
+			FILTER_COL_STRING_FOLDER_NAME, &folder_name,
+			-1);
+
+		if (!store || !folder_name) {
+			g_clear_object (&store);
+			g_free (folder_name);
+			return FALSE;
+		}
+
+		if (out_store)
+			*out_store = store;
+		else
+			g_object_unref (store);
+
+		if (out_folder_name)
+			*out_folder_name = folder_name;
+		else
+			g_free (folder_name);
+
 		return TRUE;
-	}
+	} else {
+		folder_tree = em_folder_selector_get_folder_tree (selector);
 
-	return em_folder_tree_get_selected (
-		folder_tree, out_store, out_folder_name);
+		if (em_folder_tree_store_root_selected (folder_tree, out_store)) {
+			if (out_folder_name != NULL)
+				*out_folder_name = NULL;
+			return TRUE;
+		}
+
+		return em_folder_tree_get_selected (folder_tree, out_store, out_folder_name);
+	}
 }
 
 /**
@@ -850,16 +1162,19 @@ em_folder_selector_set_selected (EMFolderSelector *selector,
 const gchar *
 em_folder_selector_get_selected_uri (EMFolderSelector *selector)
 {
-	EMFolderTree *folder_tree;
+	CamelStore *store = NULL;
+	gchar *folder_name = NULL;
 	gchar *uri;
 
 	g_return_val_if_fail (EM_IS_FOLDER_SELECTOR (selector), NULL);
 
-	folder_tree = em_folder_selector_get_folder_tree (selector);
-	uri = em_folder_tree_get_selected_uri (folder_tree);
-
-	if (uri == NULL)
+	if (!em_folder_selector_get_selected (selector, &store, &folder_name))
 		return NULL;
+
+	uri = e_mail_folder_uri_build (store, folder_name);
+
+	g_object_unref (store);
+	g_free (folder_name);
 
 	g_free (selector->priv->selected_uri);
 	selector->priv->selected_uri = uri;  /* takes ownership */

@@ -29,6 +29,7 @@ set(SOURCES
 	calendar-view.c
 	comp-util.c
 	e-alarm-list.c
+	e-bulk-edit-tasks.c
 	e-cal-component-preview.c
 	e-cal-config.c
 	e-cal-data-model.c
@@ -43,6 +44,7 @@ set(SOURCES
 	e-cal-ops.c
 	e-calendar-view.c
 	e-cell-date-edit-text.c
+	e-cell-estimated-duration.c
 	e-comp-editor.c
 	e-comp-editor-event.c
 	e-comp-editor-memo.c
@@ -61,6 +63,7 @@ set(SOURCES
 	e-day-view-main-item.c
 	e-day-view-time-item.c
 	e-day-view-top-item.c
+	e-estimated-duration-entry.c
 	e-meeting-attendee.c
 	e-meeting-list-view.c
 	e-meeting-store.c
@@ -81,6 +84,7 @@ set(SOURCES
 	e-week-view-titles-item.c
 	e-weekday-chooser.c
 	e-timezone-entry.c
+	e-year-view.c
 	itip-utils.c
 	misc.c
 	print.c
@@ -104,6 +108,7 @@ set(HEADERS
 	calendar-view.h
 	comp-util.h
 	e-alarm-list.h
+	e-bulk-edit-tasks.h
 	e-cal-component-preview.h
 	e-cal-config.h
 	e-cal-data-model.h
@@ -118,6 +123,7 @@ set(HEADERS
 	e-cal-ops.h
 	e-calendar-view.h
 	e-cell-date-edit-text.h
+	e-cell-estimated-duration.h
 	e-comp-editor.h
 	e-comp-editor-event.h
 	e-comp-editor-memo.h
@@ -130,6 +136,7 @@ set(HEADERS
 	e-comp-editor-property-part.h
 	e-comp-editor-property-parts.h
 	e-comp-editor-task.h
+	e-estimated-duration-entry.h
 	e-date-time-list.h
 	e-day-view-layout.h
 	e-day-view-main-item.h
@@ -157,6 +164,7 @@ set(HEADERS
 	e-week-view.h
 	e-weekday-chooser.h
 	e-timezone-entry.h
+	e-year-view.h
 	itip-utils.h
 	misc.h
 	print.h

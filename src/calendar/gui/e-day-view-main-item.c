@@ -33,10 +33,6 @@
 #include "e-day-view-layout.h"
 #include "ea-calendar.h"
 
-#define E_DAY_VIEW_MAIN_ITEM_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_DAY_VIEW_MAIN_ITEM, EDayViewMainItemPrivate))
-
 struct _EDayViewMainItemPrivate {
 	EDayView *day_view;
 };
@@ -46,10 +42,7 @@ enum {
 	PROP_DAY_VIEW
 };
 
-G_DEFINE_TYPE (
-	EDayViewMainItem,
-	e_day_view_main_item,
-	GNOME_TYPE_CANVAS_ITEM)
+G_DEFINE_TYPE_WITH_PRIVATE (EDayViewMainItem, e_day_view_main_item, GNOME_TYPE_CANVAS_ITEM)
 
 static gboolean
 can_draw_in_region (cairo_region_t *draw_region,
@@ -191,7 +184,7 @@ day_view_main_item_draw_day_event (EDayViewMainItem *main_item,
 	ECalComponent *comp;
 	gint num_icons, icon_x = 0, icon_y, icon_x_inc = 0, icon_y_inc = 0;
 	gint max_icon_w, max_icon_h;
-	gboolean draw_reminder_icon, draw_recurrence_icon, draw_timezone_icon, draw_meeting_icon;
+	gboolean draw_reminder_icon, draw_recurrence_icon, draw_detached_recurrence_icon, draw_timezone_icon, draw_meeting_icon;
 	gboolean draw_attach_icon;
 	ECalComponentTransparency transparency;
 	cairo_pattern_t *pat;
@@ -646,6 +639,7 @@ day_view_main_item_draw_day_event (EDayViewMainItem *main_item,
 		num_icons = 0;
 		draw_reminder_icon = FALSE;
 		draw_recurrence_icon = FALSE;
+		draw_detached_recurrence_icon = FALSE;
 		draw_timezone_icon = FALSE;
 		draw_meeting_icon = FALSE;
 		draw_attach_icon = FALSE;
@@ -658,8 +652,11 @@ day_view_main_item_draw_day_event (EDayViewMainItem *main_item,
 			num_icons++;
 		}
 
-		if (e_cal_component_has_recurrences (comp) || e_cal_component_is_instance (comp)) {
+		if (e_cal_component_has_recurrences (comp)) {
 			draw_recurrence_icon = TRUE;
+			num_icons++;
+		} else if (e_cal_component_is_instance (comp)) {
+			draw_detached_recurrence_icon = TRUE;
 			num_icons++;
 		}
 		if (e_cal_component_has_attachments (comp)) {
@@ -717,6 +714,9 @@ day_view_main_item_draw_day_event (EDayViewMainItem *main_item,
 			if (draw_recurrence_icon && fit_in_event ()) {
 				draw_pixbuf (day_view->recurrence_icon);
 			}
+			if (draw_detached_recurrence_icon && fit_in_event ()) {
+				draw_pixbuf (day_view->detached_recurrence_icon);
+			}
 			if (draw_attach_icon && fit_in_event ()) {
 				draw_pixbuf (day_view->attach_icon);
 			}
@@ -739,6 +739,9 @@ day_view_main_item_draw_day_event (EDayViewMainItem *main_item,
 
 			#undef draw_pixbuf
 			#undef fit_in_event
+
+			if (icon_x_inc != 0)
+				icon_x += E_DAY_VIEW_ICON_X_PAD;
 		}
 
 		/* free memory */
@@ -813,6 +816,20 @@ day_view_main_item_draw_day_event (EDayViewMainItem *main_item,
 			}
 		}
 
+		if (day_view->row_height > 0 && event->canvas_item && item_h / day_view->row_height < 2) {
+			gchar *item_text = NULL;
+
+			g_object_get (event->canvas_item, "text", &item_text, NULL);
+
+			if (item_text && item_text[0] == ' ' && item_text[1] == '\n') {
+				gchar *tmp;
+				tmp = g_strconcat (text, " ", item_text + 2, NULL);
+				g_free (text);
+				text = tmp;
+			}
+
+			g_free (item_text);
+		}
 		cairo_save (cr);
 		cairo_rectangle (
 			cr, item_x + E_DAY_VIEW_BAR_WIDTH + 1.75, item_y + 2.75,
@@ -973,10 +990,9 @@ day_view_main_item_get_property (GObject *object,
 static void
 day_view_main_item_dispose (GObject *object)
 {
-	EDayViewMainItemPrivate *priv;
+	EDayViewMainItem *self = E_DAY_VIEW_MAIN_ITEM (object);
 
-	priv = E_DAY_VIEW_MAIN_ITEM_GET_PRIVATE (object);
-	g_clear_object (&priv->day_view);
+	g_clear_object (&self->priv->day_view);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_day_view_main_item_parent_class)->dispose (object);
@@ -1020,6 +1036,7 @@ day_view_main_item_draw (GnomeCanvasItem *canvas_item,
 	gint start_row, end_row, rect_x, rect_y, rect_width, rect_height;
 	gint days_shown;
 	ICalTime *day_start_tt, *today_tt;
+	ICalTimezone *zone;
 	gboolean today = FALSE;
 	cairo_region_t *draw_region;
 	GdkRectangle rect;
@@ -1050,16 +1067,13 @@ day_view_main_item_draw (GnomeCanvasItem *canvas_item,
 
 	/* Paint the background colors. */
 
-	today_tt = i_cal_time_new_from_timet_with_zone (
-		time (NULL), FALSE,
-		e_calendar_view_get_timezone (E_CALENDAR_VIEW (day_view)));
+	zone = e_calendar_view_get_timezone (E_CALENDAR_VIEW (day_view));
+	today_tt = i_cal_time_new_current_with_zone (zone);
 
 	for (day = 0; day < days_shown; day++) {
 		GDateWeekday weekday;
 
-		day_start_tt = i_cal_time_new_from_timet_with_zone (
-			day_view->day_starts[day], FALSE,
-			e_calendar_view_get_timezone (E_CALENDAR_VIEW (day_view)));
+		day_start_tt = i_cal_time_new_from_timet_with_zone (day_view->day_starts[day], FALSE, zone);
 
 		switch (i_cal_time_day_of_week (day_start_tt)) {
 			case 1:
@@ -1230,7 +1244,7 @@ day_view_main_item_draw (GnomeCanvasItem *canvas_item,
 		cairo_line_to (cr, grid_x1 + E_DAY_VIEW_BAR_WIDTH - 1, grid_y2);
 		cairo_stroke (cr);
 
-		cairo_set_source_rgb (cr, 1, 1, 1);
+		gdk_cairo_set_source_color (cr, &day_view->colors[E_DAY_VIEW_COLOR_BG_WORKING]);
 
 		cairo_rectangle (
 			cr, grid_x1 + 1, grid_y1,
@@ -1259,7 +1273,6 @@ day_view_main_item_draw (GnomeCanvasItem *canvas_item,
 			width, height, day, draw_region);
 
 	if (e_day_view_marcus_bains_get_show_line (day_view)) {
-		ICalTimezone *zone;
 		ICalTime *time_now, *day_start;
 		const gchar *marcus_bains_day_view_color;
 		gint marcus_bains_y;
@@ -1278,7 +1291,6 @@ day_view_main_item_draw (GnomeCanvasItem *canvas_item,
 		if (gdk_color_parse (marcus_bains_day_view_color, &mb_color))
 			gdk_cairo_set_source_color (cr, &mb_color);
 
-		zone = e_calendar_view_get_timezone (E_CALENDAR_VIEW (day_view));
 		time_now = i_cal_time_new_current_with_zone (zone);
 
 		for (day = 0; day < days_shown; day++) {
@@ -1319,8 +1331,6 @@ e_day_view_main_item_class_init (EDayViewMainItemClass *class)
 	GObjectClass *object_class;
 	GnomeCanvasItemClass *item_class;
 
-	g_type_class_add_private (class, sizeof (EDayViewMainItemPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = day_view_main_item_set_property;
 	object_class->get_property = day_view_main_item_get_property;
@@ -1348,7 +1358,7 @@ e_day_view_main_item_class_init (EDayViewMainItemClass *class)
 static void
 e_day_view_main_item_init (EDayViewMainItem *main_item)
 {
-	main_item->priv = E_DAY_VIEW_MAIN_ITEM_GET_PRIVATE (main_item);
+	main_item->priv = e_day_view_main_item_get_instance_private (main_item);
 }
 
 EDayView *

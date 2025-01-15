@@ -27,10 +27,6 @@
 #include "e-cal-base-shell-view.h"
 #include "e-cal-base-shell-sidebar.h"
 
-#define E_CAL_BASE_SHELL_SIDEBAR_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CAL_BASE_SHELL_SIDEBAR, ECalBaseShellSidebarPrivate))
-
 struct _ECalBaseShellSidebarPrivate {
 	ECalendar *date_navigator; /* not referenced, is inside itself */
 	GtkWidget *paned; /* not referenced, is inside itself */
@@ -55,7 +51,8 @@ enum {
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_DYNAMIC_TYPE (ECalBaseShellSidebar, e_cal_base_shell_sidebar, E_TYPE_SHELL_SIDEBAR)
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (ECalBaseShellSidebar, e_cal_base_shell_sidebar, E_TYPE_SHELL_SIDEBAR, 0,
+	G_ADD_PRIVATE_DYNAMIC (ECalBaseShellSidebar))
 
 static gboolean
 cal_base_shell_sidebar_map_uid_to_source (GValue *value,
@@ -312,7 +309,7 @@ open_client_data_free (gpointer pdata)
 	OpenClientData *data = pdata;
 
 	if (data) {
-		if (data->cb || !data->client) {
+		if (!data->client || (data->cb && g_hash_table_lookup (data->sidebar->priv->selected_uids, e_source_get_uid (data->source)))) {
 			g_hash_table_remove (data->sidebar->priv->selected_uids, e_source_get_uid (data->source));
 		} else {
 			/* To free the cancellable in the 'value' pair, which is useless now */
@@ -507,12 +504,12 @@ cal_base_shell_sidebar_transfer_thread (EAlertSinkThreadJobData *job_data,
 	g_return_if_fail (titd->icomp != NULL);
 
 	source_client = e_client_selector_get_client_sync (
-		titd->selector, titd->source, FALSE, 30, cancellable, error);
+		titd->selector, titd->source, FALSE, (guint32) -1, cancellable, error);
 	if (!source_client)
 		return;
 
 	destination_client = e_client_selector_get_client_sync (
-		titd->selector, titd->destination, FALSE, 30, cancellable, error);
+		titd->selector, titd->destination, FALSE, E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, cancellable, error);
 	if (!destination_client) {
 		g_object_unref (source_client);
 		return;
@@ -760,6 +757,14 @@ cal_base_shell_sidebar_constructed (GObject *object)
 
 		container = cal_base_shell_sidebar->priv->paned;
 
+		widget = gtk_scrolled_window_new (NULL, NULL);
+		gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (widget), GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
+		gtk_scrolled_window_set_overlay_scrolling (GTK_SCROLLED_WINDOW (widget), FALSE);
+		gtk_paned_pack2 (GTK_PANED (container), widget, FALSE, FALSE);
+		gtk_widget_show (widget);
+
+		container = widget;
+
 		widget = e_calendar_new ();
 		gtk_widget_set_margin_top (widget, 6);
 		gtk_widget_set_margin_start (widget, 6);
@@ -767,7 +772,7 @@ cal_base_shell_sidebar_constructed (GObject *object)
 		calitem = e_calendar_get_item (E_CALENDAR (widget));
 		e_calendar_item_set_days_start_week_sel (calitem, 9);
 		e_calendar_item_set_max_days_sel (calitem, 42);
-		gtk_paned_pack2 (GTK_PANED (container), widget, FALSE, FALSE);
+		gtk_container_add (GTK_CONTAINER (container), widget);
 		cal_base_shell_sidebar->priv->date_navigator = E_CALENDAR (widget);
 		gtk_widget_show (widget);
 
@@ -859,8 +864,6 @@ e_cal_base_shell_sidebar_class_init (ECalBaseShellSidebarClass *class)
 	GObjectClass *object_class;
 	EShellSidebarClass *shell_sidebar_class;
 
-	g_type_class_add_private (class, sizeof (ECalBaseShellSidebarPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->get_property = cal_base_shell_sidebar_get_property;
 	object_class->constructed = cal_base_shell_sidebar_constructed;
@@ -919,7 +922,7 @@ e_cal_base_shell_sidebar_class_finalize (ECalBaseShellSidebarClass *class)
 static void
 e_cal_base_shell_sidebar_init (ECalBaseShellSidebar *cal_base_shell_sidebar)
 {
-	cal_base_shell_sidebar->priv = E_CAL_BASE_SHELL_SIDEBAR_GET_PRIVATE (cal_base_shell_sidebar);
+	cal_base_shell_sidebar->priv = e_cal_base_shell_sidebar_get_instance_private (cal_base_shell_sidebar);
 	cal_base_shell_sidebar->priv->selected_uids =
 		g_hash_table_new_full (g_str_hash, g_str_equal, g_free, cancel_and_unref);
 }

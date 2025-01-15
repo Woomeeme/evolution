@@ -46,7 +46,7 @@ enum {
 
 static guint property_part_signals[PROPERTY_PART_LAST_SIGNAL];
 
-G_DEFINE_ABSTRACT_TYPE (ECompEditorPropertyPart, e_comp_editor_property_part, G_TYPE_OBJECT)
+G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (ECompEditorPropertyPart, e_comp_editor_property_part, G_TYPE_OBJECT)
 
 static void
 e_comp_editor_property_part_set_property (GObject *object,
@@ -168,9 +168,7 @@ e_comp_editor_property_part_impl_sensitize_widgets (ECompEditorPropertyPart *pro
 static void
 e_comp_editor_property_part_init (ECompEditorPropertyPart *property_part)
 {
-	property_part->priv = G_TYPE_INSTANCE_GET_PRIVATE (property_part,
-		E_TYPE_COMP_EDITOR_PROPERTY_PART,
-		ECompEditorPropertyPartPrivate);
+	property_part->priv = e_comp_editor_property_part_get_instance_private (property_part);
 	property_part->priv->visible = TRUE;
 	property_part->priv->sensitize_handled = FALSE;
 }
@@ -179,8 +177,6 @@ static void
 e_comp_editor_property_part_class_init (ECompEditorPropertyPartClass *klass)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorPropertyPartPrivate));
 
 	klass->sensitize_widgets = e_comp_editor_property_part_impl_sensitize_widgets;
 
@@ -363,7 +359,7 @@ struct _ECompEditorPropertyPartStringPrivate {
 	gboolean is_multivalue;
 };
 
-G_DEFINE_ABSTRACT_TYPE (ECompEditorPropertyPartString, e_comp_editor_property_part_string, E_TYPE_COMP_EDITOR_PROPERTY_PART)
+G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (ECompEditorPropertyPartString, e_comp_editor_property_part_string, E_TYPE_COMP_EDITOR_PROPERTY_PART)
 
 static void
 ecepp_string_create_widgets (ECompEditorPropertyPart *property_part,
@@ -378,8 +374,7 @@ ecepp_string_create_widgets (ECompEditorPropertyPart *property_part,
 
 	klass = E_COMP_EDITOR_PROPERTY_PART_STRING_GET_CLASS (property_part);
 	g_return_if_fail (klass != NULL);
-	g_return_if_fail (g_type_is_a (klass->entry_type, GTK_TYPE_ENTRY) ||
-			  g_type_is_a (klass->entry_type, GTK_TYPE_TEXT_VIEW));
+	g_return_if_fail (klass->entry_type > 0);
 
 	/* The descendant sets the 'out_label_widget' parameter */
 	*out_edit_widget = g_object_new (klass->entry_type, NULL);
@@ -603,9 +598,7 @@ ecepp_string_get_real_edit_widget (ECompEditorPropertyPartString *part_string)
 static void
 e_comp_editor_property_part_string_init (ECompEditorPropertyPartString *part_string)
 {
-	part_string->priv = G_TYPE_INSTANCE_GET_PRIVATE (part_string,
-		E_TYPE_COMP_EDITOR_PROPERTY_PART_STRING,
-		ECompEditorPropertyPartStringPrivate);
+	part_string->priv = e_comp_editor_property_part_string_get_instance_private (part_string);
 	part_string->priv->is_multivalue = FALSE;
 }
 
@@ -613,8 +606,6 @@ static void
 e_comp_editor_property_part_string_class_init (ECompEditorPropertyPartStringClass *klass)
 {
 	ECompEditorPropertyPartClass *part_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorPropertyPartStringPrivate));
 
 	klass->entry_type = GTK_TYPE_ENTRY;
 
@@ -700,7 +691,7 @@ enum {
 
 static guint ecepp_datetime_signals[ECEPP_DATETIME_LAST_SIGNAL];
 
-G_DEFINE_ABSTRACT_TYPE (ECompEditorPropertyPartDatetime, e_comp_editor_property_part_datetime, E_TYPE_COMP_EDITOR_PROPERTY_PART)
+G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (ECompEditorPropertyPartDatetime, e_comp_editor_property_part_datetime, E_TYPE_COMP_EDITOR_PROPERTY_PART)
 
 static ICalTimezone *
 ecepp_datetime_lookup_timezone (ECompEditorPropertyPartDatetime *part_datetime,
@@ -763,7 +754,7 @@ ecepp_datetime_changed_cb (ECompEditorPropertyPart *property_part)
 
 	edit_widget = e_comp_editor_property_part_get_edit_widget (property_part);
 
-	if (!edit_widget || e_date_edit_has_focus (E_DATE_EDIT (edit_widget)) ||
+	if (!edit_widget ||
 	    !e_date_edit_date_is_valid (E_DATE_EDIT (edit_widget)) ||
 	    !e_date_edit_time_is_valid (E_DATE_EDIT (edit_widget)))
 		return;
@@ -777,6 +768,8 @@ ecepp_datetime_create_widgets (ECompEditorPropertyPart *property_part,
 			       GtkWidget **out_edit_widget)
 {
 	ECompEditorPropertyPartDatetimeClass *klass;
+	EDateEdit *date_edit;
+	const gchar *date_format;
 
 	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DATETIME (property_part));
 	g_return_if_fail (out_label_widget != NULL);
@@ -798,14 +791,21 @@ ecepp_datetime_create_widgets (ECompEditorPropertyPart *property_part,
 
 	gtk_widget_show (*out_edit_widget);
 
-	e_date_edit_set_get_time_callback (E_DATE_EDIT (*out_edit_widget),
+	date_edit = E_DATE_EDIT (*out_edit_widget);
+
+	e_date_edit_set_get_time_callback (date_edit,
 		ecepp_datetime_get_current_time_cb,
 		e_weak_ref_new (property_part), (GDestroyNotify) e_weak_ref_free);
 
-	g_signal_connect_swapped (*out_edit_widget, "changed",
-		G_CALLBACK (ecepp_datetime_changed_cb), property_part);
-	g_signal_connect_swapped (*out_edit_widget, "notify::show-time",
-		G_CALLBACK (ecepp_datetime_changed_cb), property_part);
+	date_format = e_datetime_format_get_format ("calendar", "table",  DTFormatKindDate);
+	/* the "%ad" is not a strftime format, thus avoid it, if included */
+	if (date_format && *date_format && !strstr (date_format, "%ad"))
+		e_date_edit_set_date_format (date_edit, date_format);
+
+	g_signal_connect_object (*out_edit_widget, "changed",
+		G_CALLBACK (ecepp_datetime_changed_cb), property_part, G_CONNECT_AFTER | G_CONNECT_SWAPPED);
+	g_signal_connect_object (*out_edit_widget, "notify::show-time",
+		G_CALLBACK (ecepp_datetime_changed_cb), property_part, G_CONNECT_AFTER | G_CONNECT_SWAPPED);
 }
 
 static void
@@ -914,7 +914,14 @@ ecepp_datetime_fill_component (ECompEditorPropertyPart *property_part,
 			g_object_unref (prop);
 		}
 	} else {
+		ICalTimezone *zone;
+
 		value = e_comp_editor_property_part_datetime_get_value (part_datetime);
+
+		zone = value && !i_cal_time_is_null_time (value) ? i_cal_time_get_timezone (value) : NULL;
+
+		if (zone)
+			g_object_ref (zone);
 
 		if (prop) {
 			/* Remove the VALUE parameter, to correspond to the actual value being set */
@@ -926,6 +933,11 @@ ecepp_datetime_fill_component (ECompEditorPropertyPart *property_part,
 			g_clear_object (&value);
 			value = klass->i_cal_get_func (prop);
 
+			/* The timezone can be dropped since libical 3.0.14, thus restore it
+			   before updating the TZID parameter */
+			if (zone && value && !i_cal_time_is_null_time (value) && !i_cal_time_is_date (value))
+				i_cal_time_set_timezone (value, zone);
+
 			cal_comp_util_update_tzid_parameter (prop, value);
 		} else {
 			prop = klass->i_cal_new_func (value);
@@ -934,12 +946,18 @@ ecepp_datetime_fill_component (ECompEditorPropertyPart *property_part,
 			g_clear_object (&value);
 			value = klass->i_cal_get_func (prop);
 
+			/* The timezone can be dropped since libical 3.0.14, thus restore it
+			   before updating the TZID parameter */
+			if (zone && value && !i_cal_time_is_null_time (value) && !i_cal_time_is_date (value))
+				i_cal_time_set_timezone (value, zone);
+
 			cal_comp_util_update_tzid_parameter (prop, value);
 			i_cal_component_add_property (component, prop);
 		}
 
 		g_clear_object (&value);
 		g_clear_object (&prop);
+		g_clear_object (&zone);
 	}
 }
 
@@ -956,9 +974,7 @@ ecepp_datetime_finalize (GObject *object)
 static void
 e_comp_editor_property_part_datetime_init (ECompEditorPropertyPartDatetime *part_datetime)
 {
-	part_datetime->priv = G_TYPE_INSTANCE_GET_PRIVATE (part_datetime,
-		E_TYPE_COMP_EDITOR_PROPERTY_PART_DATETIME,
-		ECompEditorPropertyPartDatetimePrivate);
+	part_datetime->priv = e_comp_editor_property_part_datetime_get_instance_private (part_datetime);
 
 	g_weak_ref_init (&part_datetime->priv->timezone_entry, NULL);
 }
@@ -968,8 +984,6 @@ e_comp_editor_property_part_datetime_class_init (ECompEditorPropertyPartDatetime
 {
 	ECompEditorPropertyPartClass *part_class;
 	GObjectClass *object_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorPropertyPartDatetimePrivate));
 
 	klass->prop_kind = I_CAL_NO_PROPERTY;
 	klass->i_cal_new_func = NULL;
@@ -1119,12 +1133,10 @@ e_comp_editor_property_part_datetime_set_value (ECompEditorPropertyPartDatetime 
 
 		if (!i_cal_time_is_date (value))
 			e_date_edit_set_time_of_day (date_edit, i_cal_time_get_hour (value), i_cal_time_get_minute (value));
-		else if (e_date_edit_get_show_time (date_edit))
-			e_date_edit_set_time_of_day (date_edit, 0, 0);
-		else if (e_date_edit_get_allow_no_date_set (date_edit))
+		else if (e_date_edit_get_show_time (date_edit) && e_date_edit_get_allow_no_date_set (date_edit))
 			e_date_edit_set_time_of_day (date_edit, -1, -1);
-
-		e_comp_editor_property_part_datetime_set_date_only (part_datetime, i_cal_time_is_date (value));
+		else
+			e_comp_editor_property_part_datetime_set_date_only (part_datetime, TRUE);
 	}
 
 	g_clear_object (&tmp_value);
@@ -1222,7 +1234,7 @@ struct _ECompEditorPropertyPartSpinPrivate {
 	gint dummy;
 };
 
-G_DEFINE_ABSTRACT_TYPE (ECompEditorPropertyPartSpin, e_comp_editor_property_part_spin, E_TYPE_COMP_EDITOR_PROPERTY_PART)
+G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (ECompEditorPropertyPartSpin, e_comp_editor_property_part_spin, E_TYPE_COMP_EDITOR_PROPERTY_PART)
 
 static void
 ecepp_spin_create_widgets (ECompEditorPropertyPart *property_part,
@@ -1329,17 +1341,13 @@ ecepp_spin_fill_component (ECompEditorPropertyPart *property_part,
 static void
 e_comp_editor_property_part_spin_init (ECompEditorPropertyPartSpin *part_spin)
 {
-	part_spin->priv = G_TYPE_INSTANCE_GET_PRIVATE (part_spin,
-		E_TYPE_COMP_EDITOR_PROPERTY_PART_SPIN,
-		ECompEditorPropertyPartSpinPrivate);
+	part_spin->priv = e_comp_editor_property_part_spin_get_instance_private (part_spin);
 }
 
 static void
 e_comp_editor_property_part_spin_class_init (ECompEditorPropertyPartSpinClass *klass)
 {
 	ECompEditorPropertyPartClass *part_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorPropertyPartSpinPrivate));
 
 	klass->prop_kind = I_CAL_NO_PROPERTY;
 	klass->i_cal_new_func = NULL;
@@ -1394,7 +1402,7 @@ struct _ECompEditorPropertyPartPickerPrivate {
 	gint dummy;
 };
 
-G_DEFINE_ABSTRACT_TYPE (ECompEditorPropertyPartPicker, e_comp_editor_property_part_picker, E_TYPE_COMP_EDITOR_PROPERTY_PART)
+G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (ECompEditorPropertyPartPicker, e_comp_editor_property_part_picker, E_TYPE_COMP_EDITOR_PROPERTY_PART)
 
 static void
 ecepp_picker_create_widgets (ECompEditorPropertyPart *property_part,
@@ -1501,17 +1509,13 @@ ecepp_picker_fill_component (ECompEditorPropertyPart *property_part,
 static void
 e_comp_editor_property_part_picker_init (ECompEditorPropertyPartPicker *part_picker)
 {
-	part_picker->priv = G_TYPE_INSTANCE_GET_PRIVATE (part_picker,
-		E_TYPE_COMP_EDITOR_PROPERTY_PART_PICKER,
-		ECompEditorPropertyPartPickerPrivate);
+	part_picker->priv = e_comp_editor_property_part_picker_get_instance_private (part_picker);
 }
 
 static void
 e_comp_editor_property_part_picker_class_init (ECompEditorPropertyPartPickerClass *klass)
 {
 	ECompEditorPropertyPartClass *part_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorPropertyPartPickerPrivate));
 
 	part_class = E_COMP_EDITOR_PROPERTY_PART_CLASS (klass);
 	part_class->create_widgets = ecepp_picker_create_widgets;
@@ -1619,7 +1623,7 @@ enum {
 	PICKER_WITH_MAP_PROP_LABEL
 };
 
-G_DEFINE_TYPE (ECompEditorPropertyPartPickerWithMap, e_comp_editor_property_part_picker_with_map, E_TYPE_COMP_EDITOR_PROPERTY_PART_PICKER)
+G_DEFINE_TYPE_WITH_PRIVATE (ECompEditorPropertyPartPickerWithMap, e_comp_editor_property_part_picker_with_map, E_TYPE_COMP_EDITOR_PROPERTY_PART_PICKER)
 
 static void
 ecepp_picker_with_map_get_values (ECompEditorPropertyPartPicker *part_picker,
@@ -1827,9 +1831,7 @@ ecepp_picker_with_map_finalize (GObject *object)
 static void
 e_comp_editor_property_part_picker_with_map_init (ECompEditorPropertyPartPickerWithMap *part_picker_with_map)
 {
-	part_picker_with_map->priv = G_TYPE_INSTANCE_GET_PRIVATE (part_picker_with_map,
-		E_TYPE_COMP_EDITOR_PROPERTY_PART_PICKER_WITH_MAP,
-		ECompEditorPropertyPartPickerWithMapPrivate);
+	part_picker_with_map->priv = e_comp_editor_property_part_picker_with_map_get_instance_private (part_picker_with_map);
 }
 
 static void
@@ -1838,8 +1840,6 @@ e_comp_editor_property_part_picker_with_map_class_init (ECompEditorPropertyPartP
 	ECompEditorPropertyPartPickerClass *part_picker_class;
 	ECompEditorPropertyPartClass *part_class;
 	GObjectClass *object_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorPropertyPartPickerWithMapPrivate));
 
 	part_picker_class = E_COMP_EDITOR_PROPERTY_PART_PICKER_CLASS (klass);
 	part_picker_class->get_values = ecepp_picker_with_map_get_values;
@@ -1966,3 +1966,272 @@ e_comp_editor_property_part_picker_with_map_set_selected (ECompEditorPropertyPar
 }
 
 /* ************************************************************************* */
+
+void
+e_comp_editor_property_part_util_ensure_same_value_type (ECompEditorPropertyPart *src_datetime,
+							 ECompEditorPropertyPart *des_datetime)
+{
+	ECompEditorPropertyPartDatetime *src_dtm, *des_dtm;
+	ICalTime *src_tt, *des_tt;
+
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DATETIME (src_datetime));
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DATETIME (des_datetime));
+
+	src_dtm = E_COMP_EDITOR_PROPERTY_PART_DATETIME (src_datetime);
+	des_dtm = E_COMP_EDITOR_PROPERTY_PART_DATETIME (des_datetime);
+
+	src_tt = e_comp_editor_property_part_datetime_get_value (src_dtm);
+	des_tt = e_comp_editor_property_part_datetime_get_value (des_dtm);
+
+	if (!src_tt || !des_tt ||
+	    i_cal_time_is_null_time (src_tt) ||
+	    i_cal_time_is_null_time (des_tt) ||
+	    !i_cal_time_is_valid_time (src_tt) ||
+	    !i_cal_time_is_valid_time (des_tt)) {
+		g_clear_object (&src_tt);
+		g_clear_object (&des_tt);
+		return;
+	}
+
+	if (i_cal_time_is_date (src_tt) != i_cal_time_is_date (des_tt)) {
+		gint hour = 0, minute = 0, second = 0;
+
+		i_cal_time_set_is_date (des_tt, i_cal_time_is_date (src_tt));
+
+		if (!i_cal_time_is_date (des_tt)) {
+			i_cal_time_get_time (src_tt, &hour, &minute, &second);
+			i_cal_time_set_time (des_tt, hour, minute, second);
+		}
+
+		e_comp_editor_property_part_datetime_set_value (des_dtm, des_tt);
+	}
+
+	g_clear_object (&src_tt);
+	g_clear_object (&des_tt);
+}
+
+static gboolean
+ecepp_check_start_before_end (ICalComponent *icomp,
+			      ICalTime **pstart_tt,
+			      ICalTime **pend_tt,
+			      gboolean adjust_end_time,
+			      gint *inout_last_duration)
+{
+	ICalTime *start_tt, *end_tt, *end_tt_copy;
+	ICalTimezone *start_zone, *end_zone;
+	gint duration = -1;
+	gint cmp;
+
+	start_tt = *pstart_tt;
+	end_tt = *pend_tt;
+
+	if (*inout_last_duration >= 0) {
+		duration = *inout_last_duration;
+	} else {
+		if (icomp &&
+		    e_cal_util_component_has_property (icomp, I_CAL_DTSTART_PROPERTY) &&
+		    (e_cal_util_component_has_property (icomp, I_CAL_DTEND_PROPERTY) ||
+		     e_cal_util_component_has_property (icomp, I_CAL_DUE_PROPERTY))) {
+			ICalTime *orig_start, *orig_end;
+
+			orig_start = i_cal_component_get_dtstart (icomp);
+			if (e_cal_util_component_has_property (icomp, I_CAL_DTEND_PROPERTY))
+				orig_end = i_cal_component_get_dtend (icomp);
+			else
+				orig_end = i_cal_component_get_due (icomp);
+
+			if (orig_start && i_cal_time_is_valid_time (orig_start) &&
+			    orig_end && i_cal_time_is_valid_time (orig_end)) {
+				duration = i_cal_time_as_timet (orig_end) - i_cal_time_as_timet (orig_start);
+				*inout_last_duration = duration;
+			}
+
+			g_clear_object (&orig_start);
+			g_clear_object (&orig_end);
+		}
+	}
+
+	start_zone = i_cal_time_get_timezone (start_tt);
+	end_zone = i_cal_time_get_timezone (end_tt);
+
+	/* Convert the end time to the same timezone as the start time. */
+	end_tt_copy = i_cal_time_clone (end_tt);
+
+	if (start_zone && end_zone && start_zone != end_zone)
+		i_cal_time_convert_timezone (end_tt_copy, end_zone, start_zone);
+
+	/* Now check if the start time is after the end time. If it is,
+	 * we need to modify one of the times. */
+	cmp = i_cal_time_compare (start_tt, end_tt_copy);
+	if (cmp > 0) {
+		if (adjust_end_time) {
+			/* Try to switch only the date */
+			i_cal_time_set_date (end_tt,
+				i_cal_time_get_year (start_tt),
+				i_cal_time_get_month (start_tt),
+				i_cal_time_get_day (start_tt));
+
+			g_clear_object (&end_tt_copy);
+			end_tt_copy = i_cal_time_clone (end_tt);
+			if (start_zone && end_zone && start_zone != end_zone)
+				i_cal_time_convert_timezone (end_tt_copy, end_zone, start_zone);
+
+			if (duration > 0)
+				i_cal_time_adjust (end_tt_copy, 0, 0, 0, -duration);
+
+			if (i_cal_time_compare (start_tt, end_tt_copy) >= 0) {
+				g_clear_object (&end_tt);
+				end_tt = i_cal_time_clone (start_tt);
+
+				if (duration >= 0) {
+					i_cal_time_adjust (end_tt, 0, 0, 0, duration);
+				} else {
+					/* Modify the end time, to be the start + 1 hour/day. */
+					i_cal_time_adjust (end_tt, 0, i_cal_time_is_date (start_tt) ? 24 : 1, 0, 0);
+
+					if (!i_cal_time_is_date (start_tt)) {
+						GSettings *settings;
+						gint shorten_by;
+						gboolean shorten_end;
+
+						settings = e_util_ref_settings ("org.gnome.evolution.calendar");
+						shorten_by = g_settings_get_int (settings, "shorten-time");
+						shorten_end = g_settings_get_int (settings, "shorten-time");
+						g_clear_object (&settings);
+
+						if (shorten_by > 0 && shorten_by < 60) {
+							if (shorten_end)
+								i_cal_time_adjust (end_tt, 0, 0, -shorten_by, 0);
+							else
+								i_cal_time_adjust (start_tt, 0, 0, shorten_by, 0);
+
+							/* Revert the change, when it would make the time order reverse */
+							if (i_cal_time_compare (start_tt, end_tt) >= 0) {
+								if (shorten_end)
+									i_cal_time_adjust (end_tt, 0, 0, shorten_by, 0);
+								else
+									i_cal_time_adjust (start_tt, 0, 0, -shorten_by, 0);
+							}
+						}
+					}
+				}
+
+				if (start_zone && end_zone && start_zone != end_zone)
+					i_cal_time_convert_timezone (end_tt, start_zone, end_zone);
+			}
+		} else {
+			/* Try to switch only the date */
+			i_cal_time_set_date (start_tt,
+				i_cal_time_get_year (end_tt),
+				i_cal_time_get_month (end_tt),
+				i_cal_time_get_day (end_tt));
+
+			if (i_cal_time_compare (start_tt, end_tt_copy) >= 0) {
+				g_clear_object (&start_tt);
+				start_tt = i_cal_time_clone (end_tt);
+
+				if (duration >= 0) {
+					i_cal_time_adjust (start_tt, 0, 0, 0, -duration);
+				} else {
+					/* Modify the start time, to be the end - 1 hour/day. */
+					i_cal_time_adjust (start_tt, 0, i_cal_time_is_date (start_tt) ? -24 : -1, 0, 0);
+				}
+
+				if (start_zone && end_zone && start_zone != end_zone)
+					i_cal_time_convert_timezone (start_tt, end_zone, start_zone);
+			}
+		}
+
+		*pstart_tt = start_tt;
+		*pend_tt = end_tt;
+
+		g_clear_object (&end_tt_copy);
+
+		return TRUE;
+	}
+
+	g_clear_object (&end_tt_copy);
+
+	return FALSE;
+}
+
+void
+e_comp_editor_property_part_util_ensure_start_before_end (ICalComponent *icomp,
+							  ECompEditorPropertyPart *start_datetime,
+							  ECompEditorPropertyPart *end_datetime,
+							  gboolean change_end_datetime,
+							  gint *inout_last_duration)
+{
+	ECompEditorPropertyPartDatetime *start_dtm, *end_dtm;
+	ICalTime *start_tt, *end_tt;
+	gboolean set_dtstart = FALSE, set_dtend = FALSE;
+
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DATETIME (start_datetime));
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DATETIME (end_datetime));
+	g_return_if_fail (inout_last_duration != NULL);
+
+	start_dtm = E_COMP_EDITOR_PROPERTY_PART_DATETIME (start_datetime);
+	end_dtm = E_COMP_EDITOR_PROPERTY_PART_DATETIME (end_datetime);
+
+	start_tt = e_comp_editor_property_part_datetime_get_value (start_dtm);
+	end_tt = e_comp_editor_property_part_datetime_get_value (end_dtm);
+
+	if (!start_tt || !end_tt ||
+	    i_cal_time_is_null_time (start_tt) ||
+	    i_cal_time_is_null_time (end_tt) ||
+	    !i_cal_time_is_valid_time (start_tt) ||
+	    !i_cal_time_is_valid_time (end_tt)) {
+		g_clear_object (&start_tt);
+		g_clear_object (&end_tt);
+		return;
+	}
+
+	if (i_cal_time_is_date (start_tt) || i_cal_time_is_date (end_tt)) {
+		/* All Day Events are simple. We just compare the dates and if
+		 * start > end we copy one of them to the other. */
+		gint cmp;
+
+		i_cal_time_set_is_date (start_tt, TRUE);
+		i_cal_time_set_is_date (end_tt, TRUE);
+
+		cmp = i_cal_time_compare_date_only (start_tt, end_tt);
+
+		if (cmp > 0) {
+			if (change_end_datetime) {
+				g_clear_object (&end_tt);
+				end_tt = start_tt;
+				start_tt = NULL;
+				set_dtend = TRUE;
+
+				if (*inout_last_duration >= 24 * 60 * 60)
+					i_cal_time_adjust (end_tt, *inout_last_duration / (24 * 60 * 60), 0, 0, 0);
+			} else {
+				g_clear_object (&start_tt);
+				start_tt = end_tt;
+				end_tt = NULL;
+				set_dtstart = TRUE;
+
+				if (*inout_last_duration >= 24 * 60 * 60)
+					i_cal_time_adjust (start_tt, -(*inout_last_duration) / (24 * 60 * 60), 0, 0, 0);
+			}
+		}
+	} else {
+		if (ecepp_check_start_before_end (icomp, &start_tt, &end_tt, change_end_datetime, inout_last_duration)) {
+			if (change_end_datetime)
+				set_dtend = TRUE;
+			else
+				set_dtstart = TRUE;
+		}
+	}
+
+	if (set_dtstart || set_dtend) {
+		if (set_dtstart)
+			e_comp_editor_property_part_datetime_set_value (start_dtm, start_tt);
+
+		if (set_dtend)
+			e_comp_editor_property_part_datetime_set_value (end_dtm, end_tt);
+	}
+
+	g_clear_object (&start_tt);
+	g_clear_object (&end_tt);
+}

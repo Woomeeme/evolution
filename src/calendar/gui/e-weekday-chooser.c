@@ -30,10 +30,6 @@
 
 #define PADDING 2
 
-#define E_WEEKDAY_CHOOSER_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_WEEKDAY_CHOOSER, EWeekdayChooserPrivate))
-
 /* Private part of the EWeekdayChooser structure */
 struct _EWeekdayChooserPrivate {
 	gboolean blocked_weekdays[8];   /* indexed by GDateWeekday */
@@ -66,12 +62,9 @@ enum {
 
 static guint chooser_signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE_WITH_CODE (
-	EWeekdayChooser,
-	e_weekday_chooser,
-	GNOME_TYPE_CANVAS,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL))
+G_DEFINE_TYPE_WITH_CODE (EWeekdayChooser, e_weekday_chooser, GNOME_TYPE_CANVAS,
+	G_ADD_PRIVATE (EWeekdayChooser)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 static void
 colorize_items (EWeekdayChooser *chooser)
@@ -223,24 +216,37 @@ weekday_chooser_realize (GtkWidget *widget)
 	configure_items (chooser);
 }
 
+static gboolean
+weekday_chooser_handle_size_allocate_idle_cb (gpointer user_data)
+{
+	GWeakRef *weakref = user_data;
+	EWeekdayChooser *chooser = g_weak_ref_get (weakref);
+
+	if (chooser) {
+		GtkAllocation allocation;
+
+		gtk_widget_get_allocation (GTK_WIDGET (chooser), &allocation);
+
+		gnome_canvas_set_scroll_region (GNOME_CANVAS (chooser), 0, 0,
+			allocation.width, allocation.height);
+
+		configure_items (chooser);
+
+		g_object_unref (chooser);
+	}
+
+	return G_SOURCE_REMOVE;
+}
+
 static void
 weekday_chooser_size_allocate (GtkWidget *widget,
                                GtkAllocation *allocation)
 {
-	GtkWidgetClass *widget_class;
-	EWeekdayChooser *chooser;
-
-	chooser = E_WEEKDAY_CHOOSER (widget);
-
 	/* Chain up to parent's size_allocate() method. */
-	widget_class = GTK_WIDGET_CLASS (e_weekday_chooser_parent_class);
-	widget_class->size_allocate (widget, allocation);
+	GTK_WIDGET_CLASS (e_weekday_chooser_parent_class)->size_allocate (widget, allocation);
 
-	gnome_canvas_set_scroll_region (
-		GNOME_CANVAS (chooser), 0, 0,
-		allocation->width, allocation->height);
-
-	configure_items (chooser);
+	g_idle_add_full (G_PRIORITY_HIGH_IDLE, weekday_chooser_handle_size_allocate_idle_cb,
+		e_weak_ref_new (widget), (GDestroyNotify) e_weak_ref_free);
 }
 
 static void
@@ -355,8 +361,6 @@ e_weekday_chooser_class_init (EWeekdayChooserClass *class)
 {
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
-
-	g_type_class_add_private (class, sizeof (EWeekdayChooserPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = weekday_chooser_set_property;
@@ -521,7 +525,7 @@ create_items (EWeekdayChooser *chooser)
 static void
 e_weekday_chooser_init (EWeekdayChooser *chooser)
 {
-	chooser->priv = E_WEEKDAY_CHOOSER_GET_PRIVATE (chooser);
+	chooser->priv = e_weekday_chooser_get_instance_private (chooser);
 
 	create_items (chooser);
 	chooser->priv->focus_day = -1;

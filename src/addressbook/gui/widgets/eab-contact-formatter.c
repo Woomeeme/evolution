@@ -27,10 +27,6 @@
 
 #include "eab-contact-formatter.h"
 
-#define EAB_CONTACT_FORMATTER_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), EAB_TYPE_CONTACT_FORMATTER, EABContactFormatterPrivate))
-
 #define TEXT_IS_RIGHT_TO_LEFT \
 	(gtk_widget_get_default_direction () == GTK_TEXT_DIR_RTL)
 
@@ -86,10 +82,7 @@ static struct {
 	{ "OTHER", N_ ("Other") }
 };
 
-G_DEFINE_TYPE (
-	EABContactFormatter,
-	eab_contact_formatter,
-	G_TYPE_OBJECT);
+G_DEFINE_TYPE_WITH_PRIVATE (EABContactFormatter, eab_contact_formatter, G_TYPE_OBJECT)
 
 #define E_CREATE_TEL_URL	(E_TEXT_TO_HTML_LAST_FLAG << 0)
 #define E_CREATE_SIP_URL	(E_TEXT_TO_HTML_LAST_FLAG << 1)
@@ -521,11 +514,15 @@ get_email_location (EVCardAttribute *attr)
 	gint i;
 
 	for (i = 0; i < G_N_ELEMENTS (common_location); i++) {
-		if (e_vcard_attribute_has_type (attr, common_location[i].name))
+		if (e_vcard_attribute_has_type (attr, common_location[i].name)) {
+			if (g_ascii_strcasecmp (common_location[i].name, "OTHER") == 0)
+				return NULL;
+
 			return _(common_location[i].pretty_name);
+		}
 	}
 
-	return _("Other");
+	return NULL;
 }
 
 static void
@@ -617,7 +614,8 @@ render_contact_list_row (EABContactFormatter *formatter,
 			buffer,
 			"<td width=" IMAGE_COL_WIDTH " valign=\"top\" align=\"left\">"
 			"<button type=\"button\" id=\"%s\" class=\"header-collapse _evo_vcard_collapse_button\" style=\"display: inline-block;\">"
-			"<img src=\"gtk-stock://pan-down-symbolic\" />"
+			"<img src=\"gtk-stock://x-evolution-pan-down\" class=\"-evo-color-scheme-light\"/>"
+			"<img src=\"gtk-stock://x-evolution-pan-down?color-scheme=dark\" class=\"-evo-color-scheme-dark\"/>"
 			"</button>"
 			"</td><td width=\"100%%\" align=\"left\">%s",
 			e_destination_get_contact_uid (destination),
@@ -887,22 +885,24 @@ render_contact_column (EABContactFormatter *formatter,
 
 	for (l = email_list, al = email_attr_list; l && al; l = l->next, al = al->next) {
 		gchar *name = NULL, *mail = NULL;
-		gchar *attr_str = (gchar *) get_email_location ((EVCardAttribute *) al->data);
+		const gchar *attr_str = get_email_location ((EVCardAttribute *) al->data);
 
 		if (!eab_parse_qp_email (l->data, &name, &mail))
 			mail = e_text_to_html (l->data, 0);
 
 		g_string_append_printf (
 			email,
-			"%s%s%s<a href=\"internal-mailto:%d\">%s</a>%s "
-			"<span class=\"header\">(%s)</span>",
+			"%s%s%s<a href=\"internal-mailto:%d\">%s</a>%s"
+			"%s%s%s",
 			nl,
 			name ? name : "",
 			name ? " &lt;" : "",
 			email_num,
 			mail,
 			name ? "&gt;" : "",
-			attr_str ? attr_str : "");
+			attr_str ? "<span class=\"header\"> (" : "",
+			attr_str ? attr_str : "",
+			attr_str ? ")</span>" : "");
 		email_num++;
 		nl = "<br>";
 
@@ -1120,12 +1120,24 @@ render_contact (EABContactFormatter *formatter,
                 EContact *contact,
                 GString *buffer)
 {
+	GSettings *settings;
+	gboolean home_before_work;
+
+	settings = e_util_ref_settings ("org.gnome.evolution.addressbook");
+	home_before_work = g_settings_get_boolean (settings, "preview-home-before-work");
+	g_clear_object (&settings);
+
 	render_title_block (formatter, contact, buffer);
 
 	g_string_append (buffer, "<div id=\"columns\">");
 	render_contact_column (formatter, contact, buffer);
-	render_work_column (formatter, contact, buffer);
-	render_personal_column (formatter, contact, buffer);
+	if (home_before_work) {
+		render_personal_column (formatter, contact, buffer);
+		render_work_column (formatter, contact, buffer);
+	} else {
+		render_work_column (formatter, contact, buffer);
+		render_personal_column (formatter, contact, buffer);
+	}
 	render_other_column (formatter, contact, buffer);
 	g_string_append (buffer, "</div>");
 
@@ -1369,6 +1381,7 @@ render_compact (EABContactFormatter *formatter,
 			g_string_append_printf (
 				buffer, "<b>%s:</b> %s<br>",
 				_ ("Blog"), html);
+			g_free (html);
 		}
 	}
 
@@ -1445,8 +1458,6 @@ eab_contact_formatter_class_init (EABContactFormatterClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (EABContactFormatterClass));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = eab_contact_formatter_set_property;
 	object_class->get_property = eab_contact_formatter_get_property;
@@ -1481,7 +1492,7 @@ eab_contact_formatter_class_init (EABContactFormatterClass *class)
 static void
 eab_contact_formatter_init (EABContactFormatter *formatter)
 {
-	formatter->priv = EAB_CONTACT_FORMATTER_GET_PRIVATE (formatter);
+	formatter->priv = eab_contact_formatter_get_instance_private (formatter);
 
 	formatter->priv->mode = EAB_CONTACT_DISPLAY_RENDER_NORMAL;
 	formatter->priv->render_maps = FALSE;

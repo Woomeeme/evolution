@@ -21,10 +21,6 @@
 
 #include "e-mail-config-import-page.h"
 
-#define E_MAIL_CONFIG_IMPORT_PAGE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_CONFIG_IMPORT_PAGE, EMailConfigImportPagePrivate))
-
 typedef struct _AsyncContext AsyncContext;
 
 struct _EMailConfigImportPagePrivate {
@@ -46,14 +42,9 @@ static void	e_mail_config_import_page_interface_init
 					(EMailConfigPageInterface *iface);
 static gboolean	mail_config_import_page_next	(gpointer user_data);
 
-G_DEFINE_DYNAMIC_TYPE_EXTENDED (
-	EMailConfigImportPage,
-	e_mail_config_import_page,
-	GTK_TYPE_SCROLLED_WINDOW,
-	0,
-	G_IMPLEMENT_INTERFACE_DYNAMIC (
-		E_TYPE_MAIL_CONFIG_PAGE,
-		e_mail_config_import_page_interface_init))
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (EMailConfigImportPage, e_mail_config_import_page, GTK_TYPE_SCROLLED_WINDOW, 0,
+	G_ADD_PRIVATE_DYNAMIC (EMailConfigImportPage)
+	G_IMPLEMENT_INTERFACE_DYNAMIC (E_TYPE_MAIL_CONFIG_PAGE, e_mail_config_import_page_interface_init))
 
 static void
 async_context_free (AsyncContext *async_context)
@@ -82,10 +73,10 @@ mail_config_import_page_status (EImport *import,
 				gint percent,
 				gpointer user_data)
 {
-	GSimpleAsyncResult *simple = user_data;
+	GTask *task = G_TASK (user_data);
 	AsyncContext *async_context;
 
-	async_context = g_simple_async_result_get_op_res_gpointer (simple);
+	async_context = g_task_get_task_data (task);
 
 	e_activity_set_text (async_context->activity, what);
 	e_activity_set_percent (async_context->activity, (gdouble) percent);
@@ -96,40 +87,33 @@ mail_config_import_page_complete (EImport *import,
 				  const GError *error,
                                   gpointer user_data)
 {
-	GSimpleAsyncResult *simple = user_data;
+	GTask *task = user_data;
 
 	if (error) {
-		g_simple_async_result_set_from_error (simple, error);
-		g_simple_async_result_complete (simple);
-		g_object_unref (simple);
+		g_task_return_error (task, g_error_copy (error));
+		g_object_unref (task);
 	} else {
 		/* Schedule the next importer to start. */
-		g_idle_add (mail_config_import_page_next, simple);
+		g_idle_add (mail_config_import_page_next, task);
 	}
 }
 
 static gboolean
 mail_config_import_page_next (gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	AsyncContext *async_context;
-	GCancellable *cancellable;
 	EImportImporter *next_importer;
-	GError *error = NULL;
 
-	simple = G_SIMPLE_ASYNC_RESULT (user_data);
-	async_context = g_simple_async_result_get_op_res_gpointer (simple);
-	cancellable = async_context->cancellable;
+	task = G_TASK (user_data);
+	async_context = g_task_get_task_data (task);
 
 	/* Pop the completed importer and peek at the next one. */
 	g_queue_pop_head (&async_context->pending_importers);
 	next_importer = g_queue_peek_head (&async_context->pending_importers);
 
-	if (g_cancellable_set_error_if_cancelled (cancellable, &error)) {
-		g_simple_async_result_take_error (simple, error);
-		g_simple_async_result_complete (simple);
-		g_object_unref (simple);
-
+	if (g_task_return_error_if_cancelled (task)) {
+		g_clear_object (&task);
 	} else if (next_importer != NULL) {
 		e_import_import (
 			async_context->page->priv->import,
@@ -137,11 +121,11 @@ mail_config_import_page_next (gpointer user_data)
 			next_importer,
 			mail_config_import_page_status,
 			mail_config_import_page_complete,
-			simple);
+			g_steal_pointer (&task));
 
 	} else {
-		g_simple_async_result_complete (simple);
-		g_object_unref (simple);
+		g_task_return_boolean (task, TRUE);
+		g_clear_object (&task);
 	}
 
 	return FALSE;
@@ -167,25 +151,20 @@ mail_config_import_page_cancelled (GCancellable *cancellable,
 static void
 mail_config_import_page_dispose (GObject *object)
 {
-	EMailConfigImportPagePrivate *priv;
+	EMailConfigImportPage *self = E_MAIL_CONFIG_IMPORT_PAGE (object);
 
-	priv = E_MAIL_CONFIG_IMPORT_PAGE_GET_PRIVATE (object);
-
-	if (priv->import != NULL) {
+	if (self->priv->import != NULL) {
 		e_import_target_free (
-			priv->import,
-			priv->import_target);
-		g_object_unref (priv->import);
-		priv->import_target = NULL;
-		priv->import = NULL;
+			self->priv->import,
+			self->priv->import_target);
+		g_clear_object (&self->priv->import);
 	}
 
-	g_slist_free (priv->available_importers);
-	priv->available_importers = NULL;
+	g_slist_free (self->priv->available_importers);
+	self->priv->available_importers = NULL;
 
 	/* Chain up to parent's dispose() method. */
-	G_OBJECT_CLASS (e_mail_config_import_page_parent_class)->
-		dispose (object);
+	G_OBJECT_CLASS (e_mail_config_import_page_parent_class)->dispose (object);
 }
 
 static void
@@ -252,9 +231,6 @@ e_mail_config_import_page_class_init (EMailConfigImportPageClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (
-		class, sizeof (EMailConfigImportPagePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->dispose = mail_config_import_page_dispose;
 	object_class->constructed = mail_config_import_page_constructed;
@@ -275,7 +251,7 @@ e_mail_config_import_page_interface_init (EMailConfigPageInterface *iface)
 static void
 e_mail_config_import_page_init (EMailConfigImportPage *page)
 {
-	page->priv = E_MAIL_CONFIG_IMPORT_PAGE_GET_PRIVATE (page);
+	page->priv = e_mail_config_import_page_get_instance_private (page);
 
 	page->priv->import =
 		e_import_new ("org.gnome.evolution.shell.importer");
@@ -314,7 +290,7 @@ e_mail_config_import_page_import (EMailConfigImportPage *page,
                                   GAsyncReadyCallback callback,
                                   gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	AsyncContext *async_context;
 	GCancellable *cancellable;
 	EImportImporter *first_importer;
@@ -344,12 +320,9 @@ e_mail_config_import_page_import (EMailConfigImportPage *page,
 			async_context, (GDestroyNotify) NULL);
 	}
 
-	simple = g_simple_async_result_new (
-		G_OBJECT (page), callback, user_data,
-		e_mail_config_import_page_import);
-
-	g_simple_async_result_set_op_res_gpointer (
-		simple, async_context, (GDestroyNotify) async_context_free);
+	task = g_task_new (page, cancellable, callback, user_data);
+	g_task_set_source_tag (task, e_mail_config_import_page_import);
+	g_task_set_task_data (task, async_context, (GDestroyNotify) async_context_free);
 
 	/* Start the first importer. */
 
@@ -362,9 +335,11 @@ e_mail_config_import_page_import (EMailConfigImportPage *page,
 			first_importer,
 			mail_config_import_page_status,
 			mail_config_import_page_complete,
-			simple);
-	else
-		g_simple_async_result_complete_in_idle (simple);
+			g_steal_pointer (&task));
+	else {
+		g_task_return_boolean (task, TRUE);
+		g_clear_object (&task);
+	}
 }
 
 gboolean
@@ -372,16 +347,9 @@ e_mail_config_import_page_import_finish (EMailConfigImportPage *page,
                                          GAsyncResult *result,
                                          GError **error)
 {
-	GSimpleAsyncResult *simple;
+	g_return_val_if_fail (g_task_is_valid (result, page), FALSE);
+	g_return_val_if_fail (g_async_result_is_tagged (result, e_mail_config_import_page_import), FALSE);
 
-	g_return_val_if_fail (
-		g_simple_async_result_is_valid (
-		result, G_OBJECT (page),
-		e_mail_config_import_page_import), FALSE);
-
-	simple = G_SIMPLE_ASYNC_RESULT (result);
-
-	/* Assume success unless a GError is set. */
-	return !g_simple_async_result_propagate_error (simple, error);
+	return g_task_propagate_boolean (G_TASK (result), error);
 }
 

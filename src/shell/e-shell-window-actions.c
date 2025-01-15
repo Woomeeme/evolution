@@ -41,16 +41,21 @@ static void
 action_accounts_cb (GtkAction *action,
 		    EShellWindow *shell_window)
 {
-	ESourceRegistry *registry;
-	EShell *shell;
-	GtkWidget *accounts_window;
+	static GtkWidget *accounts_window = NULL;
 
 	g_return_if_fail (E_IS_SHELL_WINDOW (shell_window));
 
-	shell = e_shell_window_get_shell (shell_window);
-	registry = e_shell_get_registry (shell);
+	if (!accounts_window) {
+		ESourceRegistry *registry;
+		EShell *shell;
 
-	accounts_window = e_accounts_window_new (registry);
+		shell = e_shell_window_get_shell (shell_window);
+		registry = e_shell_get_registry (shell);
+
+		accounts_window = e_accounts_window_new (registry);
+
+		g_object_weak_ref (G_OBJECT (accounts_window), (GWeakNotify) g_nullify_pointer, &accounts_window);
+	}
 
 	e_accounts_window_show_with_parent (E_ACCOUNTS_WINDOW (accounts_window), GTK_WINDOW (shell_window));
 }
@@ -347,11 +352,15 @@ action_categories_cb (GtkAction *action,
 	e_categories_editor_set_entry_visible (
 		E_CATEGORIES_EDITOR (editor), FALSE);
 
-	dialog = gtk_dialog_new_with_buttons (
-		_("Categories Editor"),
-		GTK_WINDOW (shell_window),
-		GTK_DIALOG_DESTROY_WITH_PARENT,
-		_("_Close"), GTK_RESPONSE_CLOSE, NULL);
+	dialog = g_object_new (
+		GTK_TYPE_DIALOG,
+		"transient-for", GTK_WINDOW (shell_window),
+		"use-header-bar", e_util_get_use_header_bar (),
+		"title", _("Categories Editor"),
+		NULL);
+
+	gtk_window_set_destroy_with_parent (GTK_WINDOW (dialog), TRUE);
+
 	gtk_container_set_border_width (GTK_CONTAINER (dialog), 12);
 	content_area = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
 	gtk_box_pack_start (
@@ -465,6 +474,21 @@ action_search_edit_cb (GtkAction *action,
 	e_shell_window_update_search_menu (shell_window);
 }
 
+static EShellSearchbar *
+shell_window_get_search_bar (EShellWindow *shell_window)
+{
+	EShellView *shell_view;
+	const gchar *view_name;
+
+	g_return_val_if_fail (E_IS_SHELL_WINDOW (shell_window), NULL);
+
+	view_name = e_shell_window_get_active_view (shell_window);
+	shell_view = e_shell_window_get_shell_view (shell_window, view_name);
+	g_return_val_if_fail (shell_view != NULL, NULL);
+
+	return E_SHELL_SEARCHBAR (e_shell_view_get_searchbar (shell_view));
+}
+
 static void
 search_options_selection_cancel_cb (GtkMenuShell *menu,
 				    EShellWindow *shell_window);
@@ -473,9 +497,7 @@ static void
 search_options_selection_done_cb (GtkMenuShell *menu,
 				  EShellWindow *shell_window)
 {
-	EShellView *shell_view;
 	EShellSearchbar *search_bar;
-	const gchar *view_name;
 
 	/* disconnect first */
 	g_signal_handlers_disconnect_by_func (menu, search_options_selection_done_cb, shell_window);
@@ -483,11 +505,7 @@ search_options_selection_done_cb (GtkMenuShell *menu,
 
 	g_return_if_fail (E_IS_SHELL_WINDOW (shell_window));
 
-	view_name = e_shell_window_get_active_view (shell_window);
-	shell_view = e_shell_window_get_shell_view (shell_window, view_name);
-	g_return_if_fail (shell_view != NULL);
-
-	search_bar = E_SHELL_SEARCHBAR (e_shell_view_get_searchbar (shell_view));
+	search_bar = shell_window_get_search_bar (shell_window);
 	e_shell_searchbar_search_entry_grab_focus (search_bar);
 }
 
@@ -513,9 +531,16 @@ action_search_options_cb (GtkAction *action,
 {
 	EShellView *shell_view;
 	EShellViewClass *shell_view_class;
+	EShellSearchbar *search_bar;
 	const gchar *view_name;
 	const gchar *widget_path;
 	GtkWidget *popup_menu;
+
+	search_bar = shell_window_get_search_bar (shell_window);
+	if (!e_shell_searchbar_search_entry_has_focus (search_bar)) {
+		e_shell_searchbar_search_entry_grab_focus (search_bar);
+		return;
+	}
 
 	view_name = e_shell_window_get_active_view (shell_window);
 	shell_view = e_shell_window_get_shell_view (shell_window, view_name);

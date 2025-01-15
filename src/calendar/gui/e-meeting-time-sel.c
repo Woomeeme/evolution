@@ -39,13 +39,10 @@
 #include "e-meeting-list-view.h"
 #include "e-meeting-time-sel-item.h"
 
-#define E_MEETING_TIME_SELECTOR_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MEETING_TIME_SELECTOR, EMeetingTimeSelectorPrivate))
-
 struct _EMeetingTimeSelectorPrivate {
 	gboolean use_24_hour_format;
 	gulong notify_free_busy_template_id;
+	gulong notify_timezone_id;
 };
 
 /* An array of hour strings for 24 hour time, "0:00" .. "23:00". */
@@ -185,10 +182,10 @@ static void row_inserted_cb (GtkTreeModel *model, GtkTreePath *path, GtkTreeIter
 static void row_changed_cb (GtkTreeModel *model, GtkTreePath *path, GtkTreeIter *iter, gpointer data);
 static void row_deleted_cb (GtkTreeModel *model, GtkTreePath *path, gpointer data);
 
-static void free_busy_template_changed_cb (EMeetingTimeSelector *mts);
+static void free_busy_schedule_refresh_cb (EMeetingTimeSelector *mts);
 
-G_DEFINE_TYPE_WITH_CODE (
-	EMeetingTimeSelector, e_meeting_time_selector, GTK_TYPE_TABLE,
+G_DEFINE_TYPE_WITH_CODE (EMeetingTimeSelector, e_meeting_time_selector, GTK_TYPE_TABLE,
+	G_ADD_PRIVATE (EMeetingTimeSelector)
 	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 static void
@@ -240,6 +237,7 @@ meeting_time_selector_dispose (GObject *object)
 			mts->model, G_SIGNAL_MATCH_DATA,
 			0, 0, NULL, NULL, mts);
 		e_signal_disconnect_notify_handler (mts->model, &mts->priv->notify_free_busy_template_id);
+		e_signal_disconnect_notify_handler (mts->model, &mts->priv->notify_timezone_id);
 
 		g_object_unref (mts->model);
 		mts->model = NULL;
@@ -267,8 +265,6 @@ e_meeting_time_selector_class_init (EMeetingTimeSelectorClass *class)
 {
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
-
-	g_type_class_add_private (class, sizeof (EMeetingTimeSelectorPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = meeting_time_selector_set_property;
@@ -306,7 +302,7 @@ e_meeting_time_selector_init (EMeetingTimeSelector *mts)
 {
 	GDateWeekday weekday;
 
-	mts->priv = E_MEETING_TIME_SELECTOR_GET_PRIVATE (mts);
+	mts->priv = e_meeting_time_selector_get_instance_private (mts);
 
 	/* The shadow is drawn in the border so it must be >= 2 pixels. */
 	gtk_container_set_border_width (GTK_CONTAINER (mts), 2);
@@ -394,7 +390,10 @@ e_meeting_time_selector_construct (EMeetingTimeSelector *mts,
 
 	mts->priv->notify_free_busy_template_id = e_signal_connect_notify_swapped (
 		mts->model, "notify::free-busy-template",
-		G_CALLBACK (free_busy_template_changed_cb), mts);
+		G_CALLBACK (free_busy_schedule_refresh_cb), mts);
+	mts->priv->notify_timezone_id = e_signal_connect_notify_swapped (
+		mts->model, "notify::timezone",
+		G_CALLBACK (free_busy_schedule_refresh_cb), mts);
 
 	g_signal_connect (
 		mts->model, "row_inserted",
@@ -1423,13 +1422,16 @@ e_meeting_time_selector_refresh_cb (gpointer data)
 
 	if (e_meeting_store_get_num_queries (mts->model) == 0) {
 		GdkCursor *cursor;
-		GdkWindow *window;
 
-		cursor = gdk_cursor_new (GDK_LEFT_PTR);
-		window = gtk_widget_get_window (GTK_WIDGET (mts));
-		if (window)
-			gdk_window_set_cursor (window, cursor);
-		g_object_unref (cursor);
+		cursor = gdk_cursor_new_from_name (gtk_widget_get_display (GTK_WIDGET (mts)), "default");
+		if (cursor) {
+			GdkWindow *window;
+
+			window = gtk_widget_get_window (GTK_WIDGET (mts));
+			if (window)
+				gdk_window_set_cursor (window, cursor);
+			g_object_unref (cursor);
+		}
 
 		mts->last_cursor_set = GDK_LEFT_PTR;
 
@@ -1472,14 +1474,17 @@ e_meeting_time_selector_refresh_free_busy (EMeetingTimeSelector *mts,
 	 *     no GdkWindow yet.  This avoids a runtime warning. */
 	if (gtk_widget_get_realized (GTK_WIDGET (mts))) {
 		GdkCursor *cursor;
-		GdkWindow *window;
 
 		/* Set the cursor to Busy.  We need to reset it to
 		 * normal once the free busy queries are complete. */
-		cursor = gdk_cursor_new (GDK_WATCH);
-		window = gtk_widget_get_window (GTK_WIDGET (mts));
-		gdk_window_set_cursor (window, cursor);
-		g_object_unref (cursor);
+		cursor = gdk_cursor_new_from_name (gtk_widget_get_display (GTK_WIDGET (mts)), "wait");
+		if (cursor) {
+			GdkWindow *window;
+
+			window = gtk_widget_get_window (GTK_WIDGET (mts));
+			gdk_window_set_cursor (window, cursor);
+			g_object_unref (cursor);
+		}
 
 		mts->last_cursor_set = GDK_WATCH;
 	}
@@ -3192,7 +3197,7 @@ row_deleted_cb (GtkTreeModel *model,
 	gtk_widget_queue_draw (mts->display_main);
 }
 
-#define REFRESH_PAUSE 5
+#define REFRESH_PAUSE 2
 
 static gboolean
 free_busy_timeout_refresh (gpointer data)
@@ -3208,9 +3213,9 @@ free_busy_timeout_refresh (gpointer data)
 }
 
 static void
-free_busy_template_changed_cb (EMeetingTimeSelector *mts)
+free_busy_schedule_refresh_cb (EMeetingTimeSelector *mts)
 {
-	/* Wait REFRESH_PAUSE before refreshing, using the latest uri value */
+	/* Wait REFRESH_PAUSE before refreshing, using the latest uri value or timezone */
 	if (mts->fb_refresh_not != 0)
 		g_source_remove (mts->fb_refresh_not);
 

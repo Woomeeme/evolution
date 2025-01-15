@@ -155,6 +155,9 @@ void		e_comp_editor_add_page		(ECompEditor *comp_editor,
 ECompEditorPage *
 		e_comp_editor_get_page		(ECompEditor *comp_editor,
 						 GType page_type);
+ECompEditorPropertyPart *
+		e_comp_editor_get_property_part	(ECompEditor *comp_editor,
+						 ICalPropertyKind prop_kind);
 GSList *	e_comp_editor_get_pages		(ECompEditor *comp_editor);
 void		e_comp_editor_select_page	(ECompEditor *comp_editor,
 						 ECompEditorPage *page);
@@ -172,6 +175,10 @@ void		e_comp_editor_ensure_start_before_end
 						 ECompEditorPropertyPart *start_datetime,
 						 ECompEditorPropertyPart *end_datetime,
 						 gboolean change_end_datetime);
+void		e_comp_editor_ensure_same_value_type
+						(ECompEditor *comp_editor,
+						 ECompEditorPropertyPart *src_datetime,
+						 ECompEditorPropertyPart *des_datetime);
 ECompEditor *	e_comp_editor_open_for_component
 						(GtkWindow *parent,
 						 EShell *shell,

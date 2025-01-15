@@ -21,10 +21,6 @@
 
 #include "e-mail-signature-combo-box.h"
 
-#define E_MAIL_SIGNATURE_COMBO_BOX_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_SIGNATURE_COMBO_BOX, EMailSignatureComboBoxPrivate))
-
 #define SOURCE_IS_MAIL_SIGNATURE(source) \
 	(e_source_has_extension ((source), E_SOURCE_EXTENSION_MAIL_SIGNATURE))
 
@@ -49,10 +45,7 @@ enum {
 	COLUMN_UID
 };
 
-G_DEFINE_TYPE (
-	EMailSignatureComboBox,
-	e_mail_signature_combo_box,
-	GTK_TYPE_COMBO_BOX)
+G_DEFINE_TYPE_WITH_PRIVATE (EMailSignatureComboBox, e_mail_signature_combo_box, GTK_TYPE_COMBO_BOX)
 
 static gboolean
 mail_signature_combo_box_refresh_idle_cb (EMailSignatureComboBox *combo_box)
@@ -230,42 +223,35 @@ mail_signature_combo_box_get_property (GObject *object,
 static void
 mail_signature_combo_box_dispose (GObject *object)
 {
-	EMailSignatureComboBoxPrivate *priv;
+	EMailSignatureComboBox *self = E_MAIL_SIGNATURE_COMBO_BOX (object);
 
-	priv = E_MAIL_SIGNATURE_COMBO_BOX_GET_PRIVATE (object);
-
-	if (priv->registry != NULL) {
+	if (self->priv->registry != NULL) {
 		g_signal_handlers_disconnect_matched (
-			priv->registry, G_SIGNAL_MATCH_DATA,
+			self->priv->registry, G_SIGNAL_MATCH_DATA,
 			0, 0, NULL, NULL, object);
-		g_object_unref (priv->registry);
-		priv->registry = NULL;
+		g_clear_object (&self->priv->registry);
 	}
 
-	if (priv->refresh_idle_id > 0) {
-		g_source_remove (priv->refresh_idle_id);
-		priv->refresh_idle_id = 0;
+	if (self->priv->refresh_idle_id > 0) {
+		g_source_remove (self->priv->refresh_idle_id);
+		self->priv->refresh_idle_id = 0;
 	}
 
 	/* Chain up to parent's dispose() method. */
-	G_OBJECT_CLASS (e_mail_signature_combo_box_parent_class)->
-		dispose (object);
+	G_OBJECT_CLASS (e_mail_signature_combo_box_parent_class)->dispose (object);
 }
 
 static void
 mail_signature_combo_box_finalize (GObject *object)
 {
-	EMailSignatureComboBoxPrivate *priv;
+	EMailSignatureComboBox *self = E_MAIL_SIGNATURE_COMBO_BOX (object);
 
-	priv = E_MAIL_SIGNATURE_COMBO_BOX_GET_PRIVATE (object);
-
-	g_free (priv->identity_uid);
-	g_free (priv->identity_name);
-	g_free (priv->identity_address);
+	g_free (self->priv->identity_uid);
+	g_free (self->priv->identity_name);
+	g_free (self->priv->identity_address);
 
 	/* Chain up to parent's finalize() method. */
-	G_OBJECT_CLASS (e_mail_signature_combo_box_parent_class)->
-		finalize (object);
+	G_OBJECT_CLASS (e_mail_signature_combo_box_parent_class)->finalize (object);
 }
 
 static void
@@ -308,9 +294,6 @@ static void
 e_mail_signature_combo_box_class_init (EMailSignatureComboBoxClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (
-		class, sizeof (EMailSignatureComboBoxPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_signature_combo_box_set_property;
@@ -368,7 +351,7 @@ e_mail_signature_combo_box_class_init (EMailSignatureComboBoxClass *class)
 static void
 e_mail_signature_combo_box_init (EMailSignatureComboBox *combo_box)
 {
-	combo_box->priv = E_MAIL_SIGNATURE_COMBO_BOX_GET_PRIVATE (combo_box);
+	combo_box->priv = e_mail_signature_combo_box_get_instance_private (combo_box);
 }
 
 GtkWidget *
@@ -434,7 +417,7 @@ e_mail_signature_combo_box_refresh (EMailSignatureComboBox *combo_box)
 	/* Followed by the other mail signatures, alphabetized. */
 
 	for (link = list; link != NULL; link = g_list_next (link)) {
-		GtkTreeIter iter;
+		GtkTreeIter titer;
 		const gchar *display_name;
 		const gchar *uid;
 
@@ -442,10 +425,10 @@ e_mail_signature_combo_box_refresh (EMailSignatureComboBox *combo_box)
 		display_name = e_source_get_display_name (source);
 		uid = e_source_get_uid (source);
 
-		gtk_list_store_append (GTK_LIST_STORE (tree_model), &iter);
+		gtk_list_store_append (GTK_LIST_STORE (tree_model), &titer);
 
 		gtk_list_store_set (
-			GTK_LIST_STORE (tree_model), &iter,
+			GTK_LIST_STORE (tree_model), &titer,
 			COLUMN_DISPLAY_NAME, display_name,
 			COLUMN_UID, uid, -1);
 	}
@@ -615,18 +598,16 @@ e_mail_signature_combo_box_set_identity (EMailSignatureComboBox *combo_box,
 typedef struct _LoadContext LoadContext;
 
 struct _LoadContext {
-	GCancellable *cancellable;
 	gchar *contents;
 	gsize length;
-	gboolean is_html;
+	EContentEditorMode editor_mode;
 };
 
 static void
 load_context_free (LoadContext *context)
 {
-	g_clear_object (&context->cancellable);
-	g_free (context->contents);
-	g_slice_free (LoadContext, context);
+	g_clear_pointer (&context->contents, g_free);
+	g_free (context);
 }
 
 static void
@@ -708,43 +689,55 @@ mail_signature_combo_box_autogenerate (EMailSignatureComboBox *combo_box,
 
 	context->length = buffer->len;
 	context->contents = g_string_free (buffer, FALSE);
-	context->is_html = TRUE;
+	context->editor_mode = E_CONTENT_EDITOR_MODE_HTML;
 
 	g_object_unref (source);
 }
 
 static void
-mail_signature_combo_box_load_cb (ESource *source,
+mail_signature_combo_box_load_cb (GObject *source_object,
                                   GAsyncResult *result,
-                                  GSimpleAsyncResult *simple)
+                                  gpointer user_data)
 {
+	ESource *source;
+	GTask *task;
 	ESourceMailSignature *extension;
 	LoadContext *context;
 	const gchar *extension_name;
 	const gchar *mime_type;
 	GError *error = NULL;
 
-	context = g_simple_async_result_get_op_res_gpointer (simple);
-
+	source = E_SOURCE (source_object);
+	task = G_TASK (user_data);
+	context = g_new0 (LoadContext, 1);
 	e_source_mail_signature_load_finish (
 		source, result, &context->contents, &context->length, &error);
 
 	if (error != NULL) {
-		g_simple_async_result_set_from_error (simple, error);
-		g_simple_async_result_complete (simple);
-		g_object_unref (simple);
-		g_error_free (error);
+		g_clear_pointer (&context, load_context_free);
+		g_task_return_error (task, g_steal_pointer (&error));
+		g_object_unref (task);
 		return;
 	}
 
 	extension_name = E_SOURCE_EXTENSION_MAIL_SIGNATURE;
 	extension = e_source_get_extension (source, extension_name);
 	mime_type = e_source_mail_signature_get_mime_type (extension);
-	context->is_html = (g_strcmp0 (mime_type, "text/html") == 0);
 
-	g_simple_async_result_complete (simple);
+	if (g_strcmp0 (mime_type, "text/html") == 0)
+		context->editor_mode = E_CONTENT_EDITOR_MODE_HTML;
+	else if (g_strcmp0 (mime_type, "text/markdown") == 0)
+		context->editor_mode = E_CONTENT_EDITOR_MODE_MARKDOWN;
+	else if (g_strcmp0 (mime_type, "text/markdown-plain") == 0)
+		context->editor_mode = E_CONTENT_EDITOR_MODE_MARKDOWN_PLAIN_TEXT;
+	else if (g_strcmp0 (mime_type, "text/markdown-html") == 0)
+		context->editor_mode = E_CONTENT_EDITOR_MODE_MARKDOWN_HTML;
+	else
+		context->editor_mode = E_CONTENT_EDITOR_MODE_PLAIN_TEXT;
 
-	g_object_unref (simple);
+	g_task_return_pointer (task, g_steal_pointer (&context), (GDestroyNotify) load_context_free);
+
+	g_object_unref (task);
 }
 
 void
@@ -754,36 +747,30 @@ e_mail_signature_combo_box_load_selected (EMailSignatureComboBox *combo_box,
                                           GAsyncReadyCallback callback,
                                           gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	ESourceRegistry *registry;
-	LoadContext *context;
 	ESource *source;
 	const gchar *active_id;
 
 	g_return_if_fail (E_IS_MAIL_SIGNATURE_COMBO_BOX (combo_box));
 
-	context = g_slice_new0 (LoadContext);
-	context->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
-
-	simple = g_simple_async_result_new (
-		G_OBJECT (combo_box), callback, user_data,
-		e_mail_signature_combo_box_load_selected);
-
-	g_simple_async_result_set_op_res_gpointer (
-		simple, context, (GDestroyNotify) load_context_free);
+	task = g_task_new (combo_box, cancellable, callback, user_data);
+	g_task_set_source_tag (task, e_mail_signature_combo_box_load_selected);
 
 	active_id = gtk_combo_box_get_active_id (GTK_COMBO_BOX (combo_box));
 
 	if (active_id == NULL) {
-		g_simple_async_result_complete_in_idle (simple);
-		g_object_unref (simple);
+		LoadContext *context = g_new0 (LoadContext, 1);
+		g_task_return_pointer (task, context, (GDestroyNotify) load_context_free);
+		g_object_unref (task);
 		return;
 	}
 
 	if (g_strcmp0 (active_id, E_MAIL_SIGNATURE_AUTOGENERATED_UID) == 0) {
+		LoadContext *context = g_new0 (LoadContext, 1);
 		mail_signature_combo_box_autogenerate (combo_box, context);
-		g_simple_async_result_complete_in_idle (simple);
-		g_object_unref (simple);
+		g_task_return_pointer (task, context, (GDestroyNotify) load_context_free);
+		g_object_unref (task);
 		return;
 	}
 
@@ -793,14 +780,15 @@ e_mail_signature_combo_box_load_selected (EMailSignatureComboBox *combo_box,
 	/* If for some reason the ESource lookup fails, handle it as
 	 * though "None" were selected.  No need to report an error. */
 	if (source == NULL) {
-		g_simple_async_result_complete_in_idle (simple);
-		g_object_unref (simple);
+		LoadContext *context = g_new0 (LoadContext, 1);
+		g_task_return_pointer (task, context, (GDestroyNotify) load_context_free);
+		g_object_unref (task);
 		return;
 	}
 
 	e_source_mail_signature_load (
-		source, io_priority, cancellable, (GAsyncReadyCallback)
-		mail_signature_combo_box_load_cb, simple);
+		source, io_priority, cancellable,
+		mail_signature_combo_box_load_cb, g_steal_pointer (&task));
 
 	g_object_unref (source);
 }
@@ -810,36 +798,27 @@ e_mail_signature_combo_box_load_selected_finish (EMailSignatureComboBox *combo_b
                                                  GAsyncResult *result,
                                                  gchar **contents,
                                                  gsize *length,
-                                                 gboolean *is_html,
+                                                 EContentEditorMode *out_editor_mode,
                                                  GError **error)
 {
-	GSimpleAsyncResult *simple;
 	LoadContext *context;
 
-	g_return_val_if_fail (
-		g_simple_async_result_is_valid (
-		result, G_OBJECT (combo_box),
-		e_mail_signature_combo_box_load_selected), FALSE);
+	g_return_val_if_fail (g_task_is_valid (result, combo_box), FALSE);
+	g_return_val_if_fail (g_async_result_is_tagged (result, e_mail_signature_combo_box_load_selected), FALSE);
 
-	simple = G_SIMPLE_ASYNC_RESULT (result);
-	context = g_simple_async_result_get_op_res_gpointer (simple);
-
-	if (g_simple_async_result_propagate_error (simple, error))
+	context = g_task_propagate_pointer (G_TASK (result), error);
+	if (!context)
 		return FALSE;
 
-	if (g_cancellable_set_error_if_cancelled (context->cancellable, error))
-		return FALSE;
-
-	if (contents != NULL) {
-		*contents = context->contents;
-		context->contents = NULL;
-	}
+	if (contents != NULL)
+		*contents = g_steal_pointer (&context->contents);
 
 	if (length != NULL)
 		*length = context->length;
 
-	if (is_html != NULL)
-		*is_html = context->is_html;
+	if (out_editor_mode)
+		*out_editor_mode = context->editor_mode;
 
+	g_clear_pointer (&context, load_context_free);
 	return TRUE;
 }

@@ -39,14 +39,6 @@
 
 #include "em-vfolder-editor-rule.h"
 
-#define EM_VFOLDER_EDITOR_RULE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), EM_TYPE_VFOLDER_EDITOR_RULE, EMVFolderEditorRulePrivate))
-
-#define EM_VFOLDER_EDITOR_RULE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), EM_TYPE_VFOLDER_EDITOR_RULE, EMVFolderEditorRulePrivate))
-
 struct _EMVFolderEditorRulePrivate {
 	EMailSession *session;
 };
@@ -57,11 +49,9 @@ enum {
 };
 
 static GtkWidget *get_widget (EFilterRule *fr, ERuleContext *f);
+static void em_vfolder_editor_rule_persist_customatizations (EMVFolderEditorRule *rule);
 
-G_DEFINE_TYPE (
-	EMVFolderEditorRule,
-	em_vfolder_editor_rule,
-	EM_TYPE_VFOLDER_RULE)
+G_DEFINE_TYPE_WITH_PRIVATE (EMVFolderEditorRule, em_vfolder_editor_rule, EM_TYPE_VFOLDER_RULE)
 
 static void
 vfolder_editor_rule_set_session (EMVFolderEditorRule *rule,
@@ -123,10 +113,9 @@ vfolder_editor_rule_get_property (GObject *object,
 static void
 vfolder_editor_rule_dispose (GObject *object)
 {
-	EMVFolderEditorRulePrivate *priv;
+	EMVFolderEditorRule *self = EM_VFOLDER_EDITOR_RULE (object);
 
-	priv = EM_VFOLDER_EDITOR_RULE_GET_PRIVATE (object);
-	g_clear_object (&priv->session);
+	g_clear_object (&self->priv->session);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (em_vfolder_editor_rule_parent_class)->dispose (object);
@@ -146,8 +135,6 @@ em_vfolder_editor_rule_class_init (EMVFolderEditorRuleClass *class)
 {
 	GObjectClass *object_class;
 	EFilterRuleClass *filter_rule_class;
-
-	g_type_class_add_private (class, sizeof (EMVFolderEditorRulePrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = vfolder_editor_rule_set_property;
@@ -173,7 +160,10 @@ em_vfolder_editor_rule_class_init (EMVFolderEditorRuleClass *class)
 static void
 em_vfolder_editor_rule_init (EMVFolderEditorRule *rule)
 {
-	rule->priv = EM_VFOLDER_EDITOR_RULE_GET_PRIVATE (rule);
+	rule->priv = em_vfolder_editor_rule_get_instance_private (rule);
+
+	g_signal_connect (rule, "persist-customizations",
+		G_CALLBACK (em_vfolder_editor_rule_persist_customatizations), NULL);
 }
 
 EFilterRule *
@@ -333,15 +323,15 @@ vfr_folder_response (EMFolderSelector *selector,
 			(GDestroyNotify) NULL);
 
 		if (gtk_tree_model_get_iter_first (GTK_TREE_MODEL (data->model), &iter)) {
-			GtkTreeModel *model = GTK_TREE_MODEL (data->model);
+			GtkTreeModel *dmodel = GTK_TREE_MODEL (data->model);
 			do {
 				gchar *known = NULL;
 
-				gtk_tree_model_get (model, &iter, 1, &known, -1);
+				gtk_tree_model_get (dmodel, &iter, 1, &known, -1);
 
 				if (known)
 					g_hash_table_add (known_uris, known);
-			} while (gtk_tree_model_iter_next (model, &iter));
+			} while (gtk_tree_model_iter_next (dmodel, &iter));
 		}
 
 		for (uris_iter = selected_uris; uris_iter != NULL; uris_iter = uris_iter->next) {
@@ -497,6 +487,317 @@ source_remove (GtkWidget *widget,
 	set_sensitive (data);
 }
 
+typedef struct _FolderTweaksData {
+	GtkWidget *image_button; /* not referenced */
+	GtkWidget *color_chooser; /* not referenced */
+	gchar *folder_uri;
+	gchar *icon_filename;
+	GdkRGBA text_color;
+	gboolean text_color_set;
+	gboolean changed;
+} FolderTweaksData;
+
+static FolderTweaksData *
+folder_tweaks_data_new (ERuleContext *rc,
+			const gchar *rule_name,
+			EMailFolderTweaks *tweaks)
+{
+	FolderTweaksData *ftd;
+	EMailSession *session;
+	CamelService *service;
+
+	session = em_vfolder_editor_context_get_session (EM_VFOLDER_EDITOR_CONTEXT (rc));
+	service = camel_session_ref_service (CAMEL_SESSION (session), E_MAIL_SESSION_VFOLDER_UID);
+
+	ftd = g_slice_new0 (FolderTweaksData);
+	ftd->folder_uri = e_mail_folder_uri_build (CAMEL_STORE (service), rule_name);
+	ftd->text_color_set = e_mail_folder_tweaks_get_color (tweaks, ftd->folder_uri, &ftd->text_color);
+	ftd->icon_filename = e_mail_folder_tweaks_dup_icon_filename (tweaks, ftd->folder_uri);
+
+	g_clear_object (&service);
+
+	return ftd;
+}
+
+static void
+folder_tweaks_data_free (gpointer ptr)
+{
+	FolderTweaksData *ftd = ptr;
+
+	if (ftd) {
+		g_free (ftd->folder_uri);
+		g_free (ftd->icon_filename);
+		g_slice_free (FolderTweaksData, ftd);
+	}
+}
+
+static void
+tweaks_custom_icon_check_toggled_cb (GtkToggleButton *toggle_button,
+				     FolderTweaksData *ftd)
+{
+	GtkWidget *image;
+
+	g_return_if_fail (ftd != NULL);
+
+	ftd->changed = TRUE;
+
+	if (!gtk_toggle_button_get_active (toggle_button)) {
+		g_clear_pointer (&ftd->icon_filename, g_free);
+		return;
+	}
+
+	image = gtk_button_get_image (GTK_BUTTON (ftd->image_button));
+
+	if (image && gtk_image_get_storage_type (GTK_IMAGE (image))) {
+		GIcon *icon = NULL;
+
+		gtk_image_get_gicon (GTK_IMAGE (image), &icon, NULL);
+
+		if (G_IS_FILE_ICON (icon)) {
+			GFile *file;
+
+			file = g_file_icon_get_file (G_FILE_ICON (icon));
+			if (file) {
+				gchar *filename;
+
+				filename = g_file_get_path (file);
+				if (filename) {
+					g_clear_pointer (&ftd->icon_filename, g_free);
+					ftd->icon_filename = filename;
+				}
+			}
+		}
+	}
+}
+
+static void
+tweaks_custom_icon_button_clicked_cb (GtkWidget *button,
+				      FolderTweaksData *ftd)
+{
+	GtkWidget *dialog;
+	GtkWidget *toplevel;
+	GFile *file;
+
+	toplevel = gtk_widget_get_toplevel (button);
+	dialog = e_image_chooser_dialog_new (_("Select Custom Icon"),
+		GTK_IS_WINDOW (toplevel) ? GTK_WINDOW (toplevel) : NULL);
+
+	file = e_image_chooser_dialog_run (E_IMAGE_CHOOSER_DIALOG (dialog));
+
+	gtk_widget_destroy (dialog);
+
+	if (file) {
+		gchar *filename;
+
+		filename = g_file_get_path (file);
+		if (filename) {
+			GtkWidget *image;
+			GIcon *custom_icon;
+
+			image = gtk_button_get_image (GTK_BUTTON (button));
+			custom_icon = g_file_icon_new (file);
+
+			gtk_image_set_from_gicon (GTK_IMAGE (image), custom_icon, GTK_ICON_SIZE_BUTTON);
+
+			g_clear_object (&custom_icon);
+
+			ftd->changed = TRUE;
+			g_clear_pointer (&ftd->icon_filename, g_free);
+			ftd->icon_filename = filename;
+		}
+
+		g_object_unref (file);
+	}
+}
+
+static void
+add_tweaks_custom_icon_row (GtkBox *vbox,
+			    FolderTweaksData *ftd)
+{
+	GtkWidget *checkbox;
+	GtkWidget *button;
+	GtkWidget *image;
+	GtkWidget *hbox;
+
+	g_return_if_fail (GTK_IS_BOX (vbox));
+	g_return_if_fail (ftd != NULL);
+
+	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+	gtk_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
+
+	checkbox = gtk_check_button_new_with_mnemonic (_("_Use custom icon"));
+	gtk_box_pack_start (GTK_BOX (hbox), checkbox, FALSE, FALSE, 0);
+
+	button = gtk_button_new ();
+	image = gtk_image_new_from_icon_name (NULL, GTK_ICON_SIZE_BUTTON);
+	gtk_button_set_image (GTK_BUTTON (button), image);
+	gtk_button_set_always_show_image (GTK_BUTTON (button), TRUE);
+
+	ftd->image_button = button;
+
+	if (ftd->icon_filename &&
+	    g_file_test (ftd->icon_filename, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR)) {
+		GFile *file;
+		GIcon *custom_icon;
+
+		file = g_file_new_for_path (ftd->icon_filename);
+		custom_icon = g_file_icon_new (file);
+
+		g_clear_object (&file);
+
+		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (checkbox), TRUE);
+		gtk_image_set_from_gicon (GTK_IMAGE (image), custom_icon, GTK_ICON_SIZE_BUTTON);
+
+		g_clear_object (&custom_icon);
+	}
+
+	gtk_box_pack_start (GTK_BOX (hbox), button, FALSE, FALSE, 0);
+
+	e_binding_bind_property (
+		checkbox, "active",
+		button, "sensitive",
+		G_BINDING_DEFAULT |
+		G_BINDING_SYNC_CREATE);
+
+	g_signal_connect (checkbox, "toggled",
+		G_CALLBACK (tweaks_custom_icon_check_toggled_cb), ftd);
+
+	g_signal_connect (button, "clicked",
+		G_CALLBACK (tweaks_custom_icon_button_clicked_cb), ftd);
+
+	gtk_widget_show_all (hbox);
+}
+
+static void
+tweaks_text_color_check_toggled_cb (GtkToggleButton *toggle_button,
+				    FolderTweaksData *ftd)
+{
+	g_return_if_fail (ftd != NULL);
+
+	ftd->changed = TRUE;
+
+	if (gtk_toggle_button_get_active (toggle_button)) {
+		gtk_color_chooser_get_rgba (GTK_COLOR_CHOOSER (ftd->color_chooser), &ftd->text_color);
+		ftd->text_color_set = TRUE;
+	} else {
+		ftd->text_color_set = FALSE;
+	}
+}
+
+static void
+tweaks_text_color_button_color_set_cb (GtkColorButton *col_button,
+				       FolderTweaksData *ftd)
+{
+	g_return_if_fail (ftd != NULL);
+
+	ftd->changed = TRUE;
+	ftd->text_color_set = TRUE;
+	gtk_color_chooser_get_rgba (GTK_COLOR_CHOOSER (col_button), &ftd->text_color);
+}
+
+static void
+add_tweaks_text_color_row (GtkBox *vbox,
+			   FolderTweaksData *ftd)
+{
+	GtkWidget *checkbox;
+	GtkWidget *button;
+	GtkWidget *hbox;
+
+	g_return_if_fail (GTK_IS_BOX (vbox));
+	g_return_if_fail (ftd != NULL);
+
+	hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+	gtk_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
+
+	checkbox = gtk_check_button_new_with_mnemonic (_("Use te_xt color"));
+	gtk_box_pack_start (GTK_BOX (hbox), checkbox, FALSE, FALSE, 0);
+
+	button = gtk_color_button_new ();
+
+	gtk_box_pack_start (GTK_BOX (hbox), button, FALSE, FALSE, 0);
+
+	ftd->color_chooser = button;
+
+	if (ftd->text_color_set) {
+		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (checkbox), TRUE);
+		gtk_color_chooser_set_rgba (GTK_COLOR_CHOOSER (button), &ftd->text_color);
+	}
+
+	e_binding_bind_property (
+		checkbox, "active",
+		button, "sensitive",
+		G_BINDING_DEFAULT |
+		G_BINDING_SYNC_CREATE);
+
+	g_signal_connect (checkbox, "toggled",
+		G_CALLBACK (tweaks_text_color_check_toggled_cb), ftd);
+
+	g_signal_connect (button, "color-set",
+		G_CALLBACK (tweaks_text_color_button_color_set_cb), ftd);
+
+	gtk_widget_show_all (hbox);
+}
+
+static void
+em_vfolder_editor_rule_customize_content_cb (EFilterRule *rule,
+					     GtkGrid *vgrid,
+					     GtkGrid *hgrid,
+					     GtkWidget *name_entry,
+					     gpointer user_data)
+{
+	ERuleContext *rc = user_data;
+	FolderTweaksData *ftd;
+	EMailFolderTweaks *tweaks;
+	GtkWidget *expander;
+	GtkBox *vbox;
+
+	expander = gtk_expander_new_with_mnemonic (_("Customize Appearance"));
+	gtk_widget_show (expander);
+	gtk_grid_attach_next_to (hgrid, expander, name_entry, GTK_POS_BOTTOM, 1, 1);
+
+	vbox = GTK_BOX (gtk_box_new (GTK_ORIENTATION_VERTICAL, 6));
+	gtk_widget_set_margin_start (GTK_WIDGET (vbox), 12);
+	gtk_widget_show (GTK_WIDGET (vbox));
+
+	gtk_container_add (GTK_CONTAINER (expander), GTK_WIDGET (vbox));
+
+	tweaks = e_mail_folder_tweaks_new ();
+	ftd = folder_tweaks_data_new (rc, rule->name, tweaks);
+	g_clear_object (&tweaks);
+
+	add_tweaks_custom_icon_row (vbox, ftd);
+	add_tweaks_text_color_row (vbox, ftd);
+
+	g_object_set_data_full (G_OBJECT (rule), "evo-folder-tweaks-data", ftd, folder_tweaks_data_free);
+}
+
+static void
+em_vfolder_editor_rule_persist_customatizations (EMVFolderEditorRule *rule)
+{
+	FolderTweaksData *ftd;
+
+	g_return_if_fail (EM_IS_VFOLDER_EDITOR_RULE (rule));
+
+	ftd = g_object_get_data (G_OBJECT (rule), "evo-folder-tweaks-data");
+
+	if (ftd && ftd->changed) {
+		EMailFolderTweaks *tweaks;
+
+		tweaks = e_mail_folder_tweaks_new ();
+
+		e_mail_folder_tweaks_set_icon_filename (tweaks, ftd->folder_uri, ftd->icon_filename);
+
+		if (ftd->text_color_set)
+			e_mail_folder_tweaks_set_color (tweaks, ftd->folder_uri, &ftd->text_color);
+		else
+			e_mail_folder_tweaks_set_color (tweaks, ftd->folder_uri, NULL);
+
+		g_clear_object (&tweaks);
+	} else {
+		g_object_set_data (G_OBJECT (rule), "evo-folder-tweaks-data", NULL);
+	}
+}
+
 static GtkWidget *
 get_widget (EFilterRule *fr,
             ERuleContext *rc)
@@ -513,9 +814,18 @@ get_widget (EFilterRule *fr,
 	gchar *tmp;
 	GtkTreeIter iter;
 	GtkTreeSelection *selection;
+	gulong handler_id = 0;
 
-	widget = E_FILTER_RULE_CLASS (em_vfolder_editor_rule_parent_class)->
-		get_widget (fr, rc);
+	/* Add the "Customize Appearance" only for existing rules/folders */
+	if (fr->name && *fr->name) {
+		handler_id = g_signal_connect (fr, "customize-content",
+			G_CALLBACK (em_vfolder_editor_rule_customize_content_cb), (gpointer) rc);
+	}
+
+	widget = E_FILTER_RULE_CLASS (em_vfolder_editor_rule_parent_class)->get_widget (fr, rc);
+
+	if (handler_id)
+		g_signal_handler_disconnect (fr, handler_id);
 
 	data = g_malloc0 (sizeof (*data));
 	data->rc = rc;

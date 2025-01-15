@@ -36,10 +36,6 @@
 #include "e-mktemp.h"
 #include "e-misc-utils.h"
 
-#define E_ATTACHMENT_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_ATTACHMENT, EAttachmentPrivate))
-
 /* Fallback Icon */
 #define DEFAULT_ICON_NAME	"mail-attachment"
 
@@ -47,6 +43,7 @@
 #define EMBLEM_CANCELLED	"process-stop"
 #define EMBLEM_LOADING		"emblem-downloads"
 #define EMBLEM_SAVING		"document-save"
+#define EMBLEM_MAY_RELOAD	"dialog-warning"
 #define EMBLEM_ENCRYPT_WEAK	"security-low"
 #define EMBLEM_ENCRYPT_STRONG	"security-high"
 #define EMBLEM_ENCRYPT_UNKNOWN	"security-medium"
@@ -55,7 +52,7 @@
 #define EMBLEM_SIGN_UNKNOWN	"stock_signature"
 
 /* Attributes needed for EAttachmentStore columns. */
-#define ATTACHMENT_QUERY "standard::*,preview::*,thumbnail::*"
+#define ATTACHMENT_QUERY "standard::*,preview::*,thumbnail::*," G_FILE_ATTRIBUTE_TIME_MODIFIED
 
 struct _EAttachmentPrivate {
 	GMutex property_lock;
@@ -74,6 +71,7 @@ struct _EAttachmentPrivate {
 	guint loading : 1;
 	guint saving : 1;
 	guint initially_shown : 1;
+	guint may_reload : 1;
 
 	guint save_self      : 1;
 	guint save_extracted : 1;
@@ -104,7 +102,8 @@ enum {
 	PROP_SAVE_EXTRACTED,
 	PROP_SAVING,
 	PROP_INITIALLY_SHOWN,
-	PROP_SIGNED
+	PROP_SIGNED,
+	PROP_MAY_RELOAD
 };
 
 enum {
@@ -117,10 +116,7 @@ enum {
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE (
-	EAttachment,
-	e_attachment,
-	G_TYPE_OBJECT)
+G_DEFINE_TYPE_WITH_PRIVATE (EAttachment, e_attachment, G_TYPE_OBJECT)
 
 static gboolean
 create_system_thumbnail (EAttachment *attachment,
@@ -249,7 +245,6 @@ attachment_update_file_info_columns_idle_cb (gpointer weak_ref)
 	EAttachment *attachment;
 	GFileInfo *file_info;
 	const gchar *content_type;
-	const gchar *display_name;
 	gchar *content_desc;
 	gchar *display_size;
 	gchar *description;
@@ -269,7 +264,6 @@ attachment_update_file_info_columns_idle_cb (gpointer weak_ref)
 		goto exit;
 
 	content_type = g_file_info_get_content_type (file_info);
-	display_name = g_file_info_get_display_name (file_info);
 	size = g_file_info_get_size (file_info);
 
 	content_desc = g_content_type_get_description (content_type);
@@ -277,6 +271,13 @@ attachment_update_file_info_columns_idle_cb (gpointer weak_ref)
 
 	description = e_attachment_dup_description (attachment);
 	if (description == NULL || *description == '\0') {
+		const gchar *display_name;
+
+		if (g_file_info_has_attribute (file_info, G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME))
+			display_name = g_file_info_get_display_name (file_info);
+		else
+			display_name = "";
+
 		g_free (description);
 		description = g_strdup (display_name);
 	}
@@ -341,7 +342,7 @@ attachment_update_icon_column_idle_cb (gpointer weak_ref)
 	cancellable = attachment->priv->cancellable;
 	file_info = e_attachment_ref_file_info (attachment);
 
-	if (file_info != NULL) {
+	if (file_info != NULL && g_file_info_has_attribute (file_info, G_FILE_ATTRIBUTE_STANDARD_ICON)) {
 		icon = g_file_info_get_icon (file_info);
 		/* add the reference here, thus the create_system_thumbnail() can unref the *icon. */
 		if (icon)
@@ -384,6 +385,9 @@ attachment_update_icon_column_idle_cb (gpointer weak_ref)
 
 	else if (e_attachment_get_saving (attachment))
 		emblem_name = EMBLEM_SAVING;
+
+	else if (e_attachment_get_may_reload (attachment))
+		emblem_name = EMBLEM_MAY_RELOAD;
 
 	else if (e_attachment_get_encrypted (attachment))
 		switch (e_attachment_get_encrypted (attachment)) {
@@ -658,6 +662,12 @@ attachment_set_property (GObject *object,
 				E_ATTACHMENT (object),
 				g_value_get_boolean (value));
 			return;
+
+		case PROP_MAY_RELOAD:
+			e_attachment_set_may_reload (
+				E_ATTACHMENT (object),
+				g_value_get_boolean (value));
+			return;
 	}
 
 	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -767,6 +777,13 @@ attachment_get_property (GObject *object,
 				e_attachment_get_signed (
 				E_ATTACHMENT (object)));
 			return;
+
+		case PROP_MAY_RELOAD:
+			g_value_set_boolean (
+				value,
+				e_attachment_get_may_reload (
+				E_ATTACHMENT (object)));
+			return;
 	}
 
 	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -775,19 +792,17 @@ attachment_get_property (GObject *object,
 static void
 attachment_dispose (GObject *object)
 {
-	EAttachmentPrivate *priv;
+	EAttachment *self = E_ATTACHMENT (object);
 
-	priv = E_ATTACHMENT_GET_PRIVATE (object);
+	g_clear_object (&self->priv->file);
+	g_clear_object (&self->priv->icon);
+	g_clear_object (&self->priv->file_info);
+	g_clear_object (&self->priv->cancellable);
+	g_clear_object (&self->priv->mime_part);
 
-	g_clear_object (&priv->file);
-	g_clear_object (&priv->icon);
-	g_clear_object (&priv->file_info);
-	g_clear_object (&priv->cancellable);
-	g_clear_object (&priv->mime_part);
-
-	if (priv->emblem_timeout_id > 0) {
-		g_source_remove (priv->emblem_timeout_id);
-		priv->emblem_timeout_id = 0;
+	if (self->priv->emblem_timeout_id > 0) {
+		g_source_remove (self->priv->emblem_timeout_id);
+		self->priv->emblem_timeout_id = 0;
 	}
 
 	/* Chain up to parent's dispose() method. */
@@ -797,23 +812,21 @@ attachment_dispose (GObject *object)
 static void
 attachment_finalize (GObject *object)
 {
-	EAttachmentPrivate *priv;
+	EAttachment *self = E_ATTACHMENT (object);
 
-	priv = E_ATTACHMENT_GET_PRIVATE (object);
+	if (self->priv->update_icon_column_idle_id > 0)
+		g_source_remove (self->priv->update_icon_column_idle_id);
 
-	if (priv->update_icon_column_idle_id > 0)
-		g_source_remove (priv->update_icon_column_idle_id);
+	if (self->priv->update_progress_columns_idle_id > 0)
+		g_source_remove (self->priv->update_progress_columns_idle_id);
 
-	if (priv->update_progress_columns_idle_id > 0)
-		g_source_remove (priv->update_progress_columns_idle_id);
+	if (self->priv->update_file_info_columns_idle_id > 0)
+		g_source_remove (self->priv->update_file_info_columns_idle_id);
 
-	if (priv->update_file_info_columns_idle_id > 0)
-		g_source_remove (priv->update_file_info_columns_idle_id);
+	g_mutex_clear (&self->priv->property_lock);
+	g_mutex_clear (&self->priv->idle_lock);
 
-	g_mutex_clear (&priv->property_lock);
-	g_mutex_clear (&priv->idle_lock);
-
-	g_free (priv->disposition);
+	g_free (self->priv->disposition);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_attachment_parent_class)->finalize (object);
@@ -823,8 +836,6 @@ static void
 e_attachment_class_init (EAttachmentClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EAttachmentPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = attachment_set_property;
@@ -986,6 +997,17 @@ e_attachment_class_init (EAttachmentClass *class)
 			G_PARAM_READWRITE |
 			G_PARAM_CONSTRUCT));
 
+	g_object_class_install_property (
+		object_class,
+		PROP_MAY_RELOAD,
+		g_param_spec_boolean (
+			"may-reload",
+			"May Reload",
+			NULL,
+			FALSE,
+			G_PARAM_READWRITE |
+			G_PARAM_CONSTRUCT));
+
 	signals[UPDATE_FILE_INFO] = g_signal_new (
 		"update-file-info",
 		G_TYPE_FROM_CLASS (class),
@@ -1031,7 +1053,7 @@ e_attachment_class_init (EAttachmentClass *class)
 static void
 e_attachment_init (EAttachment *attachment)
 {
-	attachment->priv = E_ATTACHMENT_GET_PRIVATE (attachment);
+	attachment->priv = e_attachment_get_instance_private (attachment);
 	attachment->priv->cancellable = g_cancellable_new ();
 	attachment->priv->encrypted = CAMEL_CIPHER_VALIDITY_ENCRYPT_NONE;
 	attachment->priv->signed_ = CAMEL_CIPHER_VALIDITY_SIGN_NONE;
@@ -1192,7 +1214,7 @@ e_attachment_add_to_multipart (EAttachment *attachment,
 		stream = camel_stream_null_new ();
 		filtered_stream = camel_stream_filter_new (stream);
 		filter = camel_mime_filter_bestenc_new (
-			CAMEL_BESTENC_GET_ENCODING);
+			CAMEL_BESTENC_GET_ENCODING | CAMEL_BESTENC_GET_CHARSET);
 		camel_stream_filter_add (
 			CAMEL_STREAM_FILTER (filtered_stream),
 			CAMEL_MIME_FILTER (filter));
@@ -1206,7 +1228,6 @@ e_attachment_add_to_multipart (EAttachment *attachment,
 			CAMEL_MIME_FILTER_BESTENC (filter),
 			CAMEL_BESTENC_8BIT);
 		camel_mime_part_set_encoding (mime_part, encoding);
-		g_object_unref (filter);
 
 		if (encoding == CAMEL_TRANSFER_ENCODING_7BIT) {
 			/* The text fits within us-ascii, so this is safe.
@@ -1224,12 +1245,21 @@ e_attachment_add_to_multipart (EAttachment *attachment,
 		if (charset == NULL) {
 			gchar *type;
 
-			camel_content_type_set_param (
-				content_type, "charset", default_charset);
+			if (encoding != CAMEL_TRANSFER_ENCODING_7BIT) {
+				charset = camel_mime_filter_bestenc_get_best_charset (CAMEL_MIME_FILTER_BESTENC (filter));
+				if (charset)
+					camel_content_type_set_param (content_type, "charset", charset);
+			}
+
+			if (!charset)
+				camel_content_type_set_param (content_type, "charset", default_charset);
+
 			type = camel_content_type_format (content_type);
 			camel_mime_part_set_content_type (mime_part, type);
 			g_free (type);
 		}
+
+		g_object_unref (filter);
 
 	/* Otherwise, unless it's a message/rfc822, Base64 encode it. */
 	} else if (!CAMEL_IS_MIME_MESSAGE (wrapper))
@@ -1265,6 +1295,28 @@ e_attachment_is_mail_note (EAttachment *attachment)
 		return FALSE;
 
 	return camel_medium_get_header (CAMEL_MEDIUM (attachment->priv->mime_part), "X-Evolution-Note") != NULL;
+}
+
+gboolean
+e_attachment_is_uri (EAttachment *attachment)
+{
+	GFile *file;
+	gboolean is_uri = FALSE;
+
+	g_return_val_if_fail (E_IS_ATTACHMENT (attachment), FALSE);
+
+	file = e_attachment_ref_file (attachment);
+	if (file) {
+		gchar *scheme;
+
+		scheme = g_file_get_uri_scheme (file);
+		is_uri = scheme && g_ascii_strcasecmp (scheme, "file") != 0;
+
+		g_free (scheme);
+		g_clear_object (&file);
+	}
+
+	return is_uri;
 }
 
 gboolean
@@ -1387,8 +1439,6 @@ void
 e_attachment_set_file_info (EAttachment *attachment,
                             GFileInfo *file_info)
 {
-	GIcon *icon;
-
 	g_return_if_fail (E_IS_ATTACHMENT (attachment));
 
 	if (file_info != NULL) {
@@ -1401,12 +1451,15 @@ e_attachment_set_file_info (EAttachment *attachment,
 	g_clear_object (&attachment->priv->file_info);
 	attachment->priv->file_info = file_info;
 
-	/* If the GFileInfo contains a GThemedIcon, append a
-	 * fallback icon name to ensure we display something. */
-	icon = g_file_info_get_icon (file_info);
-	if (G_IS_THEMED_ICON (icon))
-		g_themed_icon_append_name (
-			G_THEMED_ICON (icon), DEFAULT_ICON_NAME);
+	if (file_info && g_file_info_has_attribute (file_info, G_FILE_ATTRIBUTE_STANDARD_ICON)) {
+		GIcon *icon;
+
+		/* If the GFileInfo contains a GThemedIcon, append a
+		 * fallback icon name to ensure we display something. */
+		icon = g_file_info_get_icon (file_info);
+		if (G_IS_THEMED_ICON (icon))
+			g_themed_icon_append_name (G_THEMED_ICON (icon), DEFAULT_ICON_NAME);
+	}
 
 	g_mutex_unlock (&attachment->priv->property_lock);
 
@@ -1687,6 +1740,7 @@ e_attachment_is_rfc822 (EAttachment *attachment)
 GAppInfo *
 e_attachment_ref_default_app (EAttachment *attachment)
 {
+	GFile *file;
 	GFileInfo *file_info;
 	GAppInfo *default_app = NULL;
 	const gchar *content_type;
@@ -1697,9 +1751,29 @@ e_attachment_ref_default_app (EAttachment *attachment)
 	if (file_info == NULL)
 		return NULL;
 
-	content_type = g_file_info_get_content_type (file_info);
-	if (content_type && !g_content_type_equals (content_type, "application/octet-stream"))
-		default_app = g_app_info_get_default_for_type (content_type, FALSE);
+	file = e_attachment_ref_file (attachment);
+	if (file) {
+		gchar *scheme;
+
+		scheme = g_file_get_uri_scheme (file);
+		if (scheme && g_ascii_strcasecmp (scheme, "file") != 0) {
+			gchar *handler;
+
+			handler = g_strconcat ("x-scheme-handler/", scheme, NULL);
+			default_app = g_app_info_get_default_for_type (handler, FALSE);
+
+			g_free (handler);
+		}
+
+		g_free (scheme);
+		g_clear_object (&file);
+	}
+
+	if (!default_app) {
+		content_type = g_file_info_get_content_type (file_info);
+		if (content_type && !g_content_type_equals (content_type, "application/octet-stream"))
+			default_app = g_app_info_get_default_for_type (content_type, FALSE);
+	}
 
 	g_object_unref (file_info);
 
@@ -1709,13 +1783,13 @@ e_attachment_ref_default_app (EAttachment *attachment)
 GList *
 e_attachment_list_apps (EAttachment *attachment)
 {
-	GList *app_info_list;
+	GList *app_info_list = NULL;
 	GList *guessed_infos;
+	GFile *file;
 	GFileInfo *file_info;
 	GAppInfo *default_app;
-	const gchar *content_type;
 	const gchar *display_name;
-	gboolean type_is_unknown;
+	gboolean type_is_unknown = FALSE;
 	gchar *allocated;
 
 	g_return_val_if_fail (E_IS_ATTACHMENT (attachment), NULL);
@@ -1724,12 +1798,36 @@ e_attachment_list_apps (EAttachment *attachment)
 	if (file_info == NULL)
 		return NULL;
 
-	content_type = g_file_info_get_content_type (file_info);
-	display_name = g_file_info_get_display_name (file_info);
-	g_return_val_if_fail (content_type != NULL, NULL);
+	file = e_attachment_ref_file (attachment);
+	if (file) {
+		gchar *scheme;
 
-	app_info_list = g_app_info_get_all_for_type (content_type);
-	type_is_unknown = g_content_type_is_unknown (content_type);
+		scheme = g_file_get_uri_scheme (file);
+		if (scheme && g_ascii_strcasecmp (scheme, "file") != 0) {
+			gchar *handler;
+
+			handler = g_strconcat ("x-scheme-handler/", scheme, NULL);
+			app_info_list = g_app_info_get_all_for_type (handler);
+			type_is_unknown = g_content_type_is_unknown (handler);
+
+			g_free (handler);
+		}
+
+		g_free (scheme);
+		g_clear_object (&file);
+	}
+
+	display_name = g_file_info_get_display_name (file_info);
+
+	if (!app_info_list) {
+		const gchar *content_type;
+
+		content_type = g_file_info_get_content_type (file_info);
+		g_return_val_if_fail (content_type != NULL, NULL);
+
+		app_info_list = g_app_info_get_all_for_type (content_type);
+		type_is_unknown = g_content_type_is_unknown (content_type);
+	}
 
 	if (app_info_list != NULL && !type_is_unknown)
 		goto exit;
@@ -1778,6 +1876,85 @@ e_attachment_update_store_columns (EAttachment *attachment)
 	attachment_update_file_info_columns (attachment);
 	attachment_update_icon_column (attachment);
 	attachment_update_progress_columns (attachment);
+}
+
+gboolean
+e_attachment_check_file_changed (EAttachment *attachment,
+				 gboolean *out_file_exists,
+				 GCancellable *cancellable)
+{
+	GFileInfo *disk_file_info;
+	GFile *file;
+	gboolean same = FALSE;
+	gboolean file_exists = FALSE;
+
+	g_return_val_if_fail (E_IS_ATTACHMENT (attachment), FALSE);
+
+	file = e_attachment_ref_file (attachment);
+	if (!file) {
+		if (out_file_exists)
+			*out_file_exists = FALSE;
+		return FALSE;
+	}
+
+	disk_file_info = g_file_query_info (file, G_FILE_ATTRIBUTE_TIME_MODIFIED "," G_FILE_ATTRIBUTE_STANDARD_SIZE, G_FILE_QUERY_INFO_NONE, cancellable, NULL);
+	if (disk_file_info) {
+		GFileInfo *attachment_file_info;
+
+		attachment_file_info = e_attachment_ref_file_info (attachment);
+		if (attachment_file_info) {
+			guint64 a_size, f_size;
+
+			a_size = g_file_info_get_attribute_uint64 (attachment_file_info, G_FILE_ATTRIBUTE_STANDARD_SIZE);
+			f_size = g_file_info_get_attribute_uint64 (disk_file_info, G_FILE_ATTRIBUTE_STANDARD_SIZE);
+
+			same = a_size == f_size;
+			file_exists = TRUE;
+
+			if (same) {
+				guint64 a_modified, f_modified;
+
+				a_modified = g_file_info_get_attribute_uint64 (attachment_file_info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
+				f_modified = g_file_info_get_attribute_uint64 (disk_file_info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
+
+				same = a_modified == f_modified;
+			}
+		}
+
+		g_clear_object (&attachment_file_info);
+		g_clear_object (&disk_file_info);
+	}
+
+	g_object_unref (file);
+
+	if (out_file_exists)
+		*out_file_exists = file_exists;
+
+	return !same;
+}
+
+void
+e_attachment_set_may_reload (EAttachment *attachment,
+			     gboolean may_reload)
+{
+	g_return_if_fail (E_IS_ATTACHMENT (attachment));
+
+	if ((!attachment->priv->may_reload) == (!may_reload))
+		return;
+
+	attachment->priv->may_reload = may_reload;
+
+	g_object_notify (G_OBJECT (attachment), "may-reload");
+
+	attachment_update_icon_column (attachment);
+}
+
+gboolean
+e_attachment_get_may_reload (EAttachment *attachment)
+{
+	g_return_val_if_fail (E_IS_ATTACHMENT (attachment), FALSE);
+
+	return attachment->priv->may_reload;
 }
 
 /************************* e_attachment_load_async() *************************/
@@ -2424,6 +2601,7 @@ e_attachment_load_finish (EAttachment *attachment,
 			attachment, load_context->file_info);
 		e_attachment_set_mime_part (
 			attachment, load_context->mime_part);
+		e_attachment_set_may_reload (attachment, FALSE);
 	}
 
 	attachment_set_loading (attachment, FALSE);
@@ -2513,85 +2691,26 @@ e_attachment_load (EAttachment *attachment,
 
 /************************* e_attachment_open_async() *************************/
 
-typedef struct _OpenContext OpenContext;
-
-struct _OpenContext {
-	EAttachment *attachment;
-	GSimpleAsyncResult *simple;
-
-	GAppInfo *app_info;
-};
-
-static OpenContext *
-attachment_open_context_new (EAttachment *attachment,
-                             GAsyncReadyCallback callback,
-                             gpointer user_data)
-{
-	OpenContext *open_context;
-	GSimpleAsyncResult *simple;
-
-	simple = g_simple_async_result_new (
-		G_OBJECT (attachment), callback,
-		user_data, e_attachment_open_async);
-
-	open_context = g_slice_new0 (OpenContext);
-	open_context->attachment = g_object_ref (attachment);
-	open_context->simple = simple;
-
-	return open_context;
-}
-
-static void
-attachment_open_context_free (OpenContext *open_context)
-{
-	g_object_unref (open_context->attachment);
-	g_object_unref (open_context->simple);
-
-	if (open_context->app_info != NULL)
-		g_object_unref (open_context->app_info);
-
-	g_slice_free (OpenContext, open_context);
-}
-
-static gboolean
-attachment_open_check_for_error (OpenContext *open_context,
-                                 GError *error)
-{
-	GSimpleAsyncResult *simple;
-
-	if (error == NULL)
-		return FALSE;
-
-	simple = open_context->simple;
-	g_simple_async_result_take_error (simple, error);
-	g_simple_async_result_complete (simple);
-
-	attachment_open_context_free (open_context);
-
-	return TRUE;
-}
-
 static void
 attachment_open_file (GFile *file,
-                      OpenContext *open_context)
+                      GTask *task)
 {
 	GdkAppLaunchContext *context;
-	GSimpleAsyncResult *simple;
 	GdkDisplay *display;
 	gboolean success;
 	GError *error = NULL;
-
-	simple = open_context->simple;
+	GAppInfo *app_info;
 
 	display = gdk_display_get_default ();
 	context = gdk_display_get_app_launch_context (display);
+	app_info = g_task_get_task_data (task);
 
-	if (open_context->app_info != NULL) {
+	if (app_info != NULL) {
 		GList *file_list;
 
 		file_list = g_list_prepend (NULL, file);
 		success = g_app_info_launch (
-			open_context->app_info, file_list,
+			app_info, file_list,
 			G_APP_LAUNCH_CONTEXT (context), &error);
 		g_list_free (file_list);
 	} else {
@@ -2605,28 +2724,31 @@ attachment_open_file (GFile *file,
 
 	g_object_unref (context);
 
-	g_simple_async_result_set_op_res_gboolean (simple, success);
+	if (success)
+		g_task_return_boolean (task, TRUE);
+	else
+		g_task_return_error (task, g_steal_pointer (&error));
 
-	if (error != NULL)
-		g_simple_async_result_take_error (simple, error);
-
-	g_simple_async_result_complete (simple);
-	attachment_open_context_free (open_context);
+	g_object_unref (task);
 }
 
 static void
-attachment_open_save_finished_cb (EAttachment *attachment,
+attachment_open_save_finished_cb (GObject      *source_object,
                                   GAsyncResult *result,
-                                  OpenContext *open_context)
+                                  gpointer      user_data)
 {
+	EAttachment *attachment = E_ATTACHMENT (source_object);
+	GTask *task = G_TASK (user_data);
 	GFile *file;
 	gchar *path;
 	GError *error = NULL;
 
 	file = e_attachment_save_finish (attachment, result, &error);
-
-	if (attachment_open_check_for_error (open_context, error))
+	if (!file) {
+		g_task_return_error (task, g_steal_pointer (&error));
+		g_object_unref (task);
 		return;
+	}
 
 	/* Make the temporary file read-only.
 	 *
@@ -2646,26 +2768,28 @@ attachment_open_save_finished_cb (EAttachment *attachment,
 #endif
 	g_free (path);
 
-	attachment_open_file (file, open_context);
+	attachment_open_file (file, task);
 	g_object_unref (file);
 }
 
 static void
-attachment_open_save_temporary (OpenContext *open_context)
+attachment_open_save_temporary (EAttachment *attachment,
+                                GTask *task)
 {
 	GFile *temp_directory;
 	GError *error = NULL;
 
 	temp_directory = attachment_get_temporary (&error);
-
-	/* We already know if there's an error, but this does the cleanup. */
-	if (attachment_open_check_for_error (open_context, error))
+	if (error != NULL) {
+		g_task_return_error (task, g_steal_pointer (&error));
+		g_object_unref (task);
 		return;
+	}
 
 	e_attachment_save_async (
-		open_context->attachment,
+		attachment,
 		temp_directory, (GAsyncReadyCallback)
-		attachment_open_save_finished_cb, open_context);
+		attachment_open_save_finished_cb, task);
 
 	g_object_unref (temp_directory);
 }
@@ -2676,9 +2800,9 @@ e_attachment_open_async (EAttachment *attachment,
                          GAsyncReadyCallback callback,
                          gpointer user_data)
 {
-	OpenContext *open_context;
 	CamelMimePart *mime_part;
 	GFile *file;
+	GTask *task;
 
 	g_return_if_fail (E_IS_ATTACHMENT (attachment));
 
@@ -2686,20 +2810,28 @@ e_attachment_open_async (EAttachment *attachment,
 	mime_part = e_attachment_ref_mime_part (attachment);
 	g_return_if_fail (file != NULL || mime_part != NULL);
 
-	open_context = attachment_open_context_new (
-		attachment, callback, user_data);
+	task = g_task_new (attachment, NULL, callback, user_data);
+	g_task_set_source_tag (task, e_attachment_open_async);
 
 	if (G_IS_APP_INFO (app_info))
-		open_context->app_info = g_object_ref (app_info);
+		g_task_set_task_data (task, g_object_ref (app_info), g_object_unref);
+
+	/* open existing file only if it did not change */
+	if (file && mime_part) {
+		if (e_attachment_check_file_changed (attachment, NULL, NULL)) {
+			e_attachment_set_may_reload (attachment, TRUE);
+			g_clear_object (&file);
+		}
+	}
 
 	/* If the attachment already references a GFile, we can launch
 	 * the application directly.  Otherwise we have to save the MIME
 	 * part to a temporary file and launch the application from that. */
 	if (file != NULL) {
-		attachment_open_file (file, open_context);
+		attachment_open_file (file, g_steal_pointer (&task));
 
 	} else if (mime_part != NULL)
-		attachment_open_save_temporary (open_context);
+		attachment_open_save_temporary (attachment, g_steal_pointer (&task));
 
 	g_clear_object (&file);
 	g_clear_object (&mime_part);
@@ -2710,17 +2842,11 @@ e_attachment_open_finish (EAttachment *attachment,
                           GAsyncResult *result,
                           GError **error)
 {
-	GSimpleAsyncResult *simple;
-	gboolean success;
-
 	g_return_val_if_fail (E_IS_ATTACHMENT (attachment), FALSE);
-	g_return_val_if_fail (G_IS_SIMPLE_ASYNC_RESULT (result), FALSE);
+	g_return_val_if_fail (g_task_is_valid (result, attachment), FALSE);
+	g_return_val_if_fail (g_async_result_is_tagged (result, e_attachment_open_async), FALSE);
 
-	simple = G_SIMPLE_ASYNC_RESULT (result);
-	success = !g_simple_async_result_propagate_error (simple, error) &&
-		   g_simple_async_result_get_op_res_gboolean (simple);
-
-	return success;
+	return g_task_propagate_boolean (G_TASK (result), error);
 }
 
 void
@@ -3412,11 +3538,9 @@ attachment_save_query_info_cb (GFile *destination,
 
 #ifdef HAVE_AUTOAR
 		if (attachment->priv->save_extracted) {
-			EAttachment *attachment;
 			GFileInfo *info;
 			gchar *suggested;
 
-			attachment = save_context->attachment;
 			suggested = NULL;
 			info = e_attachment_ref_file_info (attachment);
 			if (info != NULL)

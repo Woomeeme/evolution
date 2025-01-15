@@ -37,6 +37,7 @@
 #include <mail/e-mail-config-window.h>
 #include <mail/e-mail-folder-create-dialog.h>
 #include <mail/e-mail-reader.h>
+#include "mail/e-mail-viewer.h"
 #include <mail/em-composer-utils.h>
 #include <mail/em-utils.h>
 #include <mail/mail-send-recv.h>
@@ -57,14 +58,6 @@
 #include "em-composer-prefs.h"
 #include "em-mailer-prefs.h"
 
-#define E_MAIL_SHELL_BACKEND_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_SHELL_BACKEND, EMailShellBackendPrivate))
-
-#define E_MAIL_SHELL_BACKEND_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_SHELL_BACKEND, EMailShellBackendPrivate))
-
 #define BACKEND_NAME "mail"
 
 struct _EMailShellBackendPrivate {
@@ -82,10 +75,8 @@ enum {
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_DYNAMIC_TYPE (
-	EMailShellBackend,
-	e_mail_shell_backend,
-	E_TYPE_MAIL_BACKEND)
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (EMailShellBackend, e_mail_shell_backend, E_TYPE_MAIL_BACKEND, 0,
+	G_ADD_PRIVATE_DYNAMIC (EMailShellBackend))
 
 /* utility functions for mbox importer */
 static void
@@ -690,20 +681,52 @@ mail_shell_backend_handle_uri_cb (EShell *shell,
 
 	return handled;
 }
+static gboolean
+mail_shell_backend_view_file (EMailShellBackend *mail_shell_backend,
+			      GFile *file)
+{
+	EMailViewer *viewer;
+
+	viewer = e_mail_viewer_new (E_MAIL_BACKEND (mail_shell_backend));
+
+	if (!e_mail_viewer_assign_file (E_MAIL_VIEWER (viewer), file)) {
+		g_object_ref_sink (viewer);
+		gtk_widget_destroy (GTK_WIDGET (viewer));
+
+		return FALSE;
+	}
+
+	gtk_window_present (GTK_WINDOW (viewer));
+
+	return TRUE;
+}
+
+static gboolean
+mail_shell_backend_view_uri_cb (EShell *shell,
+				const gchar *uri,
+				EMailShellBackend *mail_shell_backend)
+{
+	GFile *file;
+	gboolean handled;
+
+	file = g_file_new_for_commandline_arg (uri);
+	handled = mail_shell_backend_view_file (mail_shell_backend, file);
+	g_clear_object (&file);
+
+	return handled;
+}
 
 static void
 mail_shell_backend_prepare_for_quit_cb (EShell *shell,
                                         EActivity *activity,
                                         EShellBackend *shell_backend)
 {
-	EMailShellBackendPrivate *priv;
-
-	priv = E_MAIL_SHELL_BACKEND_GET_PRIVATE (shell_backend);
+	EMailShellBackend *self = E_MAIL_SHELL_BACKEND (shell_backend);
 
 	/* Prevent a sync from starting while trying to shutdown. */
-	if (priv->mail_sync_source_id > 0) {
-		g_source_remove (priv->mail_sync_source_id);
-		priv->mail_sync_source_id = 0;
+	if (self->priv->mail_sync_source_id > 0) {
+		g_source_remove (self->priv->mail_sync_source_id);
+		self->priv->mail_sync_source_id = 0;
 	}
 }
 
@@ -720,9 +743,12 @@ static void
 set_preformatted_block_format_on_load_finished_cb (EContentEditor *cnt_editor,
 						   gpointer user_data)
 {
+	EHTMLEditor *editor = user_data;
+
+	g_return_if_fail (E_IS_HTML_EDITOR (editor));
 	g_return_if_fail (E_IS_CONTENT_EDITOR (cnt_editor));
 
-	if (!e_content_editor_get_html_mode (cnt_editor)) {
+	if (e_html_editor_get_mode (editor) != E_CONTENT_EDITOR_MODE_HTML) {
 		e_content_editor_set_block_format (cnt_editor, E_CONTENT_EDITOR_BLOCK_FORMAT_PRE);
 		e_content_editor_set_changed (cnt_editor, FALSE);
 		e_content_editor_clear_undo_redo_history (cnt_editor);
@@ -756,23 +782,24 @@ mail_shell_backend_window_added_cb (GtkApplication *application,
 	/* This applies to both the composer and signature editor. */
 	if (editor != NULL) {
 		EContentEditor *cnt_editor;
+		EContentEditorMode mode;
 		GSettings *settings;
-		gboolean use_html, use_preformatted;
+		gboolean use_preformatted;
 
 		cnt_editor = e_html_editor_get_content_editor (editor);
 
 		settings = e_util_ref_settings ("org.gnome.evolution.mail");
 
-		use_html = g_settings_get_boolean (settings, "composer-send-html");
+		mode = g_settings_get_enum (settings, "composer-mode");
 		use_preformatted = g_settings_get_boolean (settings, "composer-plain-text-starts-preformatted");
 
 		g_object_unref (settings);
 
-		e_content_editor_set_html_mode (cnt_editor, use_html);
+		e_html_editor_set_mode (editor, mode);
 
 		if (use_preformatted) {
-			g_signal_connect (cnt_editor, "load-finished",
-				G_CALLBACK (set_preformatted_block_format_on_load_finished_cb), NULL);
+			g_signal_connect_object (cnt_editor, "load-finished",
+				G_CALLBACK (set_preformatted_block_format_on_load_finished_cb), editor, 0);
 		}
 	}
 
@@ -865,6 +892,14 @@ mail_shell_backend_changes_committed_cb (EMailConfigWindow *window,
 	uid = e_source_get_uid (original_source);
 	service = camel_session_ref_service (CAMEL_SESSION (session), uid);
 	g_return_if_fail (service != NULL);
+
+	if (CAMEL_IS_STORE (service)) {
+		EMFolderTreeModel *model;
+
+		model = em_folder_tree_model_get_default ();
+		if (model)
+			em_folder_tree_model_update_folder_icons_for_store (model, CAMEL_STORE (service));
+	}
 
 	shell_backend = E_SHELL_BACKEND (mail_shell_backend);
 
@@ -973,6 +1008,7 @@ mail_shell_backend_create_network_page (EPreferencesWindow *window)
 	ESourceRegistry *registry;
 	GtkBox *vbox, *hbox;
 	GtkWidget *widget, *label;
+	GSettings *eds_settings;
 	PangoAttrList *bold;
 	ENetworkMonitor *network_monitor;
 	GSList *gio_names, *link;
@@ -1063,6 +1099,19 @@ mail_shell_backend_create_network_page (EPreferencesWindow *window)
 	gtk_widget_show_all (GTK_WIDGET (hbox));
 	gtk_box_pack_start (vbox, GTK_WIDGET (hbox), FALSE, FALSE, 0);
 
+	eds_settings = e_util_ref_settings ("org.gnome.evolution-data-server");
+
+	widget = gtk_check_button_new_with_mnemonic (_("_Limit operations in Power Saver mode"));
+	g_settings_bind (
+		eds_settings, "limit-operations-in-power-saver-mode",
+		widget, "active",
+		G_SETTINGS_BIND_DEFAULT);
+	gtk_widget_set_margin_start (widget, 12);
+	gtk_widget_show (widget);
+	gtk_box_pack_start (vbox, widget, FALSE, FALSE, 0);
+
+	g_clear_object (&eds_settings);
+
 	widget = e_proxy_preferences_new (registry);
 	gtk_widget_show (widget);
 	gtk_box_pack_start (vbox, widget, TRUE, TRUE, 0);
@@ -1091,6 +1140,11 @@ mail_shell_backend_constructed (GObject *object)
 	g_signal_connect (
 		shell, "handle-uri",
 		G_CALLBACK (mail_shell_backend_handle_uri_cb),
+		shell_backend);
+
+	g_signal_connect (
+		shell, "view-uri",
+		G_CALLBACK (mail_shell_backend_view_uri_cb),
 		shell_backend);
 
 	g_signal_connect (
@@ -1162,13 +1216,11 @@ mail_shell_backend_constructed (GObject *object)
 static void
 mail_shell_backend_start (EShellBackend *shell_backend)
 {
-	EMailShellBackendPrivate *priv;
+	EMailShellBackend *self = E_MAIL_SHELL_BACKEND (shell_backend);
 	EMailBackend *backend;
 	EMailSession *session;
 	EMailAccountStore *account_store;
 	GError *error = NULL;
-
-	priv = E_MAIL_SHELL_BACKEND_GET_PRIVATE (shell_backend);
 
 	backend = E_MAIL_BACKEND (shell_backend);
 	session = e_mail_backend_get_session (backend);
@@ -1184,7 +1236,7 @@ mail_shell_backend_start (EShellBackend *shell_backend)
 	}
 
 	if (g_getenv ("CAMEL_FLUSH_CHANGES") != NULL) {
-		priv->mail_sync_source_id = e_named_timeout_add_seconds (
+		self->priv->mail_sync_source_id = e_named_timeout_add_seconds (
 			mail_config_get_sync_timeout (),
 			mail_shell_backend_mail_sync,
 			shell_backend);
@@ -1358,8 +1410,6 @@ e_mail_shell_backend_class_init (EMailShellBackendClass *class)
 	EShellBackendClass *shell_backend_class;
 	EMailBackendClass *mail_backend_class;
 
-	g_type_class_add_private (class, sizeof (EMailShellBackendPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->constructed = mail_shell_backend_constructed;
 	object_class->dispose = mail_shell_backend_dispose;
@@ -1431,8 +1481,7 @@ e_mail_shell_backend_class_finalize (EMailShellBackendClass *class)
 static void
 e_mail_shell_backend_init (EMailShellBackend *mail_shell_backend)
 {
-	mail_shell_backend->priv =
-		E_MAIL_SHELL_BACKEND_GET_PRIVATE (mail_shell_backend);
+	mail_shell_backend->priv = e_mail_shell_backend_get_instance_private (mail_shell_backend);
 }
 
 void
@@ -1472,7 +1521,8 @@ e_mail_shell_backend_edit_account (EMailShellBackend *mail_shell_backend,
 /******************* Code below here belongs elsewhere. *******************/
 
 static GSList *
-mail_labels_get_filter_options (gboolean include_none)
+mail_labels_get_filter_options (gboolean include_none,
+				gboolean include_all)
 {
 	EShell *shell;
 	EShellBackend *shell_backend;
@@ -1492,13 +1542,17 @@ mail_labels_get_filter_options (gboolean include_none)
 	label_store = e_mail_ui_session_get_label_store (
 		E_MAIL_UI_SESSION (session));
 
-	if (include_none) {
+	if (include_none || include_all) {
 		struct _filter_option *option;
 
 		option = g_new0 (struct _filter_option, 1);
-		/* Translators: The first item in the list, to be
-		 * able to set rule: [Label] [is/is-not] [None] */
-		option->title = g_strdup (C_("label", "None"));
+		if (include_none) {
+			/* Translators: The first item in the list, to be able to set rule: [Label] [is/is-not] [None] */
+			option->title = g_strdup (C_("label", "None"));
+		} else {
+			/* Translators: The first item in the list, to be able to set rule: [Unset Label] [All] */
+			option->title = g_strdup (C_("label", "All"));
+		}
 		option->value = g_strdup ("");
 		list = g_slist_prepend (list, option);
 	}
@@ -1537,13 +1591,19 @@ mail_labels_get_filter_options (gboolean include_none)
 GSList *
 e_mail_labels_get_filter_options (void)
 {
-	return mail_labels_get_filter_options (TRUE);
+	return mail_labels_get_filter_options (TRUE, FALSE);
 }
 
 GSList *
 e_mail_labels_get_filter_options_without_none (void)
 {
-	return mail_labels_get_filter_options (FALSE);
+	return mail_labels_get_filter_options (FALSE, FALSE);
+}
+
+GSList *
+e_mail_labels_get_filter_options_with_all (void)
+{
+	return mail_labels_get_filter_options (FALSE, TRUE);
 }
 
 static const gchar *
@@ -1669,3 +1729,125 @@ e_mail_labels_get_filter_code (EFilterElement *element,
 	g_string_append (out, " ))");
 }
 
+void
+e_mail_labels_get_unset_filter_code (EFilterPart *part,
+				     GString *out)
+{
+	const gchar *label;
+
+	label = get_filter_option_value (part, "label");
+
+	g_return_if_fail (label != NULL);
+
+	/* unset all labels */
+	if (!*label) {
+		EShell *shell;
+		EShellBackend *shell_backend;
+		EMailBackend *backend;
+		EMailSession *session;
+		EMailLabelListStore *label_store;
+		GtkTreeModel *model;
+		GtkTreeIter iter;
+		gboolean valid;
+		gboolean any_added = FALSE;
+
+		shell = e_shell_get_default ();
+		shell_backend = e_shell_get_backend_by_name (shell, "mail");
+
+		backend = E_MAIL_BACKEND (shell_backend);
+		session = e_mail_backend_get_session (backend);
+		label_store = e_mail_ui_session_get_label_store (
+			E_MAIL_UI_SESSION (session));
+
+		model = GTK_TREE_MODEL (label_store);
+		valid = gtk_tree_model_get_iter_first (model, &iter);
+
+		while (valid) {
+			gchar *tag;
+
+			tag = e_mail_label_list_store_get_tag (label_store, &iter);
+
+			if (g_str_has_prefix (tag, "$Label")) {
+				gchar *tmp = tag;
+
+				tag = g_strdup (tag + 6);
+
+				g_free (tmp);
+			}
+
+			if (any_added) {
+				g_string_append_c (out, ' ');
+			} else {
+				g_string_append (out, "(unset-label ");
+				any_added = TRUE;
+			}
+
+			camel_sexp_encode_string (out, tag);
+
+			g_free (tag);
+
+			valid = gtk_tree_model_iter_next (model, &iter);
+		}
+
+		if (any_added)
+			g_string_append_c (out, ')');
+	} else {
+		if (g_str_has_prefix (label, "$Label"))
+			label = label + 6;
+
+		g_string_append (out, "(unset-label ");
+		camel_sexp_encode_string (out, label);
+		g_string_append_c (out, ')');
+	}
+}
+
+static gint
+filter_opts_sort_by_title_cb (gconstpointer aa,
+			      gconstpointer bb)
+{
+	const struct _filter_option *opt_a = aa;
+	const struct _filter_option *opt_b = bb;
+
+	return g_utf8_collate (opt_a->title, opt_b->title);
+}
+
+GSList *
+e_mail_addressbook_get_filter_options (void)
+{
+	EShell *shell;
+	ESourceRegistry *registry;
+	GSList *list = NULL;
+	GList *sources, *link;
+	struct _filter_option *option;
+
+	shell = e_shell_get_default ();
+	registry = e_shell_get_registry (shell);
+	sources = e_source_registry_list_enabled (registry, E_SOURCE_EXTENSION_ADDRESS_BOOK);
+
+	for (link = sources; link; link = g_list_next (link)) {
+		ESource *source = link->data;
+
+		option = g_new0 (struct _filter_option, 1);
+		option->title = e_util_get_source_full_name (registry, source);
+		option->value = e_source_dup_uid (source);
+		list = g_slist_prepend (list, option);
+	}
+
+	g_list_free_full (sources, g_object_unref);
+
+	list = g_slist_sort (list, filter_opts_sort_by_title_cb);
+
+	option = g_new0 (struct _filter_option, 1);
+	/* Translators: Meaning "any configured addressbook included in autocompletion" in the filter dialog */
+	option->title = g_strdup (C_("addrbook", "Included in Autocompletion"));
+	option->value = g_strdup (CAMEL_SESSION_BOOK_UID_COMPLETION);
+	list = g_slist_prepend (list, option);
+
+	option = g_new0 (struct _filter_option, 1);
+	/* Translators: Meaning "any configured addressbook" in the filter dialog */
+	option->title = g_strdup (C_("addrbook", "Any"));
+	option->value = g_strdup (CAMEL_SESSION_BOOK_UID_ANY);
+	list = g_slist_prepend (list, option);
+
+	return list;
+}

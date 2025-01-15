@@ -155,7 +155,7 @@ struct _ECompEditorPageRecurrencePrivate {
 	gint ending_count;
 };
 
-G_DEFINE_TYPE (ECompEditorPageRecurrence, e_comp_editor_page_recurrence, E_TYPE_COMP_EDITOR_PAGE)
+G_DEFINE_TYPE_WITH_PRIVATE (ECompEditorPageRecurrence, e_comp_editor_page_recurrence, E_TYPE_COMP_EDITOR_PAGE)
 
 static void
 ecep_recurrence_update_preview (ECompEditorPageRecurrence *page_recurrence)
@@ -433,6 +433,9 @@ ecep_recurrence_checkbox_toggled_cb (GtkToggleButton *checkbox,
 	ECompEditorPage *page;
 
 	g_return_if_fail (E_IS_COMP_EDITOR_PAGE_RECURRENCE (page_recurrence));
+
+	if (page_recurrence->priv->is_custom && !gtk_toggle_button_get_active (checkbox))
+		page_recurrence->priv->is_custom = FALSE;
 
 	page = E_COMP_EDITOR_PAGE (page_recurrence);
 	comp_editor = e_comp_editor_page_ref_editor (page);
@@ -1502,11 +1505,14 @@ ecep_recurrence_sensitize_widgets (ECompEditorPage *page,
 
 	selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (page_recurrence->priv->exceptions_tree_view));
 
-	force_insensitive = force_insensitive || page_recurrence->priv->is_custom;
 	create_recurrence = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (page_recurrence->priv->recr_check_box));
 	any_selected = gtk_tree_selection_count_selected_rows (selection) > 0;
 
+	/* Let it be possible to unset the recurrence even if it cannot be edited */
 	gtk_widget_set_sensitive (page_recurrence->priv->recr_check_box, !force_insensitive);
+
+	force_insensitive = force_insensitive || page_recurrence->priv->is_custom;
+
 	gtk_widget_set_sensitive (page_recurrence->priv->recr_hbox, !force_insensitive && create_recurrence);
 
 	gtk_widget_set_sensitive (page_recurrence->priv->exceptions_tree_view, !force_insensitive && create_recurrence);
@@ -2403,9 +2409,7 @@ ecep_recurrence_dispose (GObject *object)
 static void
 e_comp_editor_page_recurrence_init (ECompEditorPageRecurrence *page_recurrence)
 {
-	page_recurrence->priv = G_TYPE_INSTANCE_GET_PRIVATE (page_recurrence,
-		E_TYPE_COMP_EDITOR_PAGE_RECURRENCE,
-		ECompEditorPageRecurrencePrivate);
+	page_recurrence->priv = e_comp_editor_page_recurrence_get_instance_private (page_recurrence);
 
 	page_recurrence->priv->cancellable = g_cancellable_new ();
 }
@@ -2415,8 +2419,6 @@ e_comp_editor_page_recurrence_class_init (ECompEditorPageRecurrenceClass *klass)
 {
 	ECompEditorPageClass *page_class;
 	GObjectClass *object_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorPageRecurrencePrivate));
 
 	page_class = E_COMP_EDITOR_PAGE_CLASS (klass);
 	page_class->sensitize_widgets = ecep_recurrence_sensitize_widgets;

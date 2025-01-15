@@ -33,10 +33,6 @@
 
 #include "e-shell-window-actions.h"
 
-#define E_SHELL_SEARCHBAR_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_SHELL_SEARCHBAR, EShellSearchbarPrivate))
-
 #define SEARCH_OPTION_ADVANCED		(-1)
 
 /* Default "state key file" group: [Search Bar] */
@@ -63,6 +59,8 @@ struct _EShellSearchbarPrivate {
 	/* State Key File */
 	gchar *state_group;
 
+	gchar *active_search_text;
+
 	gboolean filter_visible;
 	gboolean scope_visible;
 	gboolean state_dirty;
@@ -81,12 +79,9 @@ enum {
 	PROP_STATE_GROUP
 };
 
-G_DEFINE_TYPE_WITH_CODE (
-	EShellSearchbar,
-	e_shell_searchbar,
-	GTK_TYPE_BOX,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL))
+G_DEFINE_TYPE_WITH_CODE (EShellSearchbar, e_shell_searchbar, GTK_TYPE_BOX,
+	G_ADD_PRIVATE (EShellSearchbar)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 static void
 shell_searchbar_save_search_filter (EShellSearchbar *searchbar)
@@ -229,6 +224,7 @@ shell_searchbar_update_search_widgets (EShellSearchbar *searchbar)
 	search_text = e_shell_searchbar_get_search_text (searchbar);
 
 	sensitive =
+		(searchbar->priv->active_search_text && *searchbar->priv->active_search_text) ||
 		(search_text != NULL && *search_text != '\0') ||
 		(e_shell_view_get_search_rule (shell_view) != NULL);
 
@@ -306,6 +302,13 @@ shell_searchbar_execute_search_cb (EShellView *shell_view,
                                    EShellSearchbar *searchbar)
 {
 	EShellContent *shell_content;
+	const gchar *search_text;
+
+	search_text = e_shell_searchbar_get_search_text (searchbar);
+
+	g_clear_pointer (&searchbar->priv->active_search_text, g_free);
+	if (search_text && *search_text)
+		searchbar->priv->active_search_text = g_strdup (search_text);
 
 	shell_searchbar_update_search_widgets (searchbar);
 
@@ -373,6 +376,23 @@ shell_searchbar_entry_changed_cb (EShellSearchbar *searchbar)
 
 		action = E_SHELL_WINDOW_ACTION_SEARCH_QUICK (shell_window);
 		gtk_action_set_sensitive (action, sensitive);
+
+		action = E_SHELL_WINDOW_ACTION_SEARCH_CLEAR (shell_window);
+		gtk_action_set_sensitive (action, sensitive ||
+			(searchbar->priv->active_search_text && *searchbar->priv->active_search_text) ||
+			e_shell_view_get_search_rule (shell_view) != NULL);
+	}
+}
+
+static void
+e_shell_searchbar_scope_changed_cb (EShellSearchbar *searchbar)
+{
+	if (gtk_widget_is_visible (searchbar->priv->scope_combo_box)) {
+		EShellView *shell_view;
+
+		shell_view = e_shell_searchbar_get_shell_view (searchbar);
+
+		e_shell_view_execute_search (shell_view);
 	}
 }
 
@@ -490,6 +510,11 @@ shell_searchbar_entry_focus_out_cb (GtkWidget *entry,
                                     GdkEvent *event,
                                     EShellSearchbar *searchbar)
 {
+	if (e_util_strcmp0 (searchbar->priv->active_search_text, gtk_entry_get_text (GTK_ENTRY (searchbar->priv->search_entry))) != 0) {
+		gtk_entry_set_text (GTK_ENTRY (searchbar->priv->search_entry), searchbar->priv->active_search_text ?
+			searchbar->priv->active_search_text : "");
+	}
+
 	shell_searchbar_update_search_widgets (searchbar);
 
 	return FALSE;
@@ -629,24 +654,22 @@ shell_searchbar_get_property (GObject *object,
 static void
 shell_searchbar_dispose (GObject *object)
 {
-	EShellSearchbarPrivate *priv;
+	EShellSearchbar *self = E_SHELL_SEARCHBAR (object);
 
-	priv = E_SHELL_SEARCHBAR_GET_PRIVATE (object);
-
-	if (priv->shell_view != NULL) {
+	if (self->priv->shell_view != NULL) {
 		g_object_remove_weak_pointer (
-			G_OBJECT (priv->shell_view), &priv->shell_view);
-		priv->shell_view = NULL;
+			G_OBJECT (self->priv->shell_view), &self->priv->shell_view);
+		self->priv->shell_view = NULL;
 	}
 
-	if (priv->search_option != NULL) {
+	if (self->priv->search_option != NULL) {
 		g_signal_handlers_disconnect_matched (
-			priv->search_option, G_SIGNAL_MATCH_DATA,
+			self->priv->search_option, G_SIGNAL_MATCH_DATA,
 			0, 0, NULL, NULL, object);
-		g_clear_object (&priv->search_option);
+		g_clear_object (&self->priv->search_option);
 	}
 
-	g_clear_object (&priv->css_provider);
+	g_clear_object (&self->priv->css_provider);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_shell_searchbar_parent_class)->dispose (object);
@@ -655,11 +678,10 @@ shell_searchbar_dispose (GObject *object)
 static void
 shell_searchbar_finalize (GObject *object)
 {
-	EShellSearchbarPrivate *priv;
+	EShellSearchbar *self = E_SHELL_SEARCHBAR (object);
 
-	priv = E_SHELL_SEARCHBAR_GET_PRIVATE (object);
-
-	g_free (priv->state_group);
+	g_free (self->priv->state_group);
+	g_free (self->priv->active_search_text);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_shell_searchbar_parent_class)->finalize (object);
@@ -768,8 +790,6 @@ e_shell_searchbar_class_init (EShellSearchbarClass *class)
 {
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
-
-	g_type_class_add_private (class, sizeof (EShellSearchbarPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = shell_searchbar_set_property;
@@ -902,7 +922,7 @@ e_shell_searchbar_init (EShellSearchbar *searchbar)
 	GtkLabel *label;
 	GtkWidget *widget;
 
-	searchbar->priv = E_SHELL_SEARCHBAR_GET_PRIVATE (searchbar);
+	searchbar->priv = e_shell_searchbar_get_instance_private (searchbar);
 
 	gtk_box_set_spacing (GTK_BOX (searchbar), 6);
 	gtk_style_context_add_class (gtk_widget_get_style_context (GTK_WIDGET (searchbar)),
@@ -1032,6 +1052,11 @@ e_shell_searchbar_init (EShellSearchbar *searchbar)
 	gtk_box_pack_start (box, widget, FALSE, FALSE, 0);
 	searchbar->priv->scope_combo_box = widget;
 	gtk_widget_show (widget);
+
+	g_signal_connect_object (
+		widget, "changed",
+		G_CALLBACK (e_shell_searchbar_scope_changed_cb),
+		searchbar, G_CONNECT_AFTER | G_CONNECT_SWAPPED);
 }
 
 /**
@@ -1446,4 +1471,13 @@ e_shell_searchbar_search_entry_grab_focus (EShellSearchbar *searchbar)
 	g_return_if_fail (searchbar->priv->search_entry);
 
 	gtk_widget_grab_focus (searchbar->priv->search_entry);
+}
+
+gboolean
+e_shell_searchbar_search_entry_has_focus (EShellSearchbar *searchbar)
+{
+	g_return_val_if_fail (E_IS_SHELL_SEARCHBAR (searchbar), FALSE);
+	g_return_val_if_fail (searchbar->priv->search_entry, FALSE);
+
+	return gtk_widget_has_focus (searchbar->priv->search_entry);
 }

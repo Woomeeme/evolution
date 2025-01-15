@@ -135,6 +135,15 @@ get_general_page (EConfig *config,
 	gtk_box_pack_start (GTK_BOX (itembox), widget, FALSE, FALSE, 0);
 	gtk_widget_show (widget);
 
+	widget = gtk_check_button_new_with_mnemonic (
+		_("_Preview Personal information before Work information"));
+	g_settings_bind (
+		settings, "preview-home-before-work",
+		widget, "active",
+		G_SETTINGS_BIND_DEFAULT);
+	gtk_box_pack_start (GTK_BOX (itembox), widget, FALSE, FALSE, 0);
+	gtk_widget_show (widget);
+
 	container = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
 	gtk_box_pack_start (GTK_BOX (itembox), container, FALSE, FALSE, 0);
 	gtk_widget_show (container);
@@ -165,6 +174,18 @@ get_general_page (EConfig *config,
 	/* In case user has some garbage/unknown value set there */
 	if (!gtk_combo_box_get_active_id (GTK_COMBO_BOX (widget)))
 		gtk_combo_box_set_active_id (GTK_COMBO_BOX (widget), "openstreetmap");
+
+	/* Cannot check what apps are installed in the system when running in a Flatpak sandbox */
+	if (!e_util_is_running_flatpak ()) {
+		widget = gtk_check_button_new_with_mnemonic (_("Use system map _application, if available"));
+		gtk_widget_set_margin_start (widget, 12);
+		g_settings_bind (
+			settings, "open-map-prefer-local",
+			widget, "active",
+			G_SETTINGS_BIND_DEFAULT);
+		gtk_box_pack_start (GTK_BOX (itembox), widget, FALSE, FALSE, 0);
+		gtk_widget_show (widget);
+	}
 
 	itembox = add_section (vbox, _("Autocompletion"), TRUE);
 

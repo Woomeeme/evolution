@@ -38,8 +38,10 @@
 #include <mail/em-utils.h>
 #include <mail/message-list.h>
 
-#include <calendar/gui/e-comp-editor.h>
-#include <calendar/gui/itip-utils.h>
+#include "calendar/gui/calendar-config.h"
+#include "calendar/gui/comp-util.h"
+#include "calendar/gui/e-comp-editor.h"
+#include "calendar/gui/itip-utils.h"
 
 #include "libemail-engine/libemail-engine.h"
 
@@ -242,7 +244,8 @@ set_description (ECalComponent *comp,
 		return;
 
 	type = camel_mime_part_get_content_type (mime_part);
-	if (!camel_content_type_is (type, "text", "plain"))
+	if (!camel_content_type_is (type, "text", "plain") &&
+	    !camel_content_type_is (type, "text", "html"))
 		return;
 
 	byte_array = g_byte_array_new ();
@@ -280,6 +283,19 @@ set_description (ECalComponent *comp,
 
 	if (!convert_str && str)
 		convert_str = e_util_utf8_make_valid (str);
+
+	if (camel_content_type_is (type, "text", "html")) {
+		gchar *plain_text;
+
+		plain_text = e_markdown_utils_html_to_text (convert_str ? convert_str : str, -1, E_MARKDOWN_HTML_TO_TEXT_FLAG_NONE);
+
+		if (plain_text && *plain_text) {
+			g_free (convert_str);
+			convert_str = plain_text;
+		} else {
+			g_free (plain_text);
+		}
+	}
 
 	if (convert_str)
 		text = e_cal_component_text_new (prepend_from (message, &convert_str), NULL);
@@ -485,7 +501,6 @@ set_attachments (ECalClient *client,
 
 	if (cb_data.uris == NULL) {
 		e_flag_free (cb_data.flag);
-		g_warning ("No attachment URIs retrieved.");
 		return;
 	}
 
@@ -753,9 +768,15 @@ do_manage_comp_idle (struct _manage_comp *mc)
 		const gchar *ask = get_question_edit_old (source_type);
 
 		if (ask) {
-			gchar *msg = g_strdup_printf (ask, i_cal_component_get_summary (mc->stored_comp) ? i_cal_component_get_summary (mc->stored_comp) : _("[No Summary]"));
+			ICalProperty *prop;
+			const gchar *summary;
+			gchar *msg;
 			gint chosen;
 
+			prop = e_cal_util_component_find_property_for_locale (mc->stored_comp, I_CAL_SUMMARY_PROPERTY, NULL);
+			summary = prop ? i_cal_property_get_summary (prop) : NULL;
+			msg = g_strdup_printf (ask, summary && *summary ? summary : _("[No Summary]"));
+			g_clear_object (&prop);
 			chosen = do_ask (msg, TRUE);
 
 			if (chosen == GTK_RESPONSE_YES) {
@@ -863,7 +884,7 @@ do_mail_to_event (AsyncData *data)
 	GError *error = NULL;
 
 	client = e_client_cache_get_client_sync (data->client_cache,
-		data->source, data->extension_name, 30, NULL, &error);
+		data->source, data->extension_name, E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, NULL, &error);
 
 	/* Sanity check. */
 	g_return_val_if_fail (
@@ -888,9 +909,11 @@ do_mail_to_event (AsyncData *data)
 			break;
 		}
 	} else {
+		GSettings *settings;
 		gint i;
 		ECalComponentDateTime *dt, *dt2;
 		ICalTime *tt, *tt2;
+		gchar *tzid = NULL;
 		struct _manage_comp *oldmc = NULL;
 
 		#define cache_backend_prop(prop) { \
@@ -907,13 +930,44 @@ do_mail_to_event (AsyncData *data)
 
 		#undef cache_backend_prop
 
-		/* set start day of the event as today, without time - easier than looking for a calendar's time zone */
-		tt = i_cal_time_new_today ();
-		tt2 = i_cal_time_clone (tt);
-		i_cal_time_adjust (tt2, 1, 0, 0, 0);
+		settings = e_util_ref_settings ("org.gnome.evolution.calendar");
 
-		dt = e_cal_component_datetime_new_take (tt, NULL);
-		dt2 = e_cal_component_datetime_new_take (tt2, NULL);
+		if (data->source_type == E_CAL_CLIENT_SOURCE_TYPE_EVENTS) {
+			ICalTimezone *zone;
+			gint time_divisions, shorten_time;
+
+			time_divisions = g_settings_get_int (settings, "time-divisions");
+			shorten_time = g_settings_get_int (settings, "shorten-time");
+			zone = calendar_config_get_icaltimezone ();
+
+			tt = i_cal_time_new_current_with_zone (zone);
+			i_cal_time_adjust (tt, 1, 0, 0, -i_cal_time_get_second (tt));
+			if ((i_cal_time_get_minute (tt) % time_divisions) != 0)
+				i_cal_time_adjust (tt, 0, 0, time_divisions - (i_cal_time_get_minute (tt) % time_divisions), 0);
+			tt2 = i_cal_time_clone (tt);
+			i_cal_time_adjust (tt2, 0, 0, time_divisions, 0);
+
+			if (shorten_time > 0 && shorten_time < time_divisions) {
+				if (g_settings_get_boolean (settings, "shorten-time-end"))
+					i_cal_time_adjust (tt2, 0, 0, -shorten_time, 0);
+				else
+					i_cal_time_adjust (tt, 0, 0, shorten_time, 0);
+			}
+
+			i_cal_time_normalize_inplace (tt);
+			i_cal_time_normalize_inplace (tt2);
+
+			if (zone)
+				tzid = g_strdup (i_cal_timezone_get_tzid (zone));
+		} else {
+			/* Memos and Tasks will start "today" */
+			tt = i_cal_time_new_today ();
+			tt2 = i_cal_time_clone (tt);
+			i_cal_time_adjust (tt2, 1, 0, 0, 0);
+		}
+
+		dt = e_cal_component_datetime_new_take (tt, g_strdup (tzid));
+		dt2 = e_cal_component_datetime_new_take (tt2, tzid);
 
 		for (i = 0; i < (uids ? uids->len : 0); i++) {
 			CamelMimeMessage *message;
@@ -931,20 +985,15 @@ do_mail_to_event (AsyncData *data)
 				continue;
 			}
 
-			comp = e_cal_component_new ();
+			comp = cal_comp_event_new_with_defaults_sync (E_CAL_CLIENT (client), FALSE,
+				data->source_type == E_CAL_CLIENT_SOURCE_TYPE_EVENTS &&
+				g_settings_get_boolean (settings, "use-default-reminder"),
+				g_settings_get_int (settings, "default-reminder-interval"),
+				g_settings_get_enum (settings, "default-reminder-units"),
+				NULL, &error);
 
-			switch (data->source_type) {
-			case E_CAL_CLIENT_SOURCE_TYPE_EVENTS:
-				e_cal_component_set_new_vtype (comp, E_CAL_COMPONENT_EVENT);
-				break;
-			case E_CAL_CLIENT_SOURCE_TYPE_TASKS:
-				e_cal_component_set_new_vtype (comp, E_CAL_COMPONENT_TODO);
-				break;
-			case E_CAL_CLIENT_SOURCE_TYPE_MEMOS:
-				e_cal_component_set_new_vtype (comp, E_CAL_COMPONENT_JOURNAL);
-				break;
-			default:
-				g_warn_if_reached ();
+			if (!comp) {
+				report_error_idle (_("Cannot create component: %s"), error ? error->message : _("Unknown error"));
 				break;
 			}
 
@@ -1052,11 +1101,10 @@ do_mail_to_event (AsyncData *data)
 
 		e_cal_component_datetime_free (dt);
 		e_cal_component_datetime_free (dt2);
+		g_clear_object (&settings);
 	}
 
-	/* free memory */
-	if (client != NULL)
-		g_object_unref (client);
+	g_clear_object (&client);
 	g_ptr_array_unref (uids);
 	g_object_unref (folder);
 

@@ -29,10 +29,14 @@
       <menu action='view-menu'>
         <menuitem action='view-from-override'/>
         <menuitem action='view-reply-to'/>
+        <menuitem action='view-mail-followup-to'/>
+        <menuitem action='view-mail-reply-to'/>
         <menuitem action='view-cc'/>
         <menuitem action='view-bcc'/>
         <separator/>
         <menuitem action='picture-gallery'/>
+        <menuitem action='toolbar-show-main'/>
+        <menuitem action='toolbar-show-edit'/>
         <separator/>
         <menuitem action='visually-wrap-long-lines'/>
       </menu>
@@ -52,6 +56,7 @@
       <menuitem action='smime-encrypt'/>
       <separator/>
       <menuitem action='request-read-receipt'/>
+      <menuitem action='delivery-status-notification'/>
       <menuitem action='prioritize-message'/>
       <separator/>
       <menu action='charset-menu'/>
@@ -60,11 +65,11 @@
   <toolbar name='main-toolbar'>
     <placeholder name='pre-main-toolbar'>
       <toolitem action='send'/>
-      <separator/>
+      <separator name='send-separator'/>
       <toolitem action='save-draft'/>
-      <separator/>
+      <separator name='save-draft-separator'/>
     </placeholder>
-    <separator/>
+    <separator name='prioritize-message-separator'/>
     <toolitem action='toolbar-prioritize-message'/>
     <toolitem action='toolbar-request-read-receipt'/>
     <separator/>

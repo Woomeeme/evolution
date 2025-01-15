@@ -25,10 +25,6 @@
 #include "em-folder-utils.h"
 #include "em-subscription-editor.h"
 
-#define EM_SUBSCRIPTION_EDITOR_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), EM_TYPE_SUBSCRIPTION_EDITOR, EMSubscriptionEditorPrivate))
-
 #define FOLDER_CAN_SELECT(folder_info) \
 	((folder_info) != NULL && \
 	((folder_info)->flags & CAMEL_FOLDER_NOSELECT) == 0)
@@ -103,7 +99,7 @@ enum {
 	N_COLUMNS
 };
 
-G_DEFINE_TYPE (EMSubscriptionEditor, em_subscription_editor, GTK_TYPE_DIALOG)
+G_DEFINE_TYPE_WITH_PRIVATE (EMSubscriptionEditor, em_subscription_editor, GTK_TYPE_DIALOG)
 
 static void
 tree_row_data_free (TreeRowData *tree_row_data)
@@ -396,7 +392,6 @@ subscription_editor_subscribe_many (EMSubscriptionEditor *editor,
 	CamelStore *active_store;
 	AsyncContext *context;
 	GdkCursor *cursor;
-	GdkWindow *window;
 
 	g_return_if_fail (editor != NULL);
 
@@ -420,10 +415,14 @@ subscription_editor_subscribe_many (EMSubscriptionEditor *editor,
 	gtk_widget_set_sensitive (editor->priv->refresh_button, FALSE);
 	gtk_widget_set_sensitive (editor->priv->stop_button, TRUE);
 
-	cursor = gdk_cursor_new (GDK_WATCH);
-	window = gtk_widget_get_window (GTK_WIDGET (editor));
-	gdk_window_set_cursor (window, cursor);
-	g_object_unref (cursor);
+	cursor = gdk_cursor_new_from_name (gtk_widget_get_display (GTK_WIDGET (editor)), "wait");
+	if (cursor) {
+		GdkWindow *window;
+
+		window = gtk_widget_get_window (GTK_WIDGET (editor));
+		gdk_window_set_cursor (window, cursor);
+		g_object_unref (cursor);
+	}
 
 	context = async_context_new (editor, tree_rows);
 
@@ -525,7 +524,6 @@ subscription_editor_unsubscribe_many (EMSubscriptionEditor *editor,
 	AsyncContext *context;
 	CamelStore *active_store;
 	GdkCursor *cursor;
-	GdkWindow *window;
 
 	g_return_if_fail (editor != NULL);
 
@@ -549,10 +547,14 @@ subscription_editor_unsubscribe_many (EMSubscriptionEditor *editor,
 	gtk_widget_set_sensitive (editor->priv->refresh_button, FALSE);
 	gtk_widget_set_sensitive (editor->priv->stop_button, TRUE);
 
-	cursor = gdk_cursor_new (GDK_WATCH);
-	window = gtk_widget_get_window (GTK_WIDGET (editor));
-	gdk_window_set_cursor (window, cursor);
-	g_object_unref (cursor);
+	cursor = gdk_cursor_new_from_name (gtk_widget_get_display (GTK_WIDGET (editor)), "wait");
+	if (cursor) {
+		GdkWindow *window;
+
+		window = gtk_widget_get_window (GTK_WIDGET (editor));
+		gdk_window_set_cursor (window, cursor);
+		g_object_unref (cursor);
+	}
 
 	context = async_context_new (editor, tree_rows);
 
@@ -987,7 +989,6 @@ static void
 subscription_editor_refresh (EMSubscriptionEditor *editor)
 {
 	GdkCursor *cursor;
-	GdkWindow *window;
 
 	/* Cancel any operation on this store still in progress. */
 	gtk_button_clicked (GTK_BUTTON (editor->priv->stop_button));
@@ -1003,10 +1004,14 @@ subscription_editor_refresh (EMSubscriptionEditor *editor)
 	gtk_widget_set_sensitive (editor->priv->refresh_button, FALSE);
 	gtk_widget_set_sensitive (editor->priv->stop_button, TRUE);
 
-	cursor = gdk_cursor_new (GDK_WATCH);
-	window = gtk_widget_get_window (GTK_WIDGET (editor));
-	gdk_window_set_cursor (window, cursor);
-	g_object_unref (cursor);
+	cursor = gdk_cursor_new_from_name (gtk_widget_get_display (GTK_WIDGET (editor)), "wait");
+	if (cursor) {
+		GdkWindow *window;
+
+		window = gtk_widget_get_window (GTK_WIDGET (editor));
+		gdk_window_set_cursor (window, cursor);
+		g_object_unref (cursor);
+	}
 
 	camel_store_get_folder_info (
 		editor->priv->active->store, NULL,
@@ -1540,19 +1545,17 @@ subscription_editor_get_property (GObject *object,
 static void
 subscription_editor_dispose (GObject *object)
 {
-	EMSubscriptionEditorPrivate *priv;
+	EMSubscriptionEditor *self = EM_SUBSCRIPTION_EDITOR (object);
 
-	priv = EM_SUBSCRIPTION_EDITOR_GET_PRIVATE (object);
+	g_clear_object (&self->priv->session);
+	g_clear_object (&self->priv->initial_store);
 
-	g_clear_object (&priv->session);
-	g_clear_object (&priv->initial_store);
-
-	if (priv->timeout_id > 0) {
-		g_source_remove (priv->timeout_id);
-		priv->timeout_id = 0;
+	if (self->priv->timeout_id > 0) {
+		g_source_remove (self->priv->timeout_id);
+		self->priv->timeout_id = 0;
 	}
 
-	g_ptr_array_set_size (priv->stores, 0);
+	g_ptr_array_set_size (self->priv->stores, 0);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (em_subscription_editor_parent_class)->dispose (object);
@@ -1561,13 +1564,11 @@ subscription_editor_dispose (GObject *object)
 static void
 subscription_editor_finalize (GObject *object)
 {
-	EMSubscriptionEditorPrivate *priv;
+	EMSubscriptionEditor *self = EM_SUBSCRIPTION_EDITOR (object);
 
-	priv = EM_SUBSCRIPTION_EDITOR_GET_PRIVATE (object);
+	g_ptr_array_free (self->priv->stores, TRUE);
 
-	g_ptr_array_free (priv->stores, TRUE);
-
-	g_free (priv->search_string);
+	g_free (self->priv->search_string);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (em_subscription_editor_parent_class)->finalize (object);
@@ -1670,8 +1671,6 @@ em_subscription_editor_class_init (EMSubscriptionEditorClass *class)
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
 
-	g_type_class_add_private (class, sizeof (EMSubscriptionEditorPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = subscription_editor_set_property;
 	object_class->get_property = subscription_editor_get_property;
@@ -1715,7 +1714,7 @@ em_subscription_editor_init (EMSubscriptionEditor *editor)
 	GtkWidget *box;
 	const gchar *tooltip;
 
-	editor->priv = EM_SUBSCRIPTION_EDITOR_GET_PRIVATE (editor);
+	editor->priv = em_subscription_editor_get_instance_private (editor);
 
 	editor->priv->stores = g_ptr_array_new_with_free_func (
 		(GDestroyNotify) store_data_free);
@@ -1729,9 +1728,11 @@ em_subscription_editor_init (EMSubscriptionEditor *editor)
 		"/org/gnome/evolution/mail/subscription-window/",
 		E_RESTORE_WINDOW_SIZE);
 
-	gtk_dialog_add_button (
-		GTK_DIALOG (editor),
-		_("_Close"), GTK_RESPONSE_CLOSE);
+	if (!e_util_get_use_header_bar ()) {
+		gtk_dialog_add_button (
+			GTK_DIALOG (editor),
+			_("_Close"), GTK_RESPONSE_CLOSE);
+	}
 
 	container = gtk_dialog_get_content_area (GTK_DIALOG (editor));
 
@@ -1814,9 +1815,11 @@ em_subscription_editor_init (EMSubscriptionEditor *editor)
 		G_BINDING_BIDIRECTIONAL |
 		G_BINDING_SYNC_CREATE);
 
-	e_signal_connect_notify (
-		widget, "notify::sensitive",
-		G_CALLBACK (emse_notebook_sensitive_changed_cb), editor);
+	if (!e_util_get_use_header_bar ()) {
+		e_signal_connect_notify (
+			widget, "notify::sensitive",
+			G_CALLBACK (emse_notebook_sensitive_changed_cb), editor);
+	}
 
 	widget = gtk_button_box_new (GTK_ORIENTATION_VERTICAL);
 	gtk_box_set_spacing (GTK_BOX (widget), 6);
@@ -1978,6 +1981,7 @@ em_subscription_editor_new (GtkWindow *parent,
 		EM_TYPE_SUBSCRIPTION_EDITOR,
 		"session", session,
 		"store", initial_store,
+		"use-header-bar", e_util_get_use_header_bar (),
 		"transient-for", parent,
 		NULL);
 }

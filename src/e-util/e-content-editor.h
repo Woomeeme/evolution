@@ -144,7 +144,7 @@ struct _EContentEditorInterface {
 
 	gchar *		(*insert_signature)		(EContentEditor *editor,
 							 const gchar *content,
-							 gboolean is_html,
+							 EContentEditorMode editor_mode,
 							 gboolean can_reposition_caret,
 							 const gchar *signature_id,
 							 gboolean *set_signature_from_message,
@@ -251,12 +251,14 @@ struct _EContentEditorInterface {
 	gchar *		(*image_get_align)		(EContentEditor *editor);
 
 	void		(*link_get_properties)		(EContentEditor *editor,
-							 gchar **href,
-							 gchar **text);
+							 gchar **out_href,
+							 gchar **out_text,
+							 gchar **out_name);
 
 	void		(*link_set_properties)		(EContentEditor *editor,
 							 const gchar *href,
-							 const gchar *text);
+							 const gchar *text,
+							 const gchar *name);
 
 	void		(*page_set_text_color)		(EContentEditor *editor,
 							 const GdkRGBA *value);
@@ -426,14 +428,26 @@ struct _EContentEditorInterface {
 	void		(*delete_h_rule)		(EContentEditor *editor);
 	void		(*delete_image)			(EContentEditor *editor);
 
+	gboolean	(*supports_mode)		(EContentEditor *editor,
+							 EContentEditorMode mode);
+	void		(*grab_focus)			(EContentEditor *editor);
+	gboolean	(*is_focus)			(EContentEditor *editor);
+	const gchar *	(*get_hover_uri)		(EContentEditor *editor);
+	void		(*get_caret_client_rect)	(EContentEditor *editor,
+							 GdkRectangle *out_rect);
+
 	/* padding for future expansion */
-	gpointer reserved[20];
+	gpointer reserved[15];
 };
 
 /* Properties */
 
 ESpellChecker *	e_content_editor_ref_spell_checker
 						(EContentEditor *editor);
+gboolean	e_content_editor_supports_mode	(EContentEditor *editor,
+						 EContentEditorMode mode);
+void		e_content_editor_grab_focus	(EContentEditor *editor);
+gboolean	e_content_editor_is_focus	(EContentEditor *editor);
 gboolean	e_content_editor_is_malfunction	(EContentEditor *editor);
 gboolean	e_content_editor_can_cut	(EContentEditor *editor);
 gboolean	e_content_editor_can_copy	(EContentEditor *editor);
@@ -452,9 +466,6 @@ void		e_content_editor_set_editable	(EContentEditor *editor,
 gboolean	e_content_editor_get_changed	(EContentEditor *editor);
 void		e_content_editor_set_changed	(EContentEditor *editor,
 						 gboolean changed);
-gboolean	e_content_editor_get_html_mode	(EContentEditor *editor);
-void		e_content_editor_set_html_mode	(EContentEditor *editor,
-						 gboolean html_mode);
 void		e_content_editor_set_alignment	(EContentEditor *editor,
 						 EContentEditorAlignment value);
 EContentEditorAlignment
@@ -649,7 +660,7 @@ void		e_content_editor_take_last_error(EContentEditor *editor,
 gchar *		e_content_editor_insert_signature
 						(EContentEditor *editor,
 						 const gchar *content,
-						 gboolean is_html,
+						 EContentEditorMode editor_mode,
 						 gboolean can_reposition_caret,
 						 const gchar *signature_id,
 						 gboolean *set_signature_from_message,
@@ -784,13 +795,15 @@ void		e_content_editor_image_set_height_follow
 
 void		e_content_editor_link_get_properties
 						(EContentEditor *editor,
-						 gchar **href,
-						 gchar **text);
+						 gchar **out_href,
+						 gchar **out_text,
+						 gchar **out_name);
 
 void		e_content_editor_link_set_properties
 						(EContentEditor *editor,
 						 const gchar *href,
-						 const gchar *text);
+						 const gchar *text,
+						 const gchar *name);
 
 void		e_content_editor_page_set_text_color
 						(EContentEditor *editor,
@@ -985,6 +998,11 @@ void		e_content_editor_spell_check_replace_all
 void		e_content_editor_delete_h_rule	(EContentEditor *editor);
 void		e_content_editor_delete_image	(EContentEditor *editor);
 
+const gchar *	e_content_editor_get_hover_uri	(EContentEditor *editor);
+void		e_content_editor_get_caret_client_rect
+						(EContentEditor *editor,
+						 GdkRectangle *out_rect);
+
 /* Signal helpers */
 
 void		e_content_editor_emit_load_finished
@@ -1010,6 +1028,10 @@ void		e_content_editor_emit_content_changed
 CamelMimePart *	e_content_editor_emit_ref_mime_part
 						(EContentEditor *editor,
 						 const gchar *uri);
+
+gboolean	e_content_editor_util_three_state_to_bool
+						(EThreeState value,
+						 const gchar *mail_key);
 
 G_END_DECLS
 

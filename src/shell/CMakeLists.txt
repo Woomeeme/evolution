@@ -19,6 +19,7 @@ set(SOURCES
 	e-shell-backend.c
 	e-shell-content.c
 	e-shell-enumtypes.c
+	e-shell-headerbar.c
 	e-shell-searchbar.c
 	e-shell-sidebar.c
 	e-shell-switcher.c
@@ -40,6 +41,7 @@ set(HEADERS
 	e-shell-backend.h
 	e-shell-common.h
 	e-shell-content.h
+	e-shell-headerbar.h
 	e-shell-searchbar.h
 	e-shell-sidebar.h
 	e-shell-switcher.h
@@ -68,6 +70,8 @@ target_compile_definitions(evolution-shell PRIVATE
 	-DEVOLUTION_ICONDIR=\"${icondir}\"
 	-DEVOLUTION_MODULEDIR=\"${moduledir}\"
 	-DEVOLUTION_RULEDIR=\"${privdatadir}\"
+	-DEVOLUTION_TOOLSDIR=\"${privlibexecdir}\"
+	-DE_DATA_SERVER_ICONDIR=\"${E_DATA_SERVER_ICONDIR}\"
 )
 
 target_compile_options(evolution-shell PUBLIC
@@ -136,6 +140,7 @@ target_compile_definitions(evolution PRIVATE
 	-DEVOLUTION_PREFIX=\"${CMAKE_INSTALL_PREFIX}\"
 	-DEVOLUTION_RULEDIR=\"${privdatadir}\"
 	-DEVOLUTION_TOOLSDIR=\"${privlibexecdir}\"
+	-DE_DATA_SERVER_ICONDIR=\"${E_DATA_SERVER_ICONDIR}\"
 )
 
 target_compile_options(evolution PUBLIC

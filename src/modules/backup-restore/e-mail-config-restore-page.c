@@ -29,10 +29,6 @@
 
 #include "e-mail-config-restore-page.h"
 
-#define E_MAIL_CONFIG_RESTORE_PAGE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_CONFIG_RESTORE_PAGE, EMailConfigRestorePagePrivate))
-
 struct _EMailConfigRestorePagePrivate {
 	GtkWidget *toggle_button;  /* not referenced */
 	GtkWidget *file_chooser;   /* not referenced */
@@ -51,17 +47,10 @@ static void	e_mail_config_restore_page_alert_sink_init
 static void	e_mail_config_restore_page_interface_init
 					(EMailConfigPageInterface *iface);
 
-G_DEFINE_DYNAMIC_TYPE_EXTENDED (
-	EMailConfigRestorePage,
-	e_mail_config_restore_page,
-	GTK_TYPE_SCROLLED_WINDOW,
-	0,
-	G_IMPLEMENT_INTERFACE_DYNAMIC (
-		E_TYPE_ALERT_SINK,
-		e_mail_config_restore_page_alert_sink_init)
-	G_IMPLEMENT_INTERFACE_DYNAMIC (
-		E_TYPE_MAIL_CONFIG_PAGE,
-		e_mail_config_restore_page_interface_init))
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (EMailConfigRestorePage, e_mail_config_restore_page, GTK_TYPE_SCROLLED_WINDOW, 0,
+	G_ADD_PRIVATE_DYNAMIC (EMailConfigRestorePage)
+	G_IMPLEMENT_INTERFACE_DYNAMIC (E_TYPE_ALERT_SINK, e_mail_config_restore_page_alert_sink_init)
+	G_IMPLEMENT_INTERFACE_DYNAMIC (E_TYPE_MAIL_CONFIG_PAGE, e_mail_config_restore_page_interface_init))
 
 static void
 mail_config_restore_page_update_filename (EMailConfigRestorePage *page)
@@ -69,6 +58,7 @@ mail_config_restore_page_update_filename (EMailConfigRestorePage *page)
 	GtkToggleButton *toggle_button;
 	GtkFileChooser *file_chooser;
 	gchar *filename = NULL;
+	GError *local_error = NULL;
 
 	file_chooser = GTK_FILE_CHOOSER (page->priv->file_chooser);
 	toggle_button = GTK_TOGGLE_BUTTON (page->priv->toggle_button);
@@ -78,16 +68,25 @@ mail_config_restore_page_update_filename (EMailConfigRestorePage *page)
 	if (gtk_toggle_button_get_active (toggle_button))
 		filename = gtk_file_chooser_get_filename (file_chooser);
 
-	if (!evolution_backup_restore_validate_backup_file (filename)) {
+	if (!evolution_backup_restore_validate_backup_file (filename, &local_error)) {
 		if (filename != NULL) {
-			e_alert_submit (
-				E_ALERT_SINK (page),
-				"org.gnome.backup-restore:invalid-backup",
-				filename, NULL);
+			if (g_error_matches (local_error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)) {
+				e_alert_submit (
+					E_ALERT_SINK (page),
+					"org.gnome.backup-restore:cannot-restore",
+					local_error->message, NULL);
+			} else {
+				e_alert_submit (
+					E_ALERT_SINK (page),
+					"org.gnome.backup-restore:invalid-backup",
+					filename, NULL);
+			}
 			g_free (filename);
 			filename = NULL;
 		}
 	}
+
+	g_clear_error (&local_error);
 
 	g_free (page->priv->filename);
 	page->priv->filename = filename;
@@ -132,15 +131,24 @@ mail_config_restore_page_get_property (GObject *object,
 static void
 mail_config_restore_page_finalize (GObject *object)
 {
-	EMailConfigRestorePagePrivate *priv;
+	EMailConfigRestorePage *self = E_MAIL_CONFIG_RESTORE_PAGE (object);
 
-	priv = E_MAIL_CONFIG_RESTORE_PAGE_GET_PRIVATE (object);
-
-	g_free (priv->filename);
+	g_free (self->priv->filename);
 
 	/* Chain up to parent's finalize() method. */
-	G_OBJECT_CLASS (e_mail_config_restore_page_parent_class)->
-		finalize (object);
+	G_OBJECT_CLASS (e_mail_config_restore_page_parent_class)->finalize (object);
+}
+
+static gboolean
+is_xz_available (void)
+{
+	gchar *path;
+
+	path = g_find_program_in_path ("xz");
+
+	g_free (path);
+
+	return path != NULL;
 }
 
 static void
@@ -150,6 +158,7 @@ mail_config_restore_page_constructed (GObject *object)
 	GtkWidget *widget;
 	GtkWidget *container;
 	GtkWidget *main_box;
+	GtkFileFilter *filter, *backup_filter;
 	const gchar *text;
 
 	page = E_MAIL_CONFIG_RESTORE_PAGE (object);
@@ -189,6 +198,21 @@ mail_config_restore_page_constructed (GObject *object)
 		_("Choose a backup file to restore"),
 		GTK_FILE_CHOOSER_ACTION_OPEN);
 	gtk_file_chooser_set_local_only (GTK_FILE_CHOOSER (widget), TRUE);
+
+	backup_filter = gtk_file_filter_new ();
+	gtk_file_filter_add_pattern (backup_filter, "*.tar.gz");
+	if (is_xz_available ())
+		gtk_file_filter_add_pattern (backup_filter, "*.tar.xz");
+	gtk_file_filter_set_name (backup_filter, _("Backup Files"));
+	gtk_file_chooser_add_filter (GTK_FILE_CHOOSER (widget), backup_filter);
+
+	filter = gtk_file_filter_new ();
+	gtk_file_filter_add_pattern (filter, "*");
+	gtk_file_filter_set_name (filter, _("All Files (*)"));
+	gtk_file_chooser_add_filter (GTK_FILE_CHOOSER (widget), filter);
+
+	gtk_file_chooser_set_filter (GTK_FILE_CHOOSER (widget), backup_filter);
+
 	gtk_box_pack_start (GTK_BOX (container), widget, TRUE, TRUE, 0);
 	page->priv->file_chooser = widget;  /* not referenced */
 	gtk_widget_show (widget);
@@ -226,27 +250,23 @@ static void
 mail_config_restore_page_submit_alert (EAlertSink *alert_sink,
                                        EAlert *alert)
 {
-	EMailConfigRestorePagePrivate *priv;
+	EMailConfigRestorePage *self = E_MAIL_CONFIG_RESTORE_PAGE (alert_sink);
 
-	priv = E_MAIL_CONFIG_RESTORE_PAGE_GET_PRIVATE (alert_sink);
-
-	e_alert_bar_submit_alert (E_ALERT_BAR (priv->alert_bar), alert);
+	e_alert_bar_submit_alert (E_ALERT_BAR (self->priv->alert_bar), alert);
 }
 
 static gboolean
 mail_config_restore_page_check_complete (EMailConfigPage *page)
 {
-	EMailConfigRestorePagePrivate *priv;
+	EMailConfigRestorePage *self = E_MAIL_CONFIG_RESTORE_PAGE (page);
 	GtkToggleButton *toggle_button;
 	gboolean complete;
 
-	priv = E_MAIL_CONFIG_RESTORE_PAGE_GET_PRIVATE (page);
-
-	toggle_button = GTK_TOGGLE_BUTTON (priv->toggle_button);
+	toggle_button = GTK_TOGGLE_BUTTON (self->priv->toggle_button);
 
 	complete =
 		!gtk_toggle_button_get_active (toggle_button) ||
-		(priv->filename != NULL && *priv->filename != '\0');
+		(self->priv->filename != NULL && *self->priv->filename != '\0');
 
 	return complete;
 }
@@ -255,9 +275,6 @@ static void
 e_mail_config_restore_page_class_init (EMailConfigRestorePageClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (
-		class, sizeof (EMailConfigRestorePagePrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->get_property = mail_config_restore_page_get_property;
@@ -297,7 +314,7 @@ e_mail_config_restore_page_interface_init (EMailConfigPageInterface *iface)
 static void
 e_mail_config_restore_page_init (EMailConfigRestorePage *page)
 {
-	page->priv = E_MAIL_CONFIG_RESTORE_PAGE_GET_PRIVATE (page);
+	page->priv = e_mail_config_restore_page_get_instance_private (page);
 }
 
 void
@@ -324,7 +341,26 @@ e_mail_config_restore_page_get_filename (EMailConfigRestorePage *page)
 }
 
 gboolean
-evolution_backup_restore_validate_backup_file (const gchar *filename)
+evolution_backup_restore_check_prog_exists (const gchar *prog,
+					    GError **error)
+{
+	gchar *path;
+
+	path = g_find_program_in_path (prog);
+
+	if (!path) {
+		g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, _("Program '%s' not found"), prog);
+		return FALSE;
+	}
+
+	g_free (path);
+
+	return TRUE;
+}
+
+gboolean
+evolution_backup_restore_validate_backup_file (const gchar *filename,
+					       GError **error)
 {
 	gchar *command;
 	gint result;
@@ -333,6 +369,11 @@ evolution_backup_restore_validate_backup_file (const gchar *filename)
 	const gchar *basedir;
 
 	if (filename == NULL || *filename == '\0')
+		return FALSE;
+
+	if (!evolution_backup_restore_check_prog_exists ("tar", error) ||
+	    (g_str_has_suffix (filename, ".xz") && !evolution_backup_restore_check_prog_exists ("xz", error)) ||
+	    (!g_str_has_suffix (filename, ".xz") && !evolution_backup_restore_check_prog_exists ("gzip", error)))
 		return FALSE;
 
 	/* FIXME We should be using g_spawn_command_line_sync() here. */

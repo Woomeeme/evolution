@@ -33,10 +33,6 @@
 #include "e-rule-context.h"
 #include "e-misc-utils.h"
 
-#define E_FILTER_RULE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_FILTER_RULE, EFilterRulePrivate))
-
 typedef struct _FilterPartData FilterPartData;
 typedef struct _FilterRuleData FilterRuleData;
 
@@ -63,15 +59,14 @@ struct _FilterRuleData {
 
 enum {
 	CHANGED,
+	CUSTOMIZE_CONTENT,
+	PERSIST_CUSTOMIZATIONS,
 	LAST_SIGNAL
 };
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE (
-	EFilterRule,
-	e_filter_rule,
-	G_TYPE_OBJECT)
+G_DEFINE_TYPE_WITH_PRIVATE (EFilterRule, e_filter_rule, G_TYPE_OBJECT)
 
 static void
 filter_rule_grouping_changed_cb (GtkComboBox *combo_box,
@@ -109,7 +104,7 @@ part_combobox_changed (GtkComboBox *combobox,
 
 	g_return_if_fail (i == index);
 
-	/* dont update if we haven't changed */
+	/* don't update if we haven't changed */
 	if (!strcmp (part->title, data->part->title))
 		return;
 
@@ -218,6 +213,7 @@ event_box_drag_begin (GtkWidget *widget,
 	cairo_surface_set_device_offset (surface, 0, 0);
 
 	gtk_drag_set_icon_surface (context, surface);
+	cairo_surface_destroy (surface);
 }
 
 static gboolean
@@ -469,6 +465,25 @@ do_grab_focus_cb (GtkWidget *widget,
 static void parts_grid_mapped_cb (GtkWidget *widget,
 				  GtkScrolledWindow *scrolled_window);
 
+static gboolean
+scroll_to_new_part_idle_cb (gpointer user_data)
+{
+	GtkScrolledWindow *scrolled_window = user_data;
+	GtkAdjustment *adjustment;
+
+	adjustment = gtk_scrolled_window_get_vadjustment (scrolled_window);
+	if (adjustment) {
+		gdouble upper;
+
+		upper = gtk_adjustment_get_upper (adjustment);
+		gtk_adjustment_set_value (adjustment, upper);
+	}
+
+	g_object_unref (scrolled_window);
+
+	return G_SOURCE_REMOVE;
+}
+
 static void
 more_parts (GtkWidget *button,
             FilterRuleData *data)
@@ -513,18 +528,11 @@ more_parts (GtkWidget *button,
 		/* also scroll down to see new part */
 		w = (GtkWidget *) g_object_get_data (G_OBJECT (button), "scrolled-window");
 		if (w) {
-			GtkAdjustment *adjustment;
-
-			adjustment = gtk_scrolled_window_get_vadjustment (
-				GTK_SCROLLED_WINDOW (w));
-			if (adjustment) {
-				gdouble upper;
-
-				upper = gtk_adjustment_get_upper (adjustment);
-				gtk_adjustment_set_value (adjustment, upper);
-			}
-
 			parts_grid_mapped_cb (NULL, GTK_SCROLLED_WINDOW (w));
+
+			/* let the scrolled window some time to recalculate size of its
+			   content and propagate it into the vertical adjustment */
+			g_idle_add (scroll_to_new_part_idle_cb, g_object_ref (w));
 		}
 	}
 }
@@ -817,24 +825,35 @@ filter_rule_build_code_for_parts (EFilterRule *rule,
 				  gboolean force_match_all,
 				  GString *out)
 {
+	const gchar *thread_no_subject = "";
+
 	g_return_if_fail (rule != NULL);
 	g_return_if_fail (parts != NULL);
 	g_return_if_fail (out != NULL);
+
+	if (rule->threading != E_FILTER_THREAD_NONE) {
+		GSettings *settings;
+
+		settings = e_util_ref_settings ("org.gnome.evolution.mail");
+		if (!g_settings_get_boolean (settings, "thread-subject"))
+			thread_no_subject = "no-subject,";
+		g_clear_object (&settings);
+	}
 
 	switch (rule->threading) {
 	case E_FILTER_THREAD_NONE:
 		break;
 	case E_FILTER_THREAD_ALL:
-		g_string_append (out, " (match-threads \"all\" ");
+		g_string_append_printf (out, " (match-threads \"%sall\" ", thread_no_subject);
 		break;
 	case E_FILTER_THREAD_REPLIES:
-		g_string_append (out, " (match-threads \"replies\" ");
+		g_string_append_printf (out, " (match-threads \"%sreplies\" ", thread_no_subject);
 		break;
 	case E_FILTER_THREAD_REPLIES_PARENTS:
-		g_string_append (out, " (match-threads \"replies_parents\" ");
+		g_string_append_printf (out, " (match-threads \"%sreplies_parents\" ", thread_no_subject);
 		break;
 	case E_FILTER_THREAD_SINGLE:
-		g_string_append (out, " (match-threads \"single\" ");
+		g_string_append_printf (out, " (match-threads \"%ssingle\" ", thread_no_subject);
 		break;
 	}
 
@@ -1032,6 +1051,8 @@ filter_rule_get_widget (EFilterRule *rule,
 
 	gtk_container_add (GTK_CONTAINER (vgrid), GTK_WIDGET (hgrid));
 
+	g_signal_emit (rule, signals[CUSTOMIZE_CONTENT], 0, vgrid, hgrid, name);
+
 	g_signal_connect (
 		name, "changed",
 		G_CALLBACK (name_changed), rule);
@@ -1211,8 +1232,6 @@ e_filter_rule_class_init (EFilterRuleClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (EFilterRulePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->finalize = filter_rule_finalize;
 
@@ -1233,12 +1252,32 @@ e_filter_rule_class_init (EFilterRuleClass *class)
 		NULL,
 		g_cclosure_marshal_VOID__VOID,
 		G_TYPE_NONE, 0);
+
+	signals[CUSTOMIZE_CONTENT] = g_signal_new (
+		"customize-content",
+		E_TYPE_FILTER_RULE,
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		0,
+		NULL,
+		NULL,
+		NULL,
+		G_TYPE_NONE, 3, GTK_TYPE_GRID, GTK_TYPE_GRID, GTK_TYPE_WIDGET);
+
+	signals[PERSIST_CUSTOMIZATIONS] = g_signal_new (
+		"persist-customizations",
+		E_TYPE_FILTER_RULE,
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		0,
+		NULL,
+		NULL,
+		g_cclosure_marshal_VOID__VOID,
+		G_TYPE_NONE, 0);
 }
 
 static void
 e_filter_rule_init (EFilterRule *rule)
 {
-	rule->priv = E_FILTER_RULE_GET_PRIVATE (rule);
+	rule->priv = e_filter_rule_get_instance_private (rule);
 	rule->enabled = TRUE;
 }
 
@@ -1514,3 +1553,11 @@ static gchar *list[] = {
   N_("Incoming"), N_("Outgoing")
 };
 #endif
+
+void
+e_filter_rule_persist_customizations (EFilterRule *rule)
+{
+	g_return_if_fail (E_IS_FILTER_RULE (rule));
+
+	g_signal_emit (rule, signals[PERSIST_CUSTOMIZATIONS], 0);
+}

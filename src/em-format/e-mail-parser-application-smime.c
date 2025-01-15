@@ -114,8 +114,8 @@ empe_app_smime_parse (EMailParserExtension *extension,
 			local_error->message);
 		g_error_free (local_error);
 
+		e_mail_parser_wrap_as_non_expandable_attachment (parser, part, part_id, out_mail_parts);
 	} else {
-		CamelContentType *ct;
 		GQueue work_queue = G_QUEUE_INIT;
 		GList *head, *link;
 		gint len = part_id->len;
@@ -125,12 +125,14 @@ empe_app_smime_parse (EMailParserExtension *extension,
 		ct = camel_data_wrapper_get_mime_type_field (CAMEL_DATA_WRAPPER (opart));
 
 		if (!ct || camel_content_type_is (ct, "text", "plain")) {
-			const gchar *mime_type;
+			gchar *guessed_mime_type;
 
-			mime_type = e_mail_part_snoop_type (opart);
+			guessed_mime_type = e_mail_part_guess_mime_type (opart);
 
-			if (mime_type && g_ascii_strcasecmp (mime_type, "text/plain") != 0)
-				camel_data_wrapper_set_mime_type (CAMEL_DATA_WRAPPER (opart), mime_type);
+			if (guessed_mime_type && g_ascii_strcasecmp (guessed_mime_type, "text/plain") != 0)
+				camel_data_wrapper_set_mime_type (CAMEL_DATA_WRAPPER (opart), guessed_mime_type);
+
+			g_free (guessed_mime_type);
 		}
 
 		e_mail_parser_parse_part (

@@ -24,8 +24,48 @@ var Evo = {
 	hasSelection : false,
 	blockquoteStyle : "margin:0 0 0 .8ex; border-left:2px #729fcf solid;padding-left:1ex",
 	magicSpacebarState: -1,
-	markCitationColor : null
+	markCitationColor : null,
+	plugins : null
 };
+
+Evo.RegisterPlugin = function(plugin)
+{
+	if (plugin == null)
+		return;
+
+	if (plugin.name === undefined) {
+		console.error("Evo.RegisterPlugin: Plugin '" + plugin + "' has missing 'name' member");
+		return;
+	}
+
+	if (plugin.setup === undefined) {
+		console.error("Evo.RegisterPlugin: Plugin '" + plugin.name + "' has missing 'setup' function");
+		return;
+	}
+
+	if (Evo.plugins == null)
+		Evo.plugins = [];
+
+	Evo.plugins.push(plugin);
+}
+
+Evo.setupPlugins = function(doc)
+{
+	if (Evo.plugins == null)
+		return;
+
+	var ii;
+
+	for (ii = 0; ii < Evo.plugins.length; ii++) {
+		try {
+			if (Evo.plugins[ii] != null)
+				Evo.plugins[ii].setup(doc);
+		} catch (err) {
+			console.error("Failed to setup plugin '" + Evo.plugins[ii].name + "': " + err.name + ": " + err.message);
+			Evo.plugins[ii] = null;
+		}
+	}
+}
 
 /* The 'traversar_obj' is an object, which implements a callback function:
    boolean exec(doc, iframe_id, level);
@@ -43,6 +83,9 @@ Evo.foreachIFrameDocument = function(doc, traversar_obj, call_also_for_doc, leve
 	iframes = doc.getElementsByTagName("iframe");
 
 	for (ii = 0; ii < iframes.length; ii++) {
+		if (!iframes[ii].contentDocument)
+			continue;
+
 		if (!traversar_obj.exec(iframes[ii].contentDocument, iframes[ii].id, level + 1))
 			return false;
 
@@ -619,6 +662,8 @@ Evo.initialize = function(elem)
 	} else
 		doc = document;
 
+	Evo.setupPlugins(doc);
+
 	elems = doc.getElementsByTagName("iframe");
 
 	for (ii = 0; ii < elems.length; ii++) {
@@ -650,13 +695,6 @@ Evo.initialize = function(elem)
 
 	if (doc.defaultView && !doc.defaultView.frameElement && !doc.body.hasAttribute("class"))
 		doc.body.className = "-e-web-view-background-color -e-web-view-text-color";
-
-	if (doc.documentElement.style.getPropertyValue("color") == "" ||
-	    doc.documentElement.style.getPropertyValue("color") == "text") {
-		doc.documentElement.style.setProperty("color", "inherit");
-		doc.documentElement.style.setProperty("background-color", "inherit");
-	}
-
 	elems = doc.querySelectorAll("input, textarea, select, button, label");
 
 	for (ii = 0; ii < elems.length; ii++) {
@@ -722,11 +760,83 @@ Evo.EnsureMainDocumentInitialized = function()
 	Evo.initializeAndPostContentLoaded(null);
 }
 
+Evo.mailDisplayGetScrollbarHeight = function()
+{
+	if (Evo.mailDisplayCachedScrollbarHeight != undefined)
+		return Evo.mailDisplayCachedScrollbarHeight;
+
+	var el = document.createElement("div");
+	el.style.cssText = "overflow:scroll; visibility:hidden; position:absolute;";
+	document.body.appendChild(el);
+	Evo.mailDisplayCachedScrollbarHeight = el.offsetHeight - el.clientHeight
+	el.remove();
+
+	return Evo.mailDisplayCachedScrollbarHeight;
+}
+
+Evo.mailDisplayUpdateIFramesHeightRecursive = function(doc)
+{
+	if (!doc)
+		return;
+
+	var ii, iframes;
+
+	iframes = doc.getElementsByTagName("iframe");
+
+	/* Update from bottom to top */
+	for (ii = 0; ii < iframes.length; ii++) {
+		Evo.mailDisplayUpdateIFramesHeightRecursive(iframes[ii].contentDocument);
+	}
+
+	if (!doc.scrollingElement || !doc.defaultView || !doc.defaultView.frameElement)
+		return;
+
+	if (doc.defaultView.frameElement.height == doc.scrollingElement.scrollHeight)
+		doc.defaultView.frameElement.height = 10;
+
+	doc.defaultView.frameElement.height = doc.scrollingElement.scrollHeight + 2 +
+		(doc.scrollingElement.scrollWidth > doc.scrollingElement.clientWidth ? Evo.mailDisplayGetScrollbarHeight() : 0);
+}
+
+Evo.mailDisplayUpdateIFramesHeightCB = function(timeStamp)
+{
+	if (Evo.mailDisplayRecalcHeightTimeStamp === timeStamp)
+		return;
+
+	Evo.mailDisplayRecalcHeightTimeStamp = timeStamp;
+
+	var scrollx = document.defaultView ? document.defaultView.scrollX : -1;
+	var scrolly = document.defaultView ? document.defaultView.scrollY : -1;
+
+	Evo.mailDisplayUpdateIFramesHeightRecursive(document);
+
+	if (scrollx != -1 && scrolly != -1 && (
+	    document.defaultView.scrollX != scrollx ||
+	    document.defaultView.scrollY != scrolly))
+		document.defaultView.scrollTo(scrollx, scrolly);
+
+	Evo.mailDisplayResizeContentToPreviewWidth();
+	Evo.mailDisplayUpdateMagicSpacebarState();
+}
+
+Evo.MailDisplayUpdateIFramesHeight = function()
+{
+	window.requestAnimationFrame(Evo.mailDisplayUpdateIFramesHeightCB);
+}
+
 if (this instanceof Window && this.document) {
 	this.document.onload = function() { Evo.initializeAndPostContentLoaded(this); };
 
 	if (this.document.body && this.document.body.firstChild)
 		Evo.initializeAndPostContentLoaded(this.document);
+}
+
+Evo.replaceImgSource = function(src, requireFirst, first, second)
+{
+	if (requireFirst)
+		return src.replace(second, first);
+
+	return src.replace(first, second);
 }
 
 Evo.vCardCollapseContactList = function(elem)
@@ -742,7 +852,8 @@ Evo.vCardCollapseContactList = function(elem)
 
 			for (child = elem.firstElementChild; child; child = child.nextElementSibling) {
 				if (/*child instanceof HTMLImageElement*/ child.tagName == "IMG") {
-					child.src = list.hidden ? "gtk-stock://pan-end-symbolic" : "gtk-stock://pan-down-symbolic";
+					child.src = Evo.replaceImgSource(child.src, list.hidden,
+						"gtk-stock://x-evolution-pan-end", "gtk-stock://x-evolution-pan-down");
 				}
 			}
 		}
@@ -773,8 +884,13 @@ Evo.VCardBind = function(iframe_id)
 	Evo.runTraversarForIFrameId(iframe_id, traversar);
 }
 
-Evo.mailDisplayResizeContentToPreviewWidth = function()
+Evo.mailDisplayResizeContentToPreviewWidthCB = function(timeStamp)
 {
+	if (Evo.mailDisplayPreviewWidthTimeStamp === timeStamp)
+		return;
+
+	Evo.mailDisplayPreviewWidthTimeStamp = timeStamp;
+
 	if (!document || !document.documentElement ||
 	    document.documentElement.scrollWidth < document.documentElement.clientWidth) {
 		return;
@@ -807,9 +923,8 @@ Evo.mailDisplayResizeContentToPreviewWidth = function()
 				local_width -= 2; /* 1 + 1 frame borders */
 			} else if (!iframes.length) {
 				/* Message main body */
-				local_width -= 8; /* 8 + 8 margins of body without iframes */
-				if (level > 1)
-					local_width -= 8;
+				local_width -= level * 20; /* 10 + 10 margins of body without iframes */
+				local_width -= 4;
 
 				Evo.addRuleIntoStyleSheetDocument(doc, "-e-mail-formatter-style-sheet", "body", "width: " + local_width + "px;");
 				Evo.addRuleIntoStyleSheetDocument(doc, "-e-mail-formatter-style-sheet", ".part-container", "width: " + local_width + "px;");
@@ -819,7 +934,7 @@ Evo.mailDisplayResizeContentToPreviewWidth = function()
 				Evo.addRuleIntoStyleSheetDocument(doc, "-e-mail-formatter-style-sheet", "body",
 					"width: " + local_width + "px;");
 
-				local_width -= 2; /* 1 + 1 frame borders */
+				local_width -= 4; /* 2 + 2 frame borders */
 
 				Evo.addRuleIntoStyleSheetDocument(doc, "-e-mail-formatter-style-sheet", ".part-container-nostyle iframe",
 					"width: " + local_width + "px;");
@@ -831,30 +946,56 @@ Evo.mailDisplayResizeContentToPreviewWidth = function()
 				Evo.addRuleIntoStyleSheetDocument(doc, "-e-mail-formatter-style-sheet", ".part-container iframe",
 					"width: " + (local_width - 10) + "px;");
 			} else {
-				local_width -= 20; /* 10 + 10 margins of body with iframes */
-				local_width -= 8; /* attachment margin */
-				local_width -= 2; /* 1 + 1 frame borders */
+				local_width -= (level - 1) * 20; /* 10 + 10 margins of body with iframes */
+				local_width -= 4; /* 2 + 2 frame borders */
+				local_width -= 10; /* attachment margin */
 
-				/* We need to subtract another 10 pixels from the iframe width to
-				 * have the iframe's borders on the correct place. We can't subtract
-				 * it from local_width as we don't want to propagate this change
-				 * further. */
 				Evo.addRuleIntoStyleSheetDocument(doc, "-e-mail-formatter-style-sheet", ".part-container-nostyle iframe",
-					"width: " + (local_width - 10) + "px;");
+					"width: " + local_width + "px;");
 
 				Evo.addRuleIntoStyleSheetDocument(doc, "-e-mail-formatter-style-sheet", "body > .part-container-nostyle iframe",
-					"width: " + (local_width - 10) + "px;");
+					"width: " + local_width + "px;");
 			}
 
 			/* Add rules to every sub document */
 			for (ii = 0; ii < iframes.length; ii++) {
+				var jj, frmdoc = iframes[ii].contentDocument;
+				for (jj = 0; frmdoc && jj < frmdoc.images.length; jj++) {
+					var img = frmdoc.images[jj];
+					if (frmdoc.defaultView && !img.hasAttribute("width") && !img.hasAttribute("height")) {
+						var can1 = img.hasAttribute("x-evo-width-modified"), can2 = false;
+						if (!can1)
+							can2 = img.style.width == "" && img.style.height == "";
+						if (can1 || can2) {
+							var expected_width;
+							if (can1) {
+								expected_width = parseInt(img.getAttribute("x-evo-width-modified"));
+							} else {
+								var tmp = frmdoc.defaultView.getComputedStyle(img).width;
+								if (tmp && tmp.endsWith("px"))
+									expected_width = parseInt(tmp.slice(0, -2));
+								else
+									expected_width = tmp;
+								if (expected_width > 0)
+									img.setAttribute("x-evo-width-modified", expected_width);
+							}
+							if (expected_width > 0) {
+								if (expected_width < local_width)
+									img.style.width = expected_width + "px";
+								else
+									img.style.width = local_width + "px";
+							}
+						}
+					}
+				}
+
 				if (!this.can_force_width_on_iframe (iframes[ii]))
 					continue;
 
 				var tmp_local_width = local_width;
 
 				if (level == 0) {
-					tmp_local_width -= 8; /* attachment's margin */
+					tmp_local_width -= 10; /* attachment's margin */
 
 					Evo.addRuleIntoStyleSheetDocument(doc, "-e-mail-formatter-style-sheet", ".attachment-wrapper iframe:not([src*=\"__formatas=\"])",
 						"width: " + tmp_local_width + "px;");
@@ -863,7 +1004,7 @@ Evo.mailDisplayResizeContentToPreviewWidth = function()
 						"width: " + tmp_local_width + "px;");
 
 					Evo.addRuleIntoStyleSheetDocument(doc, "-e-mail-formatter-style-sheet", "body > .part-container-nostyle iframe",
-						"width: " + local_width + "px;");
+						"width: " + tmp_local_width + "px;");
 				}
 
 				this.set_iframe_and_body_width (iframes[ii].contentDocument, tmp_local_width, original_width, level + 1);
@@ -876,6 +1017,14 @@ Evo.mailDisplayResizeContentToPreviewWidth = function()
 	width -= 20; /* 10 + 10 margins of body */
 
 	traversar.set_iframe_and_body_width(document, width, width, 0);
+
+	if (document.documentElement.clientWidth - 20 > width)
+		window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
+}
+
+Evo.mailDisplayResizeContentToPreviewWidth = function()
+{
+	window.requestAnimationFrame(Evo.mailDisplayResizeContentToPreviewWidthCB);
 }
 
 Evo.mailDisplayUpdateMagicSpacebarState = function()
@@ -920,8 +1069,12 @@ Evo.mailDisplayToggleHeadersVisibility = function(elem)
 	full_headers.style.setProperty("display", expanded ? "none" : "table");
 	short_headers.style.setProperty("display", expanded ? "table" : "none");
 
-	if (elem.firstElementChild && /* elem.firstElementChild instanceof HTMLImageElement */ elem.firstElementChild.tagName == "IMG") {
-		elem.firstElementChild.src = expanded ? "gtk-stock://pan-end-symbolic" : "gtk-stock://pan-down-symbolic";
+	var child;
+
+	for (child = elem.firstElementChild; child; child = child.nextElementSibling) {
+		if (/*child instanceof HTMLImageElement*/ child.tagName == "IMG")
+			child.src = Evo.replaceImgSource(child.src, expanded,
+				"gtk-stock://x-evolution-pan-end", "gtk-stock://x-evolution-pan-down");
 	}
 
 	window.webkit.messageHandlers.mailDisplayHeadersCollapsed.postMessage(expanded);
@@ -958,7 +1111,8 @@ Evo.mailDisplayToggleAddressVisibility = function(elem)
 
 		full_addr.style.setProperty("display", expanded ? "none" : "inline");
 		ellipsis.style.setProperty("display", expanded ? "inline" : "none");
-		img.src = expanded ? "gtk-stock://pan-end-symbolic" : "gtk-stock://pan-down-symbolic";
+		img.src = Evo.replaceImgSource(img.src, expanded,
+			"gtk-stock://x-evolution-pan-end", "gtk-stock://x-evolution-pan-down");
 	}
 }
 
@@ -1027,10 +1181,10 @@ Evo.unsetHTMLColors = function(doc)
 				continue;
 
 			if (rule.style.color)
-				rule.style.color = "inherit";
+				rule.style.removeProperty("color");
 
 			if (rule.style.backgroundColor)
-				rule.style.backgroundColor = "inherit";
+				rule.style.removeProperty("background-color");
 		}
 	}
 
@@ -1044,10 +1198,13 @@ Evo.unsetHTMLColors = function(doc)
 		if (elem.tagName != "HTML" && elem.tagName != "IFRAME" && elem.tagName != "INPUT" && elem.tagName != "BUTTON" && elem.tagName != "IMG") {
 			if (elem.style) {
 				if (elem.style.color)
-					elem.style.color = "inherit";
+					elem.style.removeProperty("color");
 
 				if (elem.style.backgroundColor)
-					elem.style.backgroundColor = "inherit";
+					elem.style.removeProperty("background-color");
+
+				if (!elem.style.length)
+					elem.removeAttribute("style");
 			}
 
 			elem.removeAttribute("color");
@@ -1076,9 +1233,88 @@ Evo.unsetHTMLColors = function(doc)
 	}
 }
 
+Evo.mailDisplaySetIFrameHeightForDocument = function(doc, minHeight)
+{
+	if (!doc || !doc.defaultView || !doc.scrollingElement)
+		return;
+
+	var iframe = doc.defaultView.frameElement;
+
+	if (!iframe)
+		return;
+
+	var value = minHeight;
+
+	iframe.height = 10;
+
+	if (value < doc.scrollingElement.scrollHeight)
+		value = doc.scrollingElement.scrollHeight;
+	if (doc.scrollingElement.scrollWidth > doc.scrollingElement.clientWidth)
+		value += Evo.mailDisplayGetScrollbarHeight();
+
+	// to ignore size change notifications made by itself
+	if (Evo.mailDisplayResizeObserver)
+		Evo.mailDisplayResizeObserver.expectChange++;
+
+	iframe.height = value;
+
+	// update also parent
+	if (iframe.ownerDocument && iframe.ownerDocument.defaultView && iframe.ownerDocument.defaultView.frameElement)
+		Evo.mailDisplaySetIFrameHeightForDocument(iframe.ownerDocument, 10);
+}
+
+Evo.mailDisplayHandleSizeEntries = function(timeStamp)
+{
+	if (!Evo.mailDisplaySizeEntries || !Evo.mailDisplaySizeEntries.length)
+		return;
+
+	var scrollx = document.defaultView ? document.defaultView.scrollX : -1;
+	var scrolly = document.defaultView ? document.defaultView.scrollY : -1;
+	var covered = [], ii;
+
+	for (ii = Evo.mailDisplaySizeEntries.length - 1; ii >= 0; ii--) {
+		var entries = Evo.mailDisplaySizeEntries[ii];
+
+		for (const entry of entries) {
+			if (covered.includes(entry.target))
+				continue;
+			covered[covered.length] = entry.target;
+
+			if (entry.target.ownerDocument && entry.target.ownerDocument.defaultView &&
+			    entry.target.ownerDocument.defaultView.frameElement && entry.borderBoxSize?.length > 0) {
+				Evo.mailDisplaySetIFrameHeightForDocument(entry.target.ownerDocument, entry.borderBoxSize[0].blockSize);
+			}
+		}
+
+		if (scrollx != -1 && scrolly != -1 && (
+		    document.defaultView.scrollX != scrollx ||
+		    document.defaultView.scrollY != scrolly))
+			document.defaultView.scrollTo(scrollx, scrolly);
+	}
+
+	Evo.mailDisplaySizeEntries = [];
+}
+
+Evo.mailDisplaySizeChanged = function(entries, observer)
+{
+	if (Evo.mailDisplaySizeEntries === undefined) {
+		Evo.mailDisplaySizeEntries = [];
+	}
+	Evo.mailDisplaySizeEntries[Evo.mailDisplaySizeEntries.length] = entries;
+	if (Evo.mailDisplayResizeObserver.expectChange > 0) {
+		Evo.mailDisplayResizeObserver.expectChange--;
+		return;
+	}
+	window.requestAnimationFrame(Evo.mailDisplayHandleSizeEntries);
+}
+
 Evo.MailDisplayBindDOM = function(iframe_id, markCitationColor)
 {
 	Evo.markCitationColor = markCitationColor != "" ? markCitationColor : null;
+	if (!Evo.mailDisplayResizeObserver) {
+		Evo.mailDisplayResizeObserver = new ResizeObserver(Evo.mailDisplaySizeChanged);
+		Evo.mailDisplayResizeObserver.expectChange = 0;
+	}
 
 	var traversar = {
 		unstyleBlockquotes : function(doc) {
@@ -1186,6 +1422,11 @@ Evo.MailDisplayBindDOM = function(iframe_id, markCitationColor)
 					"a.evo-awrap",
 					"white-space: normal; word-break: break-all;");
 				Evo.unsetHTMLColors(doc);
+
+				if (doc.body) {
+					Evo.mailDisplayResizeObserver.observe(doc.body);
+					doc.body.onresize = Evo.mailDisplayResized;
+				}
 			}
 
 			return true;
@@ -1200,8 +1441,11 @@ Evo.MailDisplayBindDOM = function(iframe_id, markCitationColor)
 	Evo.mailDisplayResizeContentToPreviewWidth();
 	Evo.mailDisplayUpdateMagicSpacebarState();
 
-	document.defaultView.onresize = Evo.mailDisplayResized;
-	document.defaultView.onscroll = Evo.mailDisplayUpdateMagicSpacebarState;
+	if (document.body) {
+		Evo.mailDisplayResizeObserver.observe(document.body);
+		document.body.onresize = Evo.mailDisplayResized;
+		document.body.onscroll = Evo.mailDisplayUpdateMagicSpacebarState;
+	}
 }
 
 Evo.MailDisplayShowAttachment = function(element_id, show)
@@ -1241,6 +1485,8 @@ Evo.MailDisplayShowAttachment = function(element_id, show)
 			window.webkit.messageHandlers.contentLoaded.postMessage(iframe_id);
 			Evo.mailDisplayUpdateMagicSpacebarState();
 		}
+	} else if (elem.ownerDocument.defaultView.frameElement) {
+		window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
 	}
 }
 
@@ -1251,6 +1497,28 @@ Evo.MailDisplayProcessMagicSpacebar = function(towards_bottom)
 	}
 
 	Evo.mailDisplayUpdateMagicSpacebarState();
+}
+
+Evo.MailDisplayManageInsecureParts = function(iframe_id, part_id_prefix, show, partids)
+{
+	var ii, elem;
+
+	elem = Evo.FindElement(iframe_id, "show:" + part_id_prefix);
+	if (elem) {
+		elem.hidden = show
+	}
+
+	elem = Evo.FindElement(iframe_id, "hide:" + part_id_prefix);
+	if (elem) {
+		elem.hidden = !show
+	}
+
+	for (ii = 0; ii < partids.length; ii++) {
+		elem = Evo.FindElement(iframe_id, partids[ii]);
+
+		if (elem)
+			elem.hidden = !show;
+	}
 }
 
 var EvoItip = {
@@ -1335,8 +1603,10 @@ EvoItip.SetElementInnerHTML = function(iframe_id, element_id, html_content)
 {
 	var elem = Evo.FindElement(iframe_id, element_id);
 
-	if (elem)
+	if (elem) {
 		elem.innerHTML = html_content;
+		window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
+	}
 }
 
 EvoItip.SetShowCheckbox = function(iframe_id, element_id, show, update_second)
@@ -1362,6 +1632,8 @@ EvoItip.SetShowCheckbox = function(iframe_id, element_id, show, update_second)
 		if (elem) {
 			elem.hidden = !show;
 		}
+
+		window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
 	}
 }
 
@@ -1375,6 +1647,8 @@ EvoItip.SetAreaText = function(iframe_id, element_id, text)
 		if (row.lastElementChild) {
 			row.lastElementChild.innerHTML = text;
 		}
+
+		window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
 	}
 }
 
@@ -1392,6 +1666,8 @@ EvoItip.UpdateTimes = function(iframe_id, element_id, header, label)
 		if (elem.lastElementChild) {
 			elem.lastElementChild.innerHTML = label;
 		}
+
+		window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
 	}
 }
 
@@ -1419,6 +1695,8 @@ EvoItip.AppendInfoRow = function(iframe_id, table_id, row_id, icon_name, message
 
 	cell = row.insertCell(-1);
 	cell.innerHTML = message;
+
+	window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
 }
 
 EvoItip.RemoveInfoRow = function(iframe_id, row_id)
@@ -1427,6 +1705,7 @@ EvoItip.RemoveInfoRow = function(iframe_id, row_id)
 
 	if (row && row.parentNode) {
 		row.parentNode.removeChild(row);
+		window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
 	}
 }
 
@@ -1438,6 +1717,8 @@ EvoItip.RemoveChildNodes = function(iframe_id, element_id)
 		while (elem.lastChild) {
 			elem.removeChild(elem.lastChild);
 		}
+
+		window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
 	}
 }
 
@@ -1490,6 +1771,8 @@ EvoItip.HideButtons = function(iframe_id, element_id)
 			if (button)
 				button.hidden = true;
 		}
+
+		window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
 	}
 }
 
@@ -1515,6 +1798,10 @@ EvoItip.SetSelectSelected = function(iframe_id, element_id, option_value)
 				break;
 			}
 		}
+
+		// claim what source is selected when failed to select the requested source
+		if (ii >= elem.length)
+			EvoItip.selectedSourceChanged(elem);
 	}
 }
 
@@ -1603,4 +1890,31 @@ EvoItip.GetState = function(iframe_id)
 	res["inherit-alarm-check"] = elem && elem.checked && !elem.hidden && !elem.disabled;
 
 	return res;
+}
+
+EvoItip.FlipAlternativeHTMLPart = function(iframe_id, element_value, img_id, span_id)
+{
+	var elem = Evo.FindElement(iframe_id, element_value);
+	if (elem) {
+		elem.hidden = !elem.hidden;
+	}
+	elem = Evo.FindElement(iframe_id, img_id);
+	if (elem) {
+		var tmp = elem.src;
+		elem.src = elem.getAttribute("othersrc");
+		elem.setAttribute("othersrc", tmp);
+	}
+	elem = Evo.FindElement(iframe_id, img_id + "-dark");
+	if (elem) {
+		var tmp = elem.src;
+		elem.src = elem.getAttribute("othersrc");
+		elem.setAttribute("othersrc", tmp);
+	}
+	elem = Evo.FindElement(iframe_id, span_id);
+	if (elem) {
+		var tmp = elem.innerText;
+		elem.innerText = elem.getAttribute("othertext");
+		elem.setAttribute("othertext", tmp);
+	}
+	window.webkit.messageHandlers.scheduleIFramesHeightUpdate.postMessage(0);
 }

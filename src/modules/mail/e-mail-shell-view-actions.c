@@ -267,15 +267,33 @@ action_mail_attachment_bar_cb (GtkAction *action,
 	mail_display = e_mail_reader_get_mail_display (E_MAIL_READER (mail_shell_view->priv->mail_shell_content));
 	attachment_view = e_mail_display_get_attachment_view (mail_display);
 	if (gtk_toggle_action_get_active (GTK_TOGGLE_ACTION (action))) {
+		EAttachmentBar *bar;
 		EAttachmentStore *store;
 		guint num_attachments;
 
-		store = e_attachment_bar_get_store (E_ATTACHMENT_BAR (attachment_view));
+		bar = E_ATTACHMENT_BAR (attachment_view);
+		store = e_attachment_bar_get_store (bar);
 		num_attachments = e_attachment_store_get_num_attachments (store);
-		gtk_widget_set_visible (GTK_WIDGET (attachment_view), num_attachments > 0);
+		e_attachment_bar_set_attachments_visible (bar, num_attachments > 0);
 	} else {
-		gtk_widget_hide (GTK_WIDGET (attachment_view));
+		e_attachment_bar_set_attachments_visible (E_ATTACHMENT_BAR (attachment_view), FALSE);
 	}
+}
+
+static void
+action_mail_show_preview_toolbar_cb (GtkAction *action,
+				     EShellView *shell_view)
+{
+	EShellWindow *shell_window;
+	GtkWidget *toolbar;
+
+	g_return_if_fail (E_IS_MAIL_SHELL_VIEW (shell_view));
+
+	shell_window = e_shell_view_get_shell_window (shell_view);
+	toolbar = e_shell_window_get_managed_widget (shell_window, "/mail-preview-toolbar");
+
+	if (toolbar)
+		gtk_widget_set_visible (toolbar, gtk_toggle_action_get_active (GTK_TOGGLE_ACTION (action)));
 }
 
 static void
@@ -328,6 +346,7 @@ action_mail_download_cb (GtkAction *action,
 	EMailReader *reader;
 	EMailBackend *backend;
 	EMailSession *session;
+	ESourceRegistry *registry;
 	GList *list, *link;
 
 	mail_shell_content = mail_shell_view->priv->mail_shell_content;
@@ -336,11 +355,13 @@ action_mail_download_cb (GtkAction *action,
 	reader = E_MAIL_READER (mail_view);
 	backend = e_mail_reader_get_backend (reader);
 	session = e_mail_backend_get_session (backend);
+	registry = e_mail_session_get_registry (session);
 
 	list = camel_session_list_services (CAMEL_SESSION (session));
 
 	for (link = list; link != NULL; link = g_list_next (link)) {
 		EActivity *activity;
+		ESource *source;
 		CamelService *service;
 		GCancellable *cancellable;
 
@@ -348,6 +369,14 @@ action_mail_download_cb (GtkAction *action,
 
 		if (!CAMEL_IS_STORE (service))
 			continue;
+
+		source = e_source_registry_ref_source (registry, camel_service_get_uid (service));
+		if (!source || !e_source_registry_check_enabled (registry, source)) {
+			g_clear_object (&source);
+			continue;
+		}
+
+		g_clear_object (&source);
 
 		activity = e_mail_reader_new_activity (reader);
 		cancellable = e_activity_get_cancellable (activity);
@@ -564,19 +593,19 @@ async_context_free (AsyncContext *context)
 }
 
 static void
-mark_all_read_thread (GSimpleAsyncResult *simple,
-                      GObject *object,
+mark_all_read_thread (GTask *task,
+                      gpointer source_object,
+                      gpointer task_data,
                       GCancellable *cancellable)
 {
-	AsyncContext *context;
+	AsyncContext *context = task_data;
 	CamelStore *store;
 	CamelFolder *folder;
 	GPtrArray *uids;
 	gint ii;
 	GError *error = NULL;
 
-	context = g_simple_async_result_get_op_res_gpointer (simple);
-	store = CAMEL_STORE (object);
+	store = CAMEL_STORE (source_object);
 
 	while (!g_queue_is_empty (&context->folder_names) && !error) {
 		gchar *folder_name;
@@ -609,7 +638,9 @@ mark_all_read_thread (GSimpleAsyncResult *simple,
 	}
 
 	if (error != NULL)
-		g_simple_async_result_take_error (simple, error);
+		g_task_return_error (task, g_steal_pointer (&error));
+	else
+		g_task_return_boolean (task, TRUE);
 }
 
 static void
@@ -617,18 +648,13 @@ mark_all_read_done_cb (GObject *source,
                        GAsyncResult *result,
                        gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
-	AsyncContext *context;
+	AsyncContext *context = user_data;
 	GError *local_error = NULL;
 
-	g_return_if_fail (
-		g_simple_async_result_is_valid (
-		result, source, mark_all_read_thread));
+	g_return_if_fail (g_task_is_valid (result, source));
+	g_return_if_fail (g_async_result_is_tagged (result, mark_all_read_thread));
 
-	simple = G_SIMPLE_ASYNC_RESULT (result);
-	context = g_simple_async_result_get_op_res_gpointer (simple);
-
-	if (g_simple_async_result_propagate_error (simple, &local_error) &&
+	if (!g_task_propagate_boolean (G_TASK (result), &local_error) &&
 	    local_error &&
 	    !g_error_matches (local_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
 		EAlertSink *alert_sink;
@@ -643,6 +669,7 @@ mark_all_read_done_cb (GObject *source,
 	g_clear_error (&local_error);
 
 	e_activity_set_state (context->activity, E_ACTIVITY_COMPLETED);
+	g_clear_pointer (&context, async_context_free);
 }
 
 static void
@@ -746,7 +773,7 @@ mark_all_read_got_folder_info (GObject *source,
 	AsyncContext *context = user_data;
 	EAlertSink *alert_sink;
 	GCancellable *cancellable;
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	CamelFolderInfo *folder_info;
 	gint response;
 	GError *error = NULL;
@@ -802,18 +829,13 @@ mark_all_read_got_folder_info (GObject *source,
 		return;
 	}
 
-	simple = g_simple_async_result_new (
-		source, mark_all_read_done_cb,
-		context, mark_all_read_thread);
+	task = g_task_new (source, cancellable, mark_all_read_done_cb, context);
+	g_task_set_source_tag (task, mark_all_read_thread);
+	g_task_set_task_data (task, context, NULL);
 
-	g_simple_async_result_set_op_res_gpointer (
-		simple, context, (GDestroyNotify) async_context_free);
+	g_task_run_in_thread (task, mark_all_read_thread);
 
-	g_simple_async_result_run_in_thread (
-		simple, mark_all_read_thread,
-		G_PRIORITY_DEFAULT, cancellable);
-
-	g_object_unref (simple);
+	g_object_unref (task);
 }
 
 static void
@@ -1260,11 +1282,11 @@ action_mail_goto_folder_cb (GtkAction *action,
 	em_folder_selector_maybe_collapse_archive_folders (selector);
 
 	if (folder) {
-		gchar *uri = e_mail_folder_uri_from_folder (folder);
+		gchar *folder_uri = e_mail_folder_uri_from_folder (folder);
 
-		if (uri) {
-			em_folder_tree_set_selected (folder_tree, uri, FALSE);
-			g_free (uri);
+		if (folder_uri) {
+			em_folder_tree_set_selected (folder_tree, folder_uri, FALSE);
+			g_free (folder_uri);
 		}
 	}
 
@@ -1766,14 +1788,14 @@ static GtkActionEntry mail_entries[] = {
 	  NULL },
 
 	{ "mail-smart-backward",
-	  NULL,
+	  "go-up", /* In case a user adds it to the UI */
 	  NULL,  /* No menu item; key press only */
 	  "BackSpace",
 	  NULL,
 	  G_CALLBACK (action_mail_smart_backward_cb) },
 
 	{ "mail-smart-forward",
-	  NULL,
+	  "go-down", /* In case a user adds it to the UI */
 	  NULL,  /* No menu item; key press only */
 	  "space",
 	  NULL,
@@ -1944,6 +1966,14 @@ static GtkToggleActionEntry mail_toggle_entries[] = {
 	  N_("Show junk messages with a red line through them"),
 	  NULL,  /* Handled by property bindings */
 	  FALSE },
+
+	{ "mail-show-preview-toolbar",
+	  NULL,
+	  N_("Show _Preview Tool Bar"),
+	  NULL,
+	  N_("Show tool bar above the preview panel"),
+	  G_CALLBACK (action_mail_show_preview_toolbar_cb),
+	  TRUE },
 
 	{ "mail-threads-group-by",
 	  NULL,
@@ -2210,6 +2240,11 @@ e_mail_shell_view_actions_init (EMailShellView *mail_shell_view)
 		action_group, mail_popup_entries,
 		G_N_ELEMENTS (mail_popup_entries));
 
+	/* WebKitGTK does not support print preview, thus hide the option from the menu;
+	   maybe it'll be supported in the future */
+	action = ACTION (MAIL_PRINT_PREVIEW);
+	gtk_action_set_visible (action, FALSE);
+
 	/* Search Folder Actions */
 	action_group = ACTION_GROUP (SEARCH_FOLDERS);
 	gtk_action_group_add_actions (
@@ -2241,6 +2276,11 @@ e_mail_shell_view_actions_init (EMailShellView *mail_shell_view)
 	g_settings_bind (
 		settings, "show-junk",
 		ACTION (MAIL_SHOW_JUNK), "active",
+		G_SETTINGS_BIND_DEFAULT);
+
+	g_settings_bind (
+		settings, "show-preview-toolbar",
+		ACTION (MAIL_SHOW_PREVIEW_TOOLBAR), "active",
 		G_SETTINGS_BIND_DEFAULT);
 
 	g_settings_bind (

@@ -22,6 +22,7 @@ data/org.gnome.evolution.spamassassin.gschema.xml.in
 data/org.gnome.evolution.text-highlight.gschema.xml.in
 data/org.gnome.Evolution.appdata.xml.in.in
 data/org.gnome.Evolution.desktop.in.in
+[type: gettext/glade]data/ui/evolution-mail-viewer.ui
 [type: gettext/glade]data/ui/evolution-shortcuts.ui
 data/views/addressbook/galview.xml
 data/views/calendar/galview.xml
@@ -44,18 +45,13 @@ src/addressbook/gui/widgets/eab-contact-formatter.c
 src/addressbook/gui/widgets/eab-contact-merging.c
 src/addressbook/gui/widgets/eab-gui-util.c
 src/addressbook/gui/widgets/e-addressbook-model.c
-src/addressbook/gui/widgets/e-addressbook-reflow-adapter.c
 src/addressbook/gui/widgets/e-addressbook-table-adapter.c
 src/addressbook/gui/widgets/e-addressbook-view.c
 src/addressbook/gui/widgets/e-addressbook-view.etspec
-src/addressbook/gui/widgets/ea-minicard.c
-src/addressbook/gui/widgets/ea-minicard-view.c
+src/addressbook/gui/widgets/e-bulk-edit-contacts.c
+src/addressbook/gui/widgets/e-card-view.c
 src/addressbook/gui/widgets/e-contact-map.c
 src/addressbook/gui/widgets/e-contact-map-window.c
-src/addressbook/gui/widgets/e-minicard.c
-src/addressbook/gui/widgets/e-minicard-label.c
-src/addressbook/gui/widgets/e-minicard-view.c
-src/addressbook/gui/widgets/e-minicard-view-widget.c
 src/addressbook/importers/evolution-csv-importer.c
 src/addressbook/importers/evolution-ldif-importer.c
 src/addressbook/importers/evolution-vcard-importer.c
@@ -72,7 +68,7 @@ src/calendar/gui/ea-jump-button.c
 src/calendar/gui/e-alarm-list.c
 src/calendar/gui/ea-week-view.c
 src/calendar/gui/ea-week-view-main-item.c
-src/calendar/gui/e-cal-component-preview.c
+src/calendar/gui/e-bulk-edit-tasks.c
 src/calendar/gui/e-cal-data-model.c
 src/calendar/gui/e-cal-dialogs.c
 src/calendar/gui/e-calendar-view.c
@@ -96,6 +92,7 @@ src/calendar/gui/e-comp-editor.c
 src/calendar/gui/e-day-view.c
 src/calendar/gui/e-day-view-time-item.c
 src/calendar/gui/e-day-view-top-item.c
+src/calendar/gui/e-estimated-duration-entry.c
 src/calendar/gui/e-meeting-list-view.c
 src/calendar/gui/e-meeting-store.c
 src/calendar/gui/e-meeting-time-sel.c
@@ -109,6 +106,7 @@ src/calendar/gui/e-timezone-entry.c
 src/calendar/gui/e-to-do-pane.c
 src/calendar/gui/e-week-view.c
 src/calendar/gui/e-week-view-main-item.c
+src/calendar/gui/e-year-view.c
 src/calendar/gui/itip-utils.c
 src/calendar/gui/memotypes.xml.in
 src/calendar/gui/misc.c
@@ -141,6 +139,7 @@ src/em-format/e-mail-formatter-secure-button.c
 src/em-format/e-mail-formatter-source.c
 src/em-format/e-mail-formatter-text-enriched.c
 src/em-format/e-mail-formatter-text-html.c
+src/em-format/e-mail-formatter-text-markdown.c
 src/em-format/e-mail-formatter-text-plain.c
 src/em-format/e-mail-formatter-utils.c
 src/em-format/e-mail-parser-application-mbox.c
@@ -164,10 +163,10 @@ src/e-util/e-alert-dialog.c
 src/e-util/e-alert-sink.c
 src/e-util/e-attachment-bar.c
 src/e-util/e-attachment.c
-src/e-util/e-attachment-dialog.c
 src/e-util/e-attachment-handler-image.c
 src/e-util/e-attachment-icon-view.c
 src/e-util/e-attachment-paned.c
+src/e-util/e-attachment-popover.c
 src/e-util/e-attachment-store.c
 src/e-util/e-attachment-tree-view.c
 src/e-util/e-attachment-view.c
@@ -218,7 +217,7 @@ src/e-util/e-html-editor-dialog.c
 src/e-util/e-html-editor-find-dialog.c
 src/e-util/e-html-editor-hrule-dialog.c
 src/e-util/e-html-editor-image-dialog.c
-src/e-util/e-html-editor-link-dialog.c
+src/e-util/e-html-editor-link-popover.c
 src/e-util/e-html-editor-page-dialog.c
 src/e-util/e-html-editor-paragraph-dialog.c
 src/e-util/e-html-editor-replace-dialog.c
@@ -235,6 +234,8 @@ src/e-util/e-mail-signature-editor.c
 src/e-util/e-mail-signature-manager.c
 src/e-util/e-mail-signature-script-dialog.c
 src/e-util/e-map.c
+src/e-util/e-markdown-editor.c
+src/e-util/e-markdown-utils.c
 src/e-util/e-misc-utils.c
 src/e-util/e-name-selector-dialog.c
 src/e-util/e-name-selector-entry.c
@@ -354,6 +355,7 @@ src/mail/e-mail-request.c
 src/mail/e-mail-tag-editor.c
 src/mail/e-mail-templates-store.c
 src/mail/e-mail-ui-session.c
+src/mail/e-mail-viewer.c
 src/mail/em-composer-utils.c
 src/mail/em-filter-editor.c
 src/mail/em-filter-editor-folder-element.c
@@ -389,6 +391,7 @@ src/mail/vfoldertypes.xml.in
 src/modules/accounts-window/e-accounts-window-editors.c
 src/modules/accounts-window/e-collection-wizard-page.c
 src/modules/accounts-window/e-webdav-browser-page.c
+src/modules/appearance-settings/evolution-appearance-settings.c
 src/modules/addressbook/autocompletion-config.c
 src/modules/addressbook/eab-composer-util.c
 src/modules/addressbook/e-book-shell-backend.c
@@ -416,6 +419,7 @@ src/modules/cal-config-google/e-cal-config-google.c
 src/modules/cal-config-google/e-cal-config-gtasks.c
 src/modules/cal-config-google/e-google-chooser-button.c
 src/modules/cal-config-local/evolution-cal-config-local.c
+src/modules/cal-config-weather/e-weather-location-entry.c
 src/modules/cal-config-weather/evolution-cal-config-weather.c
 src/modules/cal-config-webcal/evolution-cal-config-webcal.c
 src/modules/cal-config-webdav-notes/evolution-cal-config-webdav-notes.c
@@ -477,6 +481,14 @@ src/modules/prefer-plain/e-mail-display-popup-prefer-plain.c
 src/modules/prefer-plain/e-mail-parser-prefer-plain.c
 src/modules/prefer-plain/plugin/config-ui.c
 src/modules/prefer-plain/plugin/org-gnome-prefer-plain.eplug.xml
+src/modules/rss/camel/camel-rss-folder.c
+src/modules/rss/camel/camel-rss-folder-summary.c
+src/modules/rss/camel/camel-rss-provider.c
+src/modules/rss/camel/camel-rss-store.c
+src/modules/rss/e-rss-parser.c
+src/modules/rss/evolution/e-rss-preferences.c
+src/modules/rss/evolution/e-rss-shell-extension.c
+src/modules/rss/evolution/e-rss-shell-view-extension.c
 src/modules/spamassassin/evolution-spamassassin.c
 src/modules/spamassassin/org.gnome.Evolution-spamassassin.metainfo.xml.in
 src/modules/startup-wizard/e-mail-config-import-page.c
@@ -489,6 +501,7 @@ src/modules/text-highlight/languages.c
 src/modules/vcard-inline/e-mail-formatter-vcard.c
 src/modules/vcard-inline/e-mail-parser-vcard.c
 src/modules/vcard-inline/e-mail-part-vcard.c
+src/modules/webkit-editor/e-webkit-editor.c
 src/modules/webkit-inspector/evolution-webkit-inspector.c
 src/plugins/attachment-reminder/attachment-reminder.c
 src/plugins/attachment-reminder/org-gnome-attachment-reminder.error.xml
@@ -535,6 +548,7 @@ src/plugins/templates/templates.c
 src/shell/e-shell-backend.c
 src/shell/e-shell.c
 src/shell/e-shell-content.c
+src/shell/e-shell-headerbar.c
 src/shell/e-shell-migrate.c
 src/shell/e-shell-searchbar.c
 src/shell/e-shell-switcher.c

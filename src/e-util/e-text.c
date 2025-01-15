@@ -21,12 +21,13 @@
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
- * published by the Free Software Foundation; either the
+ * published by the Free Software Foundation; either the version 2 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * for more details.
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser  General Public
+ * License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -369,8 +370,8 @@ create_layout (EText *text)
 		GTK_WIDGET (item->canvas), text->text);
 	if (text->line_wrap)
 		pango_layout_set_width (
-			text->layout, text->clip_width < 0
-			? -1 : text->clip_width * PANGO_SCALE);
+			text->layout, (text->clip_width - text->xofs) < 0
+			? -1 : (text->clip_width - text->xofs) * PANGO_SCALE);
 	reset_layout_attrs (text);
 }
 
@@ -691,8 +692,8 @@ e_text_set_property (GObject *object,
 		if (text->line_wrap) {
 			if (text->layout)
 				pango_layout_set_width (
-					text->layout, text->clip_width < 0
-					? -1 : text->clip_width * PANGO_SCALE);
+					text->layout, (text->clip_width - text->xofs) < 0
+					? -1 : (text->clip_width - text->xofs) * PANGO_SCALE);
 			text->needs_split_into_lines = 1;
 		} else {
 			text->needs_calc_height = 1;
@@ -798,8 +799,8 @@ e_text_set_property (GObject *object,
 		if (text->line_wrap) {
 			if (text->layout) {
 				pango_layout_set_width (
-					text->layout, text->width < 0
-					? -1 : text->width * PANGO_SCALE);
+					text->layout, (text->width - text->xofs) < 0
+					? -1 : (text->width - text->xofs) * PANGO_SCALE);
 			}
 		}
 		text->needs_split_into_lines = 1;
@@ -826,8 +827,8 @@ e_text_set_property (GObject *object,
 		if (text->line_wrap) {
 			if (text->layout) {
 				pango_layout_set_width (
-					text->layout, text->width < 0 ?
-					-1 : text->width * PANGO_SCALE);
+					text->layout, (text->width - text->xofs) < 0 ?
+					-1 : (text->width - text->xofs) * PANGO_SCALE);
 			}
 			text->needs_split_into_lines = 1;
 		}
@@ -1104,8 +1105,8 @@ e_text_realize (GnomeCanvasItem *item)
 
 	create_layout (text);
 
-	text->i_cursor = gdk_cursor_new (GDK_XTERM);
-	text->default_cursor = gdk_cursor_new (GDK_LEFT_PTR);
+	text->i_cursor = gdk_cursor_new_from_name (gtk_widget_get_display (GTK_WIDGET (item->canvas)), "text");
+	text->default_cursor = gdk_cursor_new_from_name (gtk_widget_get_display (GTK_WIDGET (item->canvas)), "default");
 }
 
 /* Unrealize handler for the text item */
@@ -1116,10 +1117,8 @@ e_text_unrealize (GnomeCanvasItem *item)
 
 	text = E_TEXT (item);
 
-	g_object_unref (text->i_cursor);
-	text->i_cursor = NULL;
-	g_object_unref (text->default_cursor);
-	text->default_cursor = NULL;
+	g_clear_object (&text->i_cursor);
+	g_clear_object (&text->default_cursor);
 
 	if (GNOME_CANVAS_ITEM_CLASS (e_text_parent_class)->unrealize)
 		(* GNOME_CANVAS_ITEM_CLASS (e_text_parent_class)->unrealize) (item);

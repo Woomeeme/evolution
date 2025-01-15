@@ -1299,10 +1299,10 @@ e_calendar_item_draw_month (ECalendarItem *calitem,
 		+ ((gtk_widget_get_direction (widget) == GTK_TEXT_DIR_RTL)
 		? (calitem->cols - 1 - col) : col) * calitem->month_width - x;
 	month_w = item->x2 - item->x1 - xthickness * 2;
-	month_w = MIN (month_w, calitem->month_width);
+	month_w = MAX (MIN (month_w, calitem->month_width), calitem->min_month_width);
 	month_y = item->y1 + ythickness + row * calitem->month_height - y;
 	month_h = item->y2 - item->y1 - ythickness * 2;
-	month_h = MIN (month_h, calitem->month_height);
+	month_h = MAX (MIN (month_h, calitem->month_height), calitem->min_month_height);
 
 	/* Just return if the month is outside the given area. */
 	if (month_x >= width || month_x + calitem->month_width <= 0
@@ -1477,7 +1477,7 @@ e_calendar_item_draw_month (ECalendarItem *calitem,
 	pango_layout_set_font_description (layout, font_desc);
 	if (gtk_widget_get_direction (widget) == GTK_TEXT_DIR_RTL)
 		text_x += (7 - 1) * calitem->cell_width;
-	e_utils_get_theme_color (widget, "theme_text_color,theme_fg_color", E_UTILS_DEFAULT_THEME_TEXT_COLOR, &rgba);
+	e_utils_get_theme_color (widget, "theme_selected_fg_color,theme_text_color,theme_fg_color", E_UTILS_DEFAULT_THEME_SELECTED_FG_COLOR, &rgba);
 	gdk_cairo_set_source_rgba (cr, &rgba);
 	for (day = 0; day < 7; day++) {
 		cairo_save (cr);
@@ -1693,7 +1693,7 @@ e_calendar_item_draw_day_numbers (ECalendarItem *calitem,
 				get_digit_fomat (), digit);
 
 			cairo_save (cr);
-			e_utils_get_theme_color (widget, "theme_text_color,theme_fg_color", E_UTILS_DEFAULT_THEME_TEXT_COLOR, &rgba);
+			e_utils_get_theme_color (widget, "theme_selected_fg_color,theme_text_color,theme_fg_color", E_UTILS_DEFAULT_THEME_SELECTED_FG_COLOR, &rgba);
 			gdk_cairo_set_source_rgba (cr, &rgba);
 			pango_layout_set_font_description (layout, font_desc);
 			pango_layout_set_text (layout, buffer, num_chars);
@@ -2083,6 +2083,7 @@ e_calendar_item_key_press_event (ECalendarItem *calitem,
 		break;
 	case GDK_KEY_space:
 	case GDK_KEY_Return:
+	case GDK_KEY_KP_Enter:
 		e_calendar_item_stop_selecting (calitem, event->key.time);
 		break;
 	default:

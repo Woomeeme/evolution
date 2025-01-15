@@ -24,6 +24,7 @@
 #include "e-util/e-util.h"
 #include "composer/e-msg-composer.h"
 #include "composer/e-composer-from-header.h"
+#include "calendar/gui/comp-util.h"
 #include "calendar/gui/e-comp-editor.h"
 #include "calendar/gui/e-comp-editor-page-attachments.h"
 #include "calendar/gui/itip-utils.h"
@@ -179,9 +180,11 @@ meeting_to_composer_composer_created_cb (GObject *source_object,
 	e_comp_editor_set_updating (comp_editor, did_updating);
 
 	/* Subject */
-	text = i_cal_component_get_summary (icomp);
+	prop = e_cal_util_component_find_property_for_locale (icomp, I_CAL_SUMMARY_PROPERTY, NULL);
+	text = prop ? i_cal_property_get_summary (prop) : NULL;
 	if (text && *text)
 		e_composer_header_table_set_subject (header_table, text);
+	g_clear_object (&prop);
 
 	/* From */
 	prop = i_cal_component_get_first_property (icomp, I_CAL_ORGANIZER_PROPERTY);
@@ -190,7 +193,7 @@ meeting_to_composer_composer_created_cb (GObject *source_object,
 		const gchar *organizer;
 
 		from_header = e_composer_header_table_get_header (header_table, E_COMPOSER_HEADER_FROM);
-		organizer = itip_strip_mailto (i_cal_property_get_organizer (prop));
+		organizer = e_cal_util_get_property_email (prop);
 
 		if (organizer && *organizer && from_header) {
 			GtkComboBox *identities_combo;
@@ -243,7 +246,7 @@ meeting_to_composer_composer_created_cb (GObject *source_object,
 		const gchar *name = NULL, *address;
 		EDestination *dest;
 
-		address = itip_strip_mailto (i_cal_property_get_attendee (prop));
+		address = e_cal_util_get_property_email (prop);
 		if (!address || !*address)
 			continue;
 
@@ -291,18 +294,31 @@ meeting_to_composer_composer_created_cb (GObject *source_object,
 	g_ptr_array_free (cc_recips, TRUE);
 
 	/* Body */
-	prop = i_cal_component_get_first_property (icomp, I_CAL_DESCRIPTION_PROPERTY);
+	prop = e_cal_util_component_find_property_for_locale (icomp, I_CAL_DESCRIPTION_PROPERTY, NULL);
 	if (prop) {
 		text = i_cal_property_get_description (prop);
 
 		if (text && *text) {
 			EHTMLEditor *html_editor;
 			EContentEditor *cnt_editor;
+			EContentEditorMode mode;
+			GSettings *settings;
+
+			settings = e_util_ref_settings ("org.gnome.evolution.mail");
+			mode = g_settings_get_enum (settings, "composer-mode");
+			g_clear_object (&settings);
+
+			/* Let the markdown be allowed, otherwise use the plain text mode */
+			if (mode != E_CONTENT_EDITOR_MODE_MARKDOWN &&
+			    mode != E_CONTENT_EDITOR_MODE_MARKDOWN_PLAIN_TEXT)
+				mode = E_CONTENT_EDITOR_MODE_PLAIN_TEXT;
 
 			html_editor = e_msg_composer_get_editor (composer);
 			cnt_editor = e_html_editor_get_content_editor (html_editor);
 
-			e_content_editor_set_html_mode (cnt_editor, FALSE);
+			e_html_editor_set_mode (html_editor, mode);
+			/* no need to transfer the current content from old editor to the new, the content is set below */
+			e_html_editor_cancel_mode_change_content_update (html_editor);
 			e_content_editor_insert_content (cnt_editor, text, E_CONTENT_EDITOR_INSERT_REPLACE_ALL | E_CONTENT_EDITOR_INSERT_TEXT_PLAIN);
 		}
 

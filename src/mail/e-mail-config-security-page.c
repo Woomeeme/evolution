@@ -30,10 +30,6 @@
 
 #include "e-mail-config-security-page.h"
 
-#define E_MAIL_CONFIG_SECURITY_PAGE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_CONFIG_SECURITY_PAGE, EMailConfigSecurityPagePrivate))
-
 struct _EMailConfigSecurityPagePrivate {
 	ESource *identity_source;
 };
@@ -47,15 +43,10 @@ enum {
 static void	e_mail_config_security_page_interface_init
 					(EMailConfigPageInterface *iface);
 
-G_DEFINE_TYPE_WITH_CODE (
-	EMailConfigSecurityPage,
-	e_mail_config_security_page,
-	GTK_TYPE_SCROLLED_WINDOW,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL)
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_MAIL_CONFIG_PAGE,
-		e_mail_config_security_page_interface_init))
+G_DEFINE_TYPE_WITH_CODE (EMailConfigSecurityPage, e_mail_config_security_page, GTK_TYPE_SCROLLED_WINDOW,
+	G_ADD_PRIVATE (EMailConfigSecurityPage)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL)
+	G_IMPLEMENT_INTERFACE (E_TYPE_MAIL_CONFIG_PAGE, e_mail_config_security_page_interface_init))
 
 #ifdef ENABLE_SMIME
 static void
@@ -171,14 +162,12 @@ mail_config_security_page_get_property (GObject *object,
 static void
 mail_config_security_page_dispose (GObject *object)
 {
-	EMailConfigSecurityPagePrivate *priv;
+	EMailConfigSecurityPage *self = E_MAIL_CONFIG_SECURITY_PAGE (object);
 
-	priv = E_MAIL_CONFIG_SECURITY_PAGE_GET_PRIVATE (object);
-	g_clear_object (&priv->identity_source);
+	g_clear_object (&self->priv->identity_source);
 
 	/* Chain up to parent's dispose() method. */
-	G_OBJECT_CLASS (e_mail_config_security_page_parent_class)->
-		dispose (object);
+	G_OBJECT_CLASS (e_mail_config_security_page_parent_class)->dispose (object);
 }
 
 static GHashTable * /* gchar *keyid ~> gchar *display_name */
@@ -264,11 +253,11 @@ mail_security_page_list_seahorse_keys (void)
 							if ((flags & KEY_FLAG_CAN_SIGN) != 0 &&
 							    (flags & KEY_FLAG_IS_VALID) != 0 &&
 							    (flags & (KEY_FLAG_EXPIRED | KEY_FLAG_REVOKED | KEY_FLAG_DISABLED)) == 0) {
-								gchar *keyid = NULL, *display_name = NULL;
+								gchar *val_keyid = NULL, *display_name = NULL;
 
 								val = g_variant_dict_lookup_value (dict, "key-id", G_VARIANT_TYPE_STRING);
 								if (val) {
-									keyid = g_variant_dup_string (val, NULL);
+									val_keyid = g_variant_dup_string (val, NULL);
 									g_variant_unref (val);
 								}
 
@@ -278,13 +267,13 @@ mail_security_page_list_seahorse_keys (void)
 									g_variant_unref (val);
 								}
 
-								if (keyid && *keyid && display_name && *display_name) {
+								if (val_keyid && *val_keyid && display_name && *display_name) {
 									if (!keys)
 										keys = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
 
-									g_hash_table_insert (keys, keyid, display_name);
+									g_hash_table_insert (keys, val_keyid, display_name);
 								} else {
-									g_free (keyid);
+									g_free (val_keyid);
 									g_free (display_name);
 								}
 							}
@@ -343,7 +332,7 @@ compare_by_display_name (gconstpointer v1,
 static GtkWidget *
 mail_security_page_get_openpgpg_combo (void)
 {
-	GtkWidget *widget;
+	GtkWidget *widget, *child;
 	GtkListStore *store;
 	GtkCellRenderer *cell;
 	GHashTable *keys_hash;
@@ -397,6 +386,10 @@ mail_security_page_get_openpgpg_combo (void)
 	gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (widget), cell, TRUE);
 	gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (widget), cell, "text", 1, NULL);
 
+	child = gtk_bin_get_child (GTK_BIN (widget));
+	if (GTK_IS_ENTRY (child))
+		gtk_entry_set_placeholder_text (GTK_ENTRY (child), _("Use sender e-mail address"));
+
 	return widget;
 }
 
@@ -411,6 +404,8 @@ mail_config_security_page_constructed (GObject *object)
 	GtkWidget *widget;
 	GtkWidget *container;
 	GtkWidget *main_box;
+	GtkWidget *expander;
+	GtkWidget *expander_vbox;
 	GtkSizeGroup *size_group;
 	const gchar *extension_name;
 	const gchar *text;
@@ -471,6 +466,7 @@ mail_config_security_page_constructed (GObject *object)
 	e_binding_bind_property (
 		composition_ext, "sign-imip",
 		widget, "active",
+		G_BINDING_INVERT_BOOLEAN |
 		G_BINDING_BIDIRECTIONAL |
 		G_BINDING_SYNC_CREATE);
 
@@ -504,8 +500,10 @@ mail_config_security_page_constructed (GObject *object)
 	label = GTK_LABEL (widget);
 
 	widget = mail_security_page_get_openpgpg_combo ();
-	if (!widget)
+	if (!widget) {
 		widget = gtk_entry_new ();
+		gtk_entry_set_placeholder_text (GTK_ENTRY (widget), _("Use sender e-mail address"));
+	}
 
 	gtk_widget_set_hexpand (widget, TRUE);
 	gtk_label_set_mnemonic_widget (label, widget);
@@ -601,10 +599,39 @@ mail_config_security_page_constructed (GObject *object)
 		G_BINDING_SYNC_CREATE |
 		G_BINDING_BIDIRECTIONAL);
 
+	expander = gtk_expander_new_with_mnemonic (_("Ad_vanced Options"));
+	gtk_widget_set_margin_start (expander, 12);
+	widget = gtk_expander_get_label_widget (GTK_EXPANDER (expander));
+	if (widget) {
+		PangoAttrList *bold;
+
+		bold = pango_attr_list_new ();
+		pango_attr_list_insert (bold, pango_attr_weight_new (PANGO_WEIGHT_BOLD));
+
+		gtk_label_set_attributes (GTK_LABEL (widget), bold);
+
+		pango_attr_list_unref (bold);
+	}
+	gtk_expander_set_expanded (GTK_EXPANDER (expander), FALSE);
+
+	gtk_widget_show (expander);
+
+	expander_vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	gtk_box_set_spacing (GTK_BOX (expander_vbox), 6);
+	gtk_widget_set_margin_start (expander_vbox, 24);
+	gtk_widget_show (expander_vbox);
+
+	gtk_grid_attach (GTK_GRID (container), expander, 0, 6, 2, 1);
+	gtk_grid_attach (GTK_GRID (container), expander_vbox, 0, 7, 2, 1);
+
+	e_binding_bind_property (
+		expander, "expanded",
+		expander_vbox, "visible",
+		G_BINDING_SYNC_CREATE);
+
 	text = _("Always _trust keys in my keyring when encrypting");
 	widget = gtk_check_button_new_with_mnemonic (text);
-	gtk_widget_set_margin_left (widget, 12);
-	gtk_grid_attach (GTK_GRID (container), widget, 0, 6, 2, 1);
+	gtk_box_pack_start (GTK_BOX (expander_vbox), widget, FALSE, FALSE, 0);
 	gtk_widget_show (widget);
 
 	e_binding_bind_property (
@@ -615,13 +642,70 @@ mail_config_security_page_constructed (GObject *object)
 
 	text = _("Prefer _inline sign/encrypt for plain text messages");
 	widget = gtk_check_button_new_with_mnemonic (text);
-	gtk_widget_set_margin_left (widget, 12);
-	gtk_grid_attach (GTK_GRID (container), widget, 0, 7, 2, 1);
+	gtk_box_pack_start (GTK_BOX (expander_vbox), widget, FALSE, FALSE, 0);
 	gtk_widget_show (widget);
 
 	e_binding_bind_property (
 		openpgp_ext, "prefer-inline",
 		widget, "active",
+		G_BINDING_SYNC_CREATE |
+		G_BINDING_BIDIRECTIONAL);
+
+	text = _("_Lookup keys for encryption in Web Key Directory (WKD)");
+	widget = gtk_check_button_new_with_mnemonic (text);
+	gtk_box_pack_start (GTK_BOX (expander_vbox), widget, FALSE, FALSE, 0);
+	gtk_widget_show (widget);
+
+	e_binding_bind_property (
+		openpgp_ext, "locate-keys",
+		widget, "active",
+		G_BINDING_SYNC_CREATE |
+		G_BINDING_BIDIRECTIONAL);
+
+	text = _("Send own _public key in outgoing mails");
+	widget = gtk_check_button_new_with_mnemonic (text);
+	gtk_box_pack_start (GTK_BOX (expander_vbox), widget, FALSE, FALSE, 0);
+	gtk_widget_show (widget);
+
+	e_binding_bind_property (
+		openpgp_ext, "send-public-key",
+		widget, "active",
+		G_BINDING_SYNC_CREATE |
+		G_BINDING_BIDIRECTIONAL);
+
+	text = _("Advertise encryption is pre_ferred");
+	widget = gtk_check_button_new_with_mnemonic (text);
+	gtk_widget_set_margin_start (widget, 12);
+	gtk_box_pack_start (GTK_BOX (expander_vbox), widget, FALSE, FALSE, 0);
+	gtk_widget_show (widget);
+
+	e_binding_bind_property (
+		openpgp_ext, "send-prefer-encrypt",
+		widget, "active",
+		G_BINDING_SYNC_CREATE |
+		G_BINDING_BIDIRECTIONAL);
+
+	e_binding_bind_property (
+		openpgp_ext, "send-public-key",
+		widget, "sensitive",
+		G_BINDING_SYNC_CREATE |
+		G_BINDING_BIDIRECTIONAL);
+
+	text = _("A_sk before sending mails with own public key");
+	widget = gtk_check_button_new_with_mnemonic (text);
+	gtk_widget_set_margin_start (widget, 12);
+	gtk_box_pack_start (GTK_BOX (expander_vbox), widget, FALSE, FALSE, 0);
+	gtk_widget_show (widget);
+
+	e_binding_bind_property (
+		openpgp_ext, "ask-send-public-key",
+		widget, "active",
+		G_BINDING_SYNC_CREATE |
+		G_BINDING_BIDIRECTIONAL);
+
+	e_binding_bind_property (
+		openpgp_ext, "send-public-key",
+		widget, "sensitive",
 		G_BINDING_SYNC_CREATE |
 		G_BINDING_BIDIRECTIONAL);
 
@@ -824,9 +908,6 @@ e_mail_config_security_page_class_init (EMailConfigSecurityPageClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (
-		class, sizeof (EMailConfigSecurityPagePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_config_security_page_set_property;
 	object_class->get_property = mail_config_security_page_get_property;
@@ -856,7 +937,7 @@ e_mail_config_security_page_interface_init (EMailConfigPageInterface *iface)
 static void
 e_mail_config_security_page_init (EMailConfigSecurityPage *page)
 {
-	page->priv = E_MAIL_CONFIG_SECURITY_PAGE_GET_PRIVATE (page);
+	page->priv = e_mail_config_security_page_get_instance_private (page);
 }
 
 EMailConfigPage *

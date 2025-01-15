@@ -70,19 +70,17 @@ static void
 cal_shell_view_popup_event_cb (EShellView *shell_view,
                                GdkEvent *button_event)
 {
-	GList *list;
+	ECalShellView *self = E_CAL_SHELL_VIEW (shell_view);
 	ECalendarView *view;
-	ECalShellViewPrivate *priv;
+	GSList *selected;
 	const gchar *widget_path;
 	gint n_selected;
 
-	priv = E_CAL_SHELL_VIEW_GET_PRIVATE (shell_view);
+	view = e_cal_shell_content_get_current_calendar_view (self->priv->cal_shell_content);
 
-	view = e_cal_shell_content_get_current_calendar_view (priv->cal_shell_content);
-
-	list = e_calendar_view_get_selected_events (view);
-	n_selected = g_list_length (list);
-	g_list_free (list);
+	selected = e_calendar_view_get_selected_events (view);
+	n_selected = g_slist_length (selected);
+	g_slist_free_full (selected, e_calendar_view_selection_data_free);
 
 	if (n_selected <= 0)
 		widget_path = "/calendar-empty-popup";
@@ -309,6 +307,55 @@ cal_shell_view_taskpad_settings_changed_cb (GSettings *settings,
 	}
 }
 
+static void
+cal_shell_view_update_header_bar (ECalShellView *cal_shell_view)
+{
+	const gchar *items[] = {
+		"/main-toolbar/calendar-go-back",
+		"/main-toolbar/calendar-go-today",
+		"/main-toolbar/calendar-go-forward",
+		"/main-toolbar/calendar-go-forward-separator"
+	};
+	EShellWindow *shell_window;
+	EShellView *shell_view;
+	EShellHeaderBar *shell_headerbar = NULL;
+	GtkWidget *widget;
+	GtkAction *action;
+	gint ii;
+
+	shell_view = E_SHELL_VIEW (cal_shell_view);
+	shell_window = e_shell_view_get_shell_window (shell_view);
+	widget = gtk_window_get_titlebar (GTK_WINDOW (shell_window));
+	if (E_IS_SHELL_HEADER_BAR (widget))
+		shell_headerbar = E_SHELL_HEADER_BAR (widget);
+
+	if (shell_headerbar)
+		e_shell_header_bar_clear (shell_headerbar, "e-cal-shell-view");
+
+	if (!e_util_get_use_header_bar () ||
+	    !e_shell_view_is_active (shell_view))
+		return;
+
+	action = ACTION (CALENDAR_GO_BACK);
+	widget = e_header_bar_button_new (NULL, action);
+	gtk_widget_set_name (widget, "e-cal-shell-view-buttons");
+	gtk_widget_show (widget);
+
+	action = ACTION (CALENDAR_GO_TODAY);
+	e_header_bar_button_add_action (E_HEADER_BAR_BUTTON (widget), NULL, action);
+
+	action = ACTION (CALENDAR_GO_FORWARD);
+	e_header_bar_button_add_action (E_HEADER_BAR_BUTTON (widget), NULL, action);
+
+	e_header_bar_pack_end (E_HEADER_BAR (shell_headerbar), widget, 0);
+
+	for (ii = 0; ii < G_N_ELEMENTS (items); ii++) {
+		widget = e_shell_window_get_managed_widget (shell_window, items[ii]);
+		if (widget)
+			gtk_widget_destroy (widget);
+	}
+}
+
 void
 e_cal_shell_view_private_init (ECalShellView *cal_shell_view)
 {
@@ -398,6 +445,12 @@ e_cal_shell_view_private_constructed (ECalShellView *cal_shell_view)
 	 * disconnect our signal handlers in dispose(). */
 	priv->client_cache = e_shell_get_client_cache (shell);
 	g_object_ref (priv->client_cache);
+
+	g_signal_connect_object (
+		cal_shell_view, "toggled",
+		G_CALLBACK (cal_shell_view_update_header_bar),
+		NULL,
+		G_CONNECT_AFTER);
 
 	handler_id = g_signal_connect (
 		priv->client_cache, "backend-error",

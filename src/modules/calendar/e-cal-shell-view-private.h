@@ -28,6 +28,7 @@
 
 #include <libecal/libecal.h>
 
+#include <shell/e-shell-headerbar.h>
 #include <shell/e-shell-utils.h>
 
 #include <calendar/gui/calendar-config.h>
@@ -44,10 +45,6 @@
 #include "e-cal-shell-backend.h"
 #include "e-cal-shell-content.h"
 #include "e-cal-shell-view-actions.h"
-
-#define E_CAL_SHELL_VIEW_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CAL_SHELL_VIEW, ECalShellViewPrivate))
 
 /* Shorthand, requires a variable named "shell_window". */
 #define ACTION(name) \

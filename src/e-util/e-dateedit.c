@@ -1,12 +1,13 @@
 /*
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
- * published by the Free Software Foundation; either the
+ * published by the Free Software Foundation; either the version 2 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * for more details.
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser  General Public
+ * License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -40,10 +41,6 @@
 #include "e-calendar.h"
 #include "e-util-enumtypes.h"
 
-#define E_DATE_EDIT_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_DATE_EDIT, EDateEditPrivate))
-
 struct _EDateEditPrivate {
 	GtkWidget *date_entry;
 	GtkWidget *date_button;
@@ -61,6 +58,8 @@ struct _EDateEditPrivate {
 
 	GdkDevice *grabbed_keyboard;
 	GdkDevice *grabbed_pointer;
+
+	gchar *date_format;
 
 	gboolean show_date;
 	gboolean show_time;
@@ -116,6 +115,8 @@ struct _EDateEditPrivate {
 	gboolean time_been_changed;
 
 	gboolean allow_no_date_set;
+	gboolean shorten_time_end;
+	gint shorten_time_minutes;
 };
 
 enum {
@@ -127,7 +128,9 @@ enum {
 	PROP_USE_24_HOUR_FORMAT,
 	PROP_WEEK_START_DAY,
 	PROP_TWODIGIT_YEAR_CAN_FUTURE,
-	PROP_SET_NONE
+	PROP_SET_NONE,
+	PROP_SHORTEN_TIME_END,
+	PROP_SHORTEN_TIME
 };
 
 enum {
@@ -209,12 +212,9 @@ static gboolean e_date_edit_set_time_internal	(EDateEdit	*dedit,
 
 static gint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE_WITH_CODE (
-	EDateEdit,
-	e_date_edit,
-	GTK_TYPE_BOX,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL))
+G_DEFINE_TYPE_WITH_CODE (EDateEdit, e_date_edit,GTK_TYPE_BOX,
+	G_ADD_PRIVATE (EDateEdit)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 static void
 date_edit_set_property (GObject *object,
@@ -269,6 +269,18 @@ date_edit_set_property (GObject *object,
 			if (g_value_get_boolean (value))
 				e_date_edit_set_time (E_DATE_EDIT (object), -1);
 			return;
+
+		case PROP_SHORTEN_TIME_END:
+			e_date_edit_set_shorten_time_end (
+				E_DATE_EDIT (object),
+				g_value_get_boolean (value));
+			return;
+
+		case PROP_SHORTEN_TIME:
+			e_date_edit_set_shorten_time (
+				E_DATE_EDIT (object),
+				g_value_get_int (value));
+			return;
 	}
 
 	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -322,6 +334,18 @@ date_edit_get_property (GObject *object,
 				value, e_date_edit_get_twodigit_year_can_future (
 				E_DATE_EDIT (object)));
 			return;
+
+		case PROP_SHORTEN_TIME_END:
+			g_value_set_boolean (
+				value, e_date_edit_get_shorten_time_end (
+				E_DATE_EDIT (object)));
+			return;
+
+		case PROP_SHORTEN_TIME:
+			g_value_set_int (
+				value, e_date_edit_get_shorten_time (
+				E_DATE_EDIT (object)));
+			return;
 	}
 
 	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -337,6 +361,7 @@ date_edit_dispose (GObject *object)
 	e_date_edit_set_get_time_callback (dedit, NULL, NULL, NULL);
 
 	g_clear_pointer (&dedit->priv->cal_popup, gtk_widget_destroy);
+	g_clear_pointer (&dedit->priv->date_format, g_free);
 
 	if (dedit->priv->grabbed_keyboard != NULL) {
 		gdk_device_ungrab (
@@ -363,8 +388,6 @@ e_date_edit_class_init (EDateEditClass *class)
 {
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
-
-	g_type_class_add_private (class, sizeof (EDateEditPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = date_edit_set_property;
@@ -457,6 +480,30 @@ e_date_edit_class_init (EDateEditClass *class)
 			FALSE,
 			G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY));
 
+	g_object_class_install_property (
+		object_class,
+		PROP_SHORTEN_TIME_END,
+		g_param_spec_boolean (
+			"shorten-time-end",
+			"Shorten Time End",
+			NULL,
+			TRUE,
+			G_PARAM_READWRITE |
+			G_PARAM_STATIC_STRINGS |
+			G_PARAM_EXPLICIT_NOTIFY));
+
+	g_object_class_install_property (
+		object_class,
+		PROP_SHORTEN_TIME,
+		g_param_spec_int (
+			"shorten-time",
+			"Shorten Time",
+			NULL,
+			0, 29, 0,
+			G_PARAM_READWRITE |
+			G_PARAM_STATIC_STRINGS |
+			G_PARAM_EXPLICIT_NOTIFY));
+
 	signals[CHANGED] = g_signal_new (
 		"changed",
 		G_OBJECT_CLASS_TYPE (object_class),
@@ -470,7 +517,7 @@ e_date_edit_class_init (EDateEditClass *class)
 static void
 e_date_edit_init (EDateEdit *dedit)
 {
-	dedit->priv = E_DATE_EDIT_GET_PRIVATE (dedit);
+	dedit->priv = e_date_edit_get_instance_private (dedit);
 
 	dedit->priv->show_date = TRUE;
 	dedit->priv->show_time = TRUE;
@@ -492,6 +539,8 @@ e_date_edit_init (EDateEdit *dedit)
 	dedit->priv->twodigit_year_can_future = TRUE;
 	dedit->priv->date_been_changed = FALSE;
 	dedit->priv->time_been_changed = FALSE;
+	dedit->priv->shorten_time_end = TRUE;
+	dedit->priv->shorten_time_minutes = 0;
 
 	gtk_orientable_set_orientation (GTK_ORIENTABLE (dedit), GTK_ORIENTATION_HORIZONTAL);
 	gtk_box_set_spacing (GTK_BOX (dedit), 3);
@@ -1792,6 +1841,18 @@ rebuild_time_popup (EDateEdit *dedit)
 			tmp_tm.tm_hour = hour;
 			tmp_tm.tm_min = min;
 
+			if (priv->shorten_time_minutes > 0) {
+				if (priv->shorten_time_end)
+					tmp_tm.tm_min += 30 - priv->shorten_time_minutes;
+				else
+					tmp_tm.tm_min += priv->shorten_time_minutes;
+
+				if (tmp_tm.tm_min >= 60) {
+					tmp_tm.tm_min -= 60;
+					tmp_tm.tm_hour++;
+				}
+			}
+
 			e_time_format_time (
 				&tmp_tm, use_24_hour_format, 0,
 				buffer, sizeof (buffer));
@@ -1840,8 +1901,13 @@ e_date_edit_parse_date (EDateEdit *dedit,
                         struct tm *date_tm)
 {
 	gboolean twodigit_year = FALSE;
+	gboolean retry = TRUE;
 
-	if (e_time_parse_date_ex (date_text, date_tm, &twodigit_year) != E_TIME_PARSE_OK)
+	if (dedit->priv->date_format &&
+	    e_time_parse_date_format (date_text, dedit->priv->date_format, date_tm, &twodigit_year) == E_TIME_PARSE_OK)
+		retry = FALSE;
+
+	if (retry && e_time_parse_date_ex (date_text, date_tm, &twodigit_year) != E_TIME_PARSE_OK)
 		return FALSE;
 
 	if (twodigit_year && !dedit->priv->twodigit_year_can_future) {
@@ -1929,7 +1995,7 @@ on_date_entry_key_press (GtkWidget *widget,
 
 	if (event_state & GDK_MOD1_MASK
 	    && (event_keyval == GDK_KEY_Up || event_keyval == GDK_KEY_Down
-		|| event_keyval == GDK_KEY_Return)) {
+		|| event_keyval == GDK_KEY_Return || event_keyval == GDK_KEY_KP_Enter)) {
 		g_signal_stop_emission_by_name (widget, "key_press_event");
 		e_date_edit_show_date_popup (dedit, key_event);
 		return TRUE;
@@ -1937,7 +2003,7 @@ on_date_entry_key_press (GtkWidget *widget,
 
 	/* If the user hits the return key emit a "date_changed" signal if
 	 * needed. But let the signal carry on. */
-	if (event_keyval == GDK_KEY_Return) {
+	if (event_keyval == GDK_KEY_Return || event_keyval == GDK_KEY_KP_Enter) {
 		e_date_edit_check_date_changed (dedit);
 		return FALSE;
 	}
@@ -1962,10 +2028,10 @@ on_time_entry_key_press (GtkWidget *widget,
 	/* I'd like to use Alt+Up/Down for popping up the list, like Win32,
 	 * but the combo steals any Up/Down keys, so we use Alt + Return. */
 #if 0
-	if (event_state & GDK_MOD1_MASK
+	if ((event_state & GDK_MOD1_MASK) != 0
 	    && (event_keyval == GDK_KEY_Up || event_keyval == GDK_KEY_Down)) {
 #else
-	if (event_state & GDK_MOD1_MASK && event_keyval == GDK_KEY_Return) {
+	if ((event_state & GDK_MOD1_MASK) != 0 && (event_keyval == GDK_KEY_Return || event_keyval == GDK_KEY_KP_Enter)) {
 #endif
 		g_signal_stop_emission_by_name (widget, "key_press_event");
 		g_signal_emit_by_name (child, "activate", 0);
@@ -1974,7 +2040,7 @@ on_time_entry_key_press (GtkWidget *widget,
 
 	/* Stop the return key from emitting the activate signal, and check
 	 * if we need to emit a "time_changed" signal. */
-	if (event_keyval == GDK_KEY_Return) {
+	if (event_keyval == GDK_KEY_Return || event_keyval == GDK_KEY_KP_Enter) {
 		g_signal_stop_emission_by_name (widget, "key_press_event");
 		e_date_edit_check_time_changed (dedit);
 		return TRUE;
@@ -2145,11 +2211,15 @@ e_date_edit_update_date_entry (EDateEdit *dedit)
 	if (priv->date_set_to_none || !priv->date_is_valid) {
 		gtk_entry_set_text (GTK_ENTRY (priv->date_entry), C_("date", "None"));
 	} else {
-		/* This is a strftime() format for a short date.
-		 * %x the preferred date representation for the current locale
-		 * without the time, but is forced to use 4 digit year. */
-		gchar *format = e_time_get_d_fmt_with_4digit_year ();
+		gchar *format = NULL;
 		time_t tt;
+
+		if (!dedit->priv->date_format) {
+			/* This is a strftime() format for a short date.
+			 * %x the preferred date representation for the current locale
+			 * without the time, but is forced to use 4 digit year. */
+			format = e_time_get_d_fmt_with_4digit_year ();
+		}
 
 		tmp_tm.tm_year = priv->year;
 		tmp_tm.tm_mon = priv->month;
@@ -2161,7 +2231,7 @@ e_date_edit_update_date_entry (EDateEdit *dedit)
 		if (tt && localtime (&tt))
 			tmp_tm = *localtime (&tt);
 
-		e_utf8_strftime (buffer, sizeof (buffer), format, &tmp_tm);
+		e_utf8_strftime (buffer, sizeof (buffer), dedit->priv->date_format ? dedit->priv->date_format : format, &tmp_tm);
 		g_free (format);
 		gtk_entry_set_text (GTK_ENTRY (priv->date_entry), buffer);
 	}
@@ -2623,4 +2693,75 @@ e_date_edit_has_focus (EDateEdit *dedit)
 	       dedit->priv->time_combo && (
 		(gtk_widget_has_focus (dedit->priv->time_combo) ||
 		 gtk_widget_has_focus (gtk_bin_get_child (GTK_BIN (dedit->priv->time_combo)))));
+}
+
+gint
+e_date_edit_get_shorten_time (EDateEdit *self)
+{
+	g_return_val_if_fail (E_IS_DATE_EDIT (self), 0);
+
+	return self->priv->shorten_time_minutes;
+}
+
+void
+e_date_edit_set_shorten_time (EDateEdit *self,
+			      gint minutes)
+{
+	g_return_if_fail (E_IS_DATE_EDIT (self));
+
+	if (self->priv->shorten_time_minutes != minutes && minutes >= 0 && minutes < 30) {
+		self->priv->shorten_time_minutes = minutes;
+		rebuild_time_popup (self);
+
+		g_object_notify (G_OBJECT (self), "shorten-time");
+	}
+}
+
+gboolean
+e_date_edit_get_shorten_time_end (EDateEdit *self)
+{
+	g_return_val_if_fail (E_IS_DATE_EDIT (self), FALSE);
+
+	return self->priv->shorten_time_end;
+}
+
+void
+e_date_edit_set_shorten_time_end (EDateEdit *self,
+				  gboolean shorten_time_end)
+{
+	g_return_if_fail (E_IS_DATE_EDIT (self));
+
+	if (!self->priv->shorten_time_end != !shorten_time_end) {
+		self->priv->shorten_time_end = shorten_time_end;
+
+		if (self->priv->shorten_time_minutes > 0)
+			rebuild_time_popup (self);
+
+		g_object_notify (G_OBJECT (self), "shorten-time-end");
+	}
+}
+
+const gchar *
+e_date_edit_get_date_format (EDateEdit *self)
+{
+	g_return_val_if_fail (E_IS_DATE_EDIT (self), NULL);
+
+	return self->priv->date_format;
+}
+
+void
+e_date_edit_set_date_format (EDateEdit *self,
+			     const gchar *strftime_format)
+{
+	g_return_if_fail (E_IS_DATE_EDIT (self));
+
+	if (strftime_format && !*strftime_format)
+		strftime_format = NULL;
+
+	if (g_strcmp0 (self->priv->date_format, strftime_format) != 0) {
+		g_free (self->priv->date_format);
+		self->priv->date_format = g_strdup (strftime_format);
+
+		e_date_edit_update_date_entry (self);
+	}
 }

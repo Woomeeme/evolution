@@ -23,12 +23,10 @@
 
 #include <stdlib.h>
 #include <gtk/gtk.h>
+
+#include "comp-util.h"
 #include "e-meeting-utils.h"
 #include "e-meeting-attendee.h"
-
-#define E_MEETING_ATTENDEE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MEETING_ATTENDEE, EMeetingAttendeePrivate))
 
 struct _EMeetingAttendeePrivate {
 	gchar *address;
@@ -75,7 +73,7 @@ static guint signals[LAST_SIGNAL];
 
 static void e_meeting_attendee_finalize	(GObject *obj);
 
-G_DEFINE_TYPE (EMeetingAttendee, e_meeting_attendee, G_TYPE_OBJECT)
+G_DEFINE_TYPE_WITH_PRIVATE (EMeetingAttendee, e_meeting_attendee, G_TYPE_OBJECT)
 
 static gchar *
 string_test (const gchar *string)
@@ -160,8 +158,6 @@ e_meeting_attendee_class_init (EMeetingAttendeeClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (EMeetingAttendeePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->finalize = e_meeting_attendee_finalize;
 
@@ -178,7 +174,7 @@ e_meeting_attendee_class_init (EMeetingAttendeeClass *class)
 static void
 e_meeting_attendee_init (EMeetingAttendee *ia)
 {
-	ia->priv = E_MEETING_ATTENDEE_GET_PRIVATE (ia);
+	ia->priv = e_meeting_attendee_get_instance_private (ia);
 
 	ia->priv->address = string_test (NULL);
 	ia->priv->member = string_test (NULL);
@@ -236,7 +232,7 @@ e_meeting_attendee_new_from_e_cal_component_attendee (const ECalComponentAttende
 
 	ia = E_MEETING_ATTENDEE (g_object_new (E_TYPE_MEETING_ATTENDEE, NULL));
 
-	e_meeting_attendee_set_address (ia, e_cal_component_attendee_get_value (ca));
+	e_meeting_attendee_set_address (ia, e_cal_util_get_attendee_email (ca));
 	e_meeting_attendee_set_member (ia, e_cal_component_attendee_get_member (ca));
 	e_meeting_attendee_set_cutype (ia, e_cal_component_attendee_get_cutype (ca));
 	e_meeting_attendee_set_role (ia, e_cal_component_attendee_get_role (ca));
@@ -310,7 +306,14 @@ e_meeting_attendee_set_address (EMeetingAttendee *ia,
 {
 	g_return_if_fail (E_IS_MEETING_ATTENDEE (ia));
 
-	set_string_value (ia, &ia->priv->address, address);
+	if (address && *address && g_ascii_strncasecmp (address, "mailto:", 7) != 0) {
+		/* Always with mailto: prefix */
+		gchar *tmp = g_strconcat ("mailto:", address, NULL);
+		set_string_value (ia, &ia->priv->address, tmp);
+		g_free (tmp);
+	} else {
+		set_string_value (ia, &ia->priv->address, address);
+	}
 }
 
 gboolean

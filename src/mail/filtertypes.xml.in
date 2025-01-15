@@ -546,6 +546,29 @@
   </input>
  </part>
 
+ <part name="follow-up-due-by">
+  <_title>Follow Up Due By</_title>
+  <input type="optionlist" name="date-spec-type">
+   <option value="before">
+    <_title>is before</_title>
+    <code>(and (not (= (user-tag "follow-up") "")) (not (= (user-tag "due-by") "")) (&lt; (compare-date (make-time (user-tag "due-by")) ${versus}) 0))</code>
+   </option>
+   <option value="after">
+    <_title>is after</_title>
+    <code>(and (not (= (user-tag "follow-up") "")) (not (= (user-tag "due-by") "")) (&gt; (compare-date (make-time (user-tag "due-by")) ${versus}) 0))</code>
+   </option>
+   <option value="is">
+    <_title>is</_title>
+    <code>(and (not (= (user-tag "follow-up") "")) (not (= (user-tag "due-by") "")) (= (compare-date (make-time (user-tag "due-by")) ${versus}) 0))</code>
+   </option>
+   <option value="is-not">
+    <_title>is not</_title>
+    <code>(and (not (= (user-tag "follow-up") "")) (not (= (user-tag "due-by") "")) (not (= (compare-date (make-time (user-tag "due-by")) ${versus}) 0)))</code>
+   </option>
+  </input>
+  <input type="datespec" name="versus"/>
+ </part>
+
  <part name="attachments">
   <_title>Attachments</_title>
   <input type="optionlist" name="match-type">
@@ -556,6 +579,14 @@
    <option value="not exist">
     <_title>Do Not Exist</_title>
     <code>(not (system-flag "Attachments"))</code>
+   </option>
+   <option value="contain-icalendar">
+    <_title>Contain iCalendar Data</_title>
+    <code>(user-flag "$has_cal")</code>
+   </option>
+   <option value="not-contain-icalendar">
+    <_title>Do Not Contain iCalendar Data</_title>
+    <code>(not (user-flag "$has_cal"))</code>
    </option>
   </input>
  </part>
@@ -656,11 +687,15 @@
   <input type="optionlist" name="retval-type">
    <option value="is-junk">
     <_title>Message is Junk</_title>
-    <code>(junk-test)</code>
+    <code>(= (junk-test) 1)</code>
    </option>
    <option value="is-not-junk">
     <_title>Message is not Junk</_title>
-    <code>(not (junk-test))</code>
+    <code>(not (= (junk-test) 1))</code>
+   </option>
+   <option value="is-inconclusive">
+    <_title>Inconclusive whether Message is Junk</_title>
+    <code>(= (junk-test) 2)</code>
    </option>
   </input>
  </part>
@@ -677,6 +712,23 @@
    </option>
   </input>
   <input type="folder" name="folder"/>
+ </part>
+
+ <part name="addressbook">
+  <_title>Address book</_title>
+  <input type="optionlist" name="book">
+     <dynamic func="e_mail_addressbook_get_filter_options"/>
+  </input>
+  <input type="optionlist" name="compare-type">
+   <option value="contains-sender">
+    <_title>contains Sender</_title>
+    <code>(addressbook-contains ${book} "From")</code>
+   </option>
+   <option value="not-contains-sender">
+    <_title>does not contain Sender</_title>
+    <code>(not (addressbook-contains ${book} "From"))</code>
+   </option>
+  </input>
  </part>
 
  <part name="all">
@@ -711,6 +763,13 @@
   <code>(set-label ${label})</code>
   <input type="optionlist" name="label">
      <dynamic func="e_mail_labels_get_filter_options_without_none"/>
+  </input>
+ </part>
+ <part name="unset-label">
+  <_title>Unset Label</_title>
+  <code func="e_mail_labels_get_unset_filter_code"></code>
+  <input type="optionlist" name="label">
+     <dynamic func="e_mail_labels_get_filter_options_with_all"/>
   </input>
  </part>
  <part name="colour">
@@ -783,6 +842,10 @@
     <_title>Junk</_title>
    </option>
   </input>
+ </part>
+ <part name="learn-junk">
+  <_title>Learn as Junk</_title>
+  <code>(set-system-flag "junklearn") (set-system-flag "junk")</code>
  </part>
  <part name="beep">
   <_title>Beep</_title>

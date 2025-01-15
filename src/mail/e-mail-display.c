@@ -30,6 +30,7 @@
 #include <em-format/e-mail-formatter-enumtypes.h>
 #include <em-format/e-mail-formatter-extension.h>
 #include <em-format/e-mail-formatter-print.h>
+#include <em-format/e-mail-formatter-utils.h>
 #include <em-format/e-mail-part-attachment.h>
 #include <em-format/e-mail-part-utils.h>
 
@@ -48,10 +49,6 @@
 
 #define d(x)
 
-#define E_MAIL_DISPLAY_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_DISPLAY, EMailDisplayPrivate))
-
 typedef enum {
 	E_ATTACHMENT_FLAG_VISIBLE	= (1 << 0),
 	E_ATTACHMENT_FLAG_ZOOMED_TO_100	= (1 << 1)
@@ -66,7 +63,9 @@ struct _EMailDisplayPrivate {
 	EAttachmentStore *attachment_store;
 	EAttachmentView *attachment_view;
 	GHashTable *attachment_flags; /* EAttachment * ~> guint bit-or of EAttachmentFlags */
+	GHashTable *cid_attachments; /* gchar *cid ~> EAttachemnt *; these are not part of the attachment store */
 	guint attachment_inline_ui_id;
+	guint open_with_ui_id;
 
 	GtkActionGroup *attachment_inline_group;
 	GtkActionGroup *attachment_accel_action_group;
@@ -79,16 +78,22 @@ struct _EMailDisplayPrivate {
 	gboolean headers_collapsable;
 	gboolean headers_collapsed;
 	gboolean force_image_load;
+	gboolean has_secured_parts;
+	gboolean skip_insecure_parts;
+
+	GSList *insecure_part_ids;
 
 	GSettings *settings;
 
 	guint scheduled_reload;
+	guint iframes_height_update_id;
 
 	GHashTable *old_settings;
 
 	GMutex remote_content_lock;
 	EMailRemoteContent *remote_content;
 	GHashTable *skipped_remote_content_sites;
+	GHashTable *temporary_allow_remote_content; /* complete uri or site  */
 
 	guint32 magic_spacebar_state; /* bit-or of EMagicSpacebarFlags */
 };
@@ -107,6 +112,7 @@ enum {
 
 enum {
 	REMOTE_CONTENT_CLICKED,
+	AUTOCRYPT_IMPORT_CLICKED,
 	LAST_SIGNAL
 };
 
@@ -116,6 +122,7 @@ static CamelDataCache *emd_global_http_cache = NULL;
 static void e_mail_display_cid_resolver_init (ECidResolverInterface *iface);
 
 G_DEFINE_TYPE_WITH_CODE (EMailDisplay, e_mail_display, E_TYPE_WEB_VIEW,
+	G_ADD_PRIVATE (EMailDisplay)
 	G_IMPLEMENT_INTERFACE (E_TYPE_CID_RESOLVER, e_mail_display_cid_resolver_init))
 
 static const gchar *ui =
@@ -126,10 +133,14 @@ static const gchar *ui =
 "      <menuitem action='send-reply'/>"
 "    </placeholder>"
 "    <placeholder name='custom-actions-3'>"
+"      <menuitem action='allow-remote-content-site'/>"
+"      <menuitem action='load-remote-content-site'/>"
+"      <menuitem action='load-remote-content-this'/>"
 "      <menu action='search-folder-menu'>"
 "        <menuitem action='search-folder-recipient'/>"
 "        <menuitem action='search-folder-sender'/>"
 "      </menu>"
+"      <placeholder name='open-actions'/>"
 "    </placeholder>"
 "  </popup>"
 "</ui>";
@@ -193,7 +204,7 @@ static void
 e_mail_display_claim_skipped_uri (EMailDisplay *mail_display,
 				  const gchar *uri)
 {
-	SoupURI *soup_uri;
+	GUri *guri;
 	const gchar *site;
 
 	g_return_if_fail (E_IS_MAIL_DISPLAY (mail_display));
@@ -203,11 +214,11 @@ e_mail_display_claim_skipped_uri (EMailDisplay *mail_display,
 	if (!g_settings_get_boolean (mail_display->priv->settings, "notify-remote-content"))
 		return;
 
-	soup_uri = soup_uri_new (uri);
-	if (!soup_uri)
+	guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+	if (!guri)
 		return;
 
-	site = soup_uri_get_host (soup_uri);
+	site = g_uri_get_host (guri);
 	if (site && *site) {
 		g_mutex_lock (&mail_display->priv->remote_content_lock);
 
@@ -218,7 +229,7 @@ e_mail_display_claim_skipped_uri (EMailDisplay *mail_display,
 		g_mutex_unlock (&mail_display->priv->remote_content_lock);
 	}
 
-	soup_uri_free (soup_uri);
+	g_uri_unref (guri);
 }
 
 static void
@@ -235,7 +246,7 @@ static gboolean
 e_mail_display_can_download_uri (EMailDisplay *mail_display,
 				 const gchar *uri)
 {
-	SoupURI *soup_uri;
+	GUri *guri;
 	const gchar *site;
 	gboolean can_download = FALSE;
 	EMailRemoteContent *remote_content;
@@ -243,21 +254,37 @@ e_mail_display_can_download_uri (EMailDisplay *mail_display,
 	g_return_val_if_fail (E_IS_MAIL_DISPLAY (mail_display), FALSE);
 	g_return_val_if_fail (uri != NULL, FALSE);
 
+	g_mutex_lock (&mail_display->priv->remote_content_lock);
+	can_download = g_hash_table_contains (mail_display->priv->temporary_allow_remote_content, uri);
+	if (!can_download && g_str_has_prefix (uri, "evo-"))
+		can_download = g_hash_table_contains (mail_display->priv->temporary_allow_remote_content, uri + 4);
+	g_mutex_unlock (&mail_display->priv->remote_content_lock);
+
+	if (can_download)
+		return can_download;
+
 	remote_content = e_mail_display_ref_remote_content (mail_display);
 	if (!remote_content)
 		return FALSE;
 
-	soup_uri = soup_uri_new (uri);
-	if (!soup_uri) {
+	guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+	if (!guri) {
 		g_object_unref (remote_content);
 		return FALSE;
 	}
 
-	site = soup_uri_get_host (soup_uri);
-	if (site && *site)
+	site = g_uri_get_host (guri);
+	if (site && *site) {
 		can_download = e_mail_remote_content_has_site (remote_content, site);
 
-	soup_uri_free (soup_uri);
+		if (!can_download) {
+			g_mutex_lock (&mail_display->priv->remote_content_lock);
+			can_download = g_hash_table_contains (mail_display->priv->temporary_allow_remote_content, site);
+			g_mutex_unlock (&mail_display->priv->remote_content_lock);
+		}
+	}
+
+	g_uri_unref (guri);
 
 	if (!can_download && mail_display->priv->part_list) {
 		CamelMimeMessage *message;
@@ -537,6 +564,43 @@ initialize_web_view_colors (EMailDisplay *display,
 		e_web_view_get_cancellable (E_WEB_VIEW (display)));
 }
 
+static gboolean
+mail_display_can_use_frame_flattening (void)
+{
+	guint wk_major, wk_minor;
+
+	wk_major = webkit_get_major_version ();
+	wk_minor = webkit_get_minor_version ();
+
+	/* The 2.38 is the last version, which supports frame-flattening;
+	   prefer it over the manual and expensive calculations. */
+	return (wk_major < 2) || (wk_major == 2 && wk_minor <= 38);
+}
+
+static gboolean
+mail_display_iframes_height_update_cb (gpointer user_data)
+{
+	EMailDisplay *mail_display = user_data;
+
+	mail_display->priv->iframes_height_update_id = 0;
+
+	e_web_view_jsc_run_script (WEBKIT_WEB_VIEW (mail_display), e_web_view_get_cancellable (E_WEB_VIEW (mail_display)),
+		"Evo.MailDisplayUpdateIFramesHeight();");
+
+	return G_SOURCE_REMOVE;
+}
+
+static void
+mail_display_schedule_iframes_height_update (EMailDisplay *mail_display)
+{
+	if (mail_display_can_use_frame_flattening ())
+		return;
+
+	if (mail_display->priv->iframes_height_update_id)
+		g_source_remove (mail_display->priv->iframes_height_update_id);
+	mail_display->priv->iframes_height_update_id = g_timeout_add (100, mail_display_iframes_height_update_cb, mail_display);
+}
+
 static void
 mail_display_change_one_attachment_visibility (EMailDisplay *display,
 					       EAttachment *attachment,
@@ -756,6 +820,101 @@ static GtkActionEntry attachment_inline_entries[] = {
 };
 
 static void
+mail_display_allow_remote_content_site_cb (GtkAction *action,
+					   EMailDisplay *display)
+{
+	EMailRemoteContent *remote_content;
+	GUri *img_uri;
+	const gchar *cursor_image_source;
+
+	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
+
+	cursor_image_source = e_web_view_get_cursor_image_src (E_WEB_VIEW (display));
+	if (!cursor_image_source)
+		return;
+
+	remote_content = e_mail_display_ref_remote_content (display);
+	if (!remote_content)
+		return;
+
+	img_uri = g_uri_parse (cursor_image_source, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+	if (img_uri && g_uri_get_host (img_uri)) {
+		e_mail_remote_content_add_site (remote_content, g_uri_get_host (img_uri));
+		e_mail_display_reload (display);
+	}
+
+	g_clear_pointer (&img_uri, g_uri_unref);
+	g_clear_object (&remote_content);
+}
+
+static void
+mail_display_load_remote_content_site_cb (GtkAction *action,
+					  EMailDisplay *display)
+{
+	GUri *img_uri;
+	const gchar *cursor_image_source;
+
+	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
+
+	cursor_image_source = e_web_view_get_cursor_image_src (E_WEB_VIEW (display));
+	if (!cursor_image_source)
+		return;
+
+	img_uri = g_uri_parse (cursor_image_source, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+	if (img_uri && g_uri_get_host (img_uri)) {
+		g_mutex_lock (&display->priv->remote_content_lock);
+		g_hash_table_add (display->priv->temporary_allow_remote_content, g_strdup (g_uri_get_host (img_uri)));
+		g_mutex_unlock (&display->priv->remote_content_lock);
+
+		e_mail_display_reload (display);
+	}
+
+	g_clear_pointer (&img_uri, g_uri_unref);
+}
+
+static void
+mail_display_load_remote_content_this_cb (GtkAction *action,
+					  EMailDisplay *display)
+{
+	const gchar *cursor_image_source;
+
+	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
+
+	cursor_image_source = e_web_view_get_cursor_image_src (E_WEB_VIEW (display));
+	if (cursor_image_source) {
+		g_mutex_lock (&display->priv->remote_content_lock);
+		g_hash_table_add (display->priv->temporary_allow_remote_content, g_strdup (cursor_image_source));
+		g_mutex_unlock (&display->priv->remote_content_lock);
+
+		e_mail_display_reload (display);
+	}
+}
+
+static GtkActionEntry image_entries[] = {
+
+	{ "allow-remote-content-site",
+	  NULL,
+	  "Allow remote content from...", /* placeholder text, do not localize */
+	  NULL,
+	  NULL,
+	  G_CALLBACK (mail_display_allow_remote_content_site_cb) },
+
+	{ "load-remote-content-site",
+	  NULL,
+	  "Load remote content from...", /* placeholder text, do not localize */
+	  NULL,
+	  NULL,
+	  G_CALLBACK (mail_display_load_remote_content_site_cb) },
+
+	{ "load-remote-content-this",
+	  NULL,
+	  N_("Load this image"),
+	  NULL,
+	  NULL,
+	  G_CALLBACK (mail_display_load_remote_content_this_cb) }
+};
+
+static void
 call_attachment_save_handle_error (GObject *source_object,
 				   GAsyncResult *result,
 				   gpointer user_data)
@@ -787,7 +946,7 @@ mail_display_open_attachment (EMailDisplay *display,
 			attachment, default_app, (GAsyncReadyCallback)
 			e_attachment_open_handle_error, parent);
 
-		g_object_unref (default_app);
+		g_clear_object (&default_app);
 	} else {
 		/* ...or save it */
 		GList *attachments;
@@ -1066,19 +1225,23 @@ mail_display_attachment_inline_update_actions (EMailDisplay *display)
 
 	if (attachments && attachments->data && !attachments->next) {
 		EAttachment *attachment;
-		gchar *mime_type;
 		guint32 flags;
 
 		attachment = attachments->data;
-		mime_type = e_attachment_dup_mime_type (attachment);
 		can_show = e_attachment_get_can_show (attachment);
-		is_image = can_show && mime_type && g_ascii_strncasecmp (mime_type, "image/", 6) == 0;
+
+		if (can_show) {
+			gchar *mime_type;
+
+			mime_type = e_attachment_dup_mime_type (attachment);
+			is_image = mime_type && g_ascii_strncasecmp (mime_type, "image/", 6) == 0;
+
+			g_free (mime_type);
+		}
 
 		flags = GPOINTER_TO_UINT (g_hash_table_lookup (display->priv->attachment_flags, attachment));
 		shown = (flags & E_ATTACHMENT_FLAG_VISIBLE) != 0;
 		zoomed_to_100 = (flags & E_ATTACHMENT_FLAG_ZOOMED_TO_100) != 0;
-
-		g_free (mime_type);
 	}
 	g_list_free_full (attachments, g_object_unref);
 
@@ -1244,6 +1407,69 @@ mail_display_remote_content_clicked_cb (EWebView *web_view,
 }
 
 static void
+mail_display_autocrypt_import_clicked_cb (EWebView *web_view,
+					  const gchar *iframe_id,
+					  const gchar *element_id,
+					  const gchar *element_class,
+					  const gchar *element_value,
+					  const GtkAllocation *element_position,
+					  gpointer user_data)
+{
+	g_return_if_fail (E_IS_MAIL_DISPLAY (web_view));
+
+	g_signal_emit (web_view, signals[AUTOCRYPT_IMPORT_CLICKED], 0, element_position, NULL);
+}
+
+static void
+mail_display_manage_insecure_parts_clicked_cb (EWebView *web_view,
+					       const gchar *iframe_id,
+					       const gchar *element_id,
+					       const gchar *element_class,
+					       const gchar *element_value,
+					       const GtkAllocation *element_position,
+					       gpointer user_data)
+{
+	EMailDisplay *mail_display;
+	const gchar *part_id_prefix = element_value;
+	GSList *link;
+	GString *jsc_cmd;
+
+	g_return_if_fail (E_IS_MAIL_DISPLAY (web_view));
+	g_return_if_fail (element_id != NULL);
+	g_return_if_fail (element_value != NULL);
+
+	mail_display = E_MAIL_DISPLAY (web_view);
+
+	if (!mail_display->priv->insecure_part_ids)
+		return;
+
+	mail_display->priv->skip_insecure_parts = !g_str_has_prefix (element_id, "show:");
+
+	jsc_cmd = g_string_new ("");
+
+	e_web_view_jsc_printf_script_gstring (jsc_cmd,
+		"Evo.MailDisplayManageInsecureParts(%s,%s,%x,[",
+		iframe_id,
+		part_id_prefix,
+		!mail_display->priv->skip_insecure_parts);
+
+	for (link = mail_display->priv->insecure_part_ids; link; link = g_slist_next (link)) {
+		const gchar *part_id = link->data;
+
+		if (link != mail_display->priv->insecure_part_ids)
+			g_string_append_c (jsc_cmd, ',');
+
+		e_web_view_jsc_printf_script_gstring (jsc_cmd, "%s", part_id);
+	}
+
+	g_string_append (jsc_cmd, "]);");
+
+	e_web_view_jsc_run_script_take (WEBKIT_WEB_VIEW (web_view),
+		g_string_free (jsc_cmd, FALSE),
+		e_web_view_get_cancellable (web_view));
+}
+
+static void
 mail_display_load_changed_cb (WebKitWebView *wk_web_view,
 			      WebKitLoadEvent load_event,
 			      gpointer user_data)
@@ -1258,6 +1484,7 @@ mail_display_load_changed_cb (WebKitWebView *wk_web_view,
 		display->priv->magic_spacebar_state = 0;
 		e_mail_display_cleanup_skipped_uris (display);
 		e_attachment_store_remove_all (display->priv->attachment_store);
+		g_hash_table_remove_all (display->priv->cid_attachments);
 	}
 }
 
@@ -1267,11 +1494,32 @@ mail_display_content_loaded_cb (EWebView *web_view,
 				gpointer user_data)
 {
 	EMailDisplay *mail_display;
+	GList *attachments, *link;
 	gchar *citation_color = NULL;
 
 	g_return_if_fail (E_IS_MAIL_DISPLAY (web_view));
 
 	mail_display = E_MAIL_DISPLAY (web_view);
+
+	attachments = e_attachment_store_get_attachments (mail_display->priv->attachment_store);
+
+	for (link = attachments; link; link = g_list_next (link)) {
+		EAttachment *attachment = link->data;
+
+		if (e_attachment_get_can_show (attachment)) {
+			gchar *mime_type;
+
+			mime_type = e_attachment_dup_mime_type (attachment);
+
+			if (mime_type && g_ascii_strncasecmp (mime_type, "image/", 6) == 0 &&
+			    !webkit_web_view_can_show_mime_type (WEBKIT_WEB_VIEW (web_view), mime_type))
+				e_attachment_set_can_show (attachment, FALSE);
+
+			g_free (mime_type);
+		}
+	}
+
+	g_list_free_full (attachments, g_object_unref);
 
 	initialize_web_view_colors (mail_display, iframe_id);
 
@@ -1282,6 +1530,10 @@ mail_display_content_loaded_cb (EWebView *web_view,
 			mail_display_attachment_menu_clicked_cb, NULL);
 		e_web_view_register_element_clicked (web_view, "__evo-remote-content-img",
 			mail_display_remote_content_clicked_cb, NULL);
+		e_web_view_register_element_clicked (web_view, "manage-insecure-parts",
+			mail_display_manage_insecure_parts_clicked_cb, NULL);
+		e_web_view_register_element_clicked (web_view, "__evo-autocrypt-import-img",
+			mail_display_autocrypt_import_clicked_cb, NULL);
 	}
 
 	if (g_settings_get_boolean (mail_display->priv->settings, "mark-citations")) {
@@ -1306,7 +1558,7 @@ mail_display_content_loaded_cb (EWebView *web_view,
 	if (mail_display->priv->part_list) {
 		if (!iframe_id || !*iframe_id) {
 			GQueue queue = G_QUEUE_INIT;
-			GList *head, *link;
+			GList *head;
 
 			e_mail_part_list_queue_parts (mail_display->priv->part_list, NULL, &queue);
 			head = g_queue_peek_head_link (&queue);
@@ -1328,6 +1580,27 @@ mail_display_content_loaded_cb (EWebView *web_view,
 				e_mail_part_content_loaded (part, web_view, iframe_id);
 
 			g_clear_object (&part);
+		}
+
+		if (mail_display->priv->has_secured_parts &&
+		    mail_display->priv->skip_insecure_parts) {
+			GSList *slink;
+
+			for (slink = mail_display->priv->insecure_part_ids; slink; slink = g_slist_next (slink)) {
+				e_web_view_jsc_set_element_hidden (WEBKIT_WEB_VIEW (web_view),
+					"*", slink->data, TRUE,
+					e_web_view_get_cancellable (web_view));
+			}
+		}
+
+		if (e_mail_part_list_get_autocrypt_keys (mail_display->priv->part_list)) {
+			e_web_view_jsc_set_element_hidden (WEBKIT_WEB_VIEW (web_view),
+				"", "__evo-autocrypt-import-img-small", FALSE,
+				e_web_view_get_cancellable (web_view));
+
+			e_web_view_jsc_set_element_hidden (WEBKIT_WEB_VIEW (web_view),
+				"", "__evo-autocrypt-import-img-large", FALSE,
+				e_web_view_get_cancellable (web_view));
 		}
 	}
 
@@ -1353,6 +1626,8 @@ mail_display_content_loaded_cb (EWebView *web_view,
 			gtk_widget_grab_focus (widget);
 		}
 	}
+
+	mail_display_schedule_iframes_height_update (mail_display);
 }
 
 static void
@@ -1466,40 +1741,43 @@ mail_display_get_property (GObject *object,
 static void
 mail_display_dispose (GObject *object)
 {
-	EMailDisplayPrivate *priv;
+	EMailDisplay *self = E_MAIL_DISPLAY (object);
 
-	priv = E_MAIL_DISPLAY_GET_PRIVATE (object);
-
-	if (priv->scheduled_reload > 0) {
-		g_source_remove (priv->scheduled_reload);
-		priv->scheduled_reload = 0;
+	if (self->priv->scheduled_reload > 0) {
+		g_source_remove (self->priv->scheduled_reload);
+		self->priv->scheduled_reload = 0;
 	}
 
-	if (priv->settings != NULL) {
+	if (self->priv->iframes_height_update_id > 0) {
+		g_source_remove (self->priv->iframes_height_update_id);
+		self->priv->iframes_height_update_id = 0;
+	}
+
+	if (self->priv->settings != NULL) {
 		g_signal_handlers_disconnect_matched (
-			priv->settings, G_SIGNAL_MATCH_DATA,
+			self->priv->settings, G_SIGNAL_MATCH_DATA,
 			0, 0, NULL, NULL, object);
 	}
 
-	if (priv->attachment_store) {
+	if (self->priv->attachment_store) {
 		/* To have called the mail_display_attachment_removed_cb() before it's disconnected */
-		e_attachment_store_remove_all (priv->attachment_store);
+		e_attachment_store_remove_all (self->priv->attachment_store);
 
-		g_signal_handlers_disconnect_by_func (priv->attachment_store,
+		g_signal_handlers_disconnect_by_func (self->priv->attachment_store,
 			G_CALLBACK (mail_display_attachment_added_cb), object);
 
-		g_signal_handlers_disconnect_by_func (priv->attachment_store,
+		g_signal_handlers_disconnect_by_func (self->priv->attachment_store,
 			G_CALLBACK (mail_display_attachment_removed_cb), object);
 	}
 
-	g_clear_object (&priv->part_list);
-	g_clear_object (&priv->formatter);
-	g_clear_object (&priv->settings);
-	g_clear_object (&priv->attachment_store);
-	g_clear_object (&priv->attachment_view);
-	g_clear_object (&priv->attachment_inline_group);
-	g_clear_object (&priv->attachment_accel_action_group);
-	g_clear_object (&priv->attachment_accel_group);
+	g_clear_object (&self->priv->part_list);
+	g_clear_object (&self->priv->formatter);
+	g_clear_object (&self->priv->settings);
+	g_clear_object (&self->priv->attachment_store);
+	g_clear_object (&self->priv->attachment_view);
+	g_clear_object (&self->priv->attachment_inline_group);
+	g_clear_object (&self->priv->attachment_accel_action_group);
+	g_clear_object (&self->priv->attachment_accel_group);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_mail_display_parent_class)->dispose (object);
@@ -1508,17 +1786,19 @@ mail_display_dispose (GObject *object)
 static void
 mail_display_finalize (GObject *object)
 {
-	EMailDisplayPrivate *priv;
+	EMailDisplay *self = E_MAIL_DISPLAY (object);
 
-	priv = E_MAIL_DISPLAY_GET_PRIVATE (object);
-	g_clear_pointer (&priv->old_settings, g_hash_table_destroy);
+	g_clear_pointer (&self->priv->old_settings, g_hash_table_destroy);
 
-	g_mutex_lock (&priv->remote_content_lock);
-	g_clear_pointer (&priv->skipped_remote_content_sites, g_hash_table_destroy);
-	g_hash_table_destroy (priv->attachment_flags);
-	g_clear_object (&priv->remote_content);
-	g_mutex_unlock (&priv->remote_content_lock);
-	g_mutex_clear (&priv->remote_content_lock);
+	g_mutex_lock (&self->priv->remote_content_lock);
+	g_clear_pointer (&self->priv->skipped_remote_content_sites, g_hash_table_destroy);
+	g_clear_pointer (&self->priv->temporary_allow_remote_content, g_hash_table_destroy);
+	g_slist_free_full (self->priv->insecure_part_ids, g_free);
+	g_hash_table_destroy (self->priv->attachment_flags);
+	g_hash_table_destroy (self->priv->cid_attachments);
+	g_clear_object (&self->priv->remote_content);
+	g_mutex_unlock (&self->priv->remote_content_lock);
+	g_mutex_clear (&self->priv->remote_content_lock);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_mail_display_parent_class)->finalize (object);
@@ -1600,6 +1880,18 @@ mail_display_magic_spacebar_state_changed_cb (WebKitUserContentManager *manager,
 }
 
 static void
+mail_display_schedule_iframes_height_update_cb (WebKitUserContentManager *manager,
+						WebKitJavascriptResult *js_result,
+						gpointer user_data)
+{
+	EMailDisplay *mail_display = user_data;
+
+	g_return_if_fail (mail_display != NULL);
+
+	mail_display_schedule_iframes_height_update (mail_display);
+}
+
+static void
 mail_display_constructed (GObject *object)
 {
 	EContentRequest *content_request;
@@ -1611,9 +1903,11 @@ mail_display_constructed (GObject *object)
 	/* Chain up to parent's constructed() method. */
 	G_OBJECT_CLASS (e_mail_display_parent_class)->constructed (object);
 
-	g_object_set (webkit_web_view_get_settings (WEBKIT_WEB_VIEW (object)),
-		"enable-frame-flattening", TRUE,
-		NULL);
+	if (mail_display_can_use_frame_flattening ()) {
+		g_object_set (webkit_web_view_get_settings (WEBKIT_WEB_VIEW (object)),
+			"enable-frame-flattening", TRUE,
+			NULL);
+	}
 
 	display = E_MAIL_DISPLAY (object);
 	web_view = E_WEB_VIEW (object);
@@ -1661,8 +1955,12 @@ mail_display_constructed (GObject *object)
 	g_signal_connect_object (manager, "script-message-received::mailDisplayMagicSpacebarStateChanged",
 		G_CALLBACK (mail_display_magic_spacebar_state_changed_cb), display, 0);
 
+	g_signal_connect_object (manager, "script-message-received::scheduleIFramesHeightUpdate",
+		G_CALLBACK (mail_display_schedule_iframes_height_update_cb), display, 0);
+
 	webkit_user_content_manager_register_script_message_handler (manager, "mailDisplayHeadersCollapsed");
 	webkit_user_content_manager_register_script_message_handler (manager, "mailDisplayMagicSpacebarStateChanged");
+	webkit_user_content_manager_register_script_message_handler (manager, "scheduleIFramesHeightUpdate");
 
 	e_extensible_load_extensions (E_EXTENSIBLE (object));
 }
@@ -1688,14 +1986,279 @@ mail_display_style_updated (GtkWidget *widget)
 		style_updated (widget);
 }
 
+static gboolean
+mail_display_image_exists_in_cache (const gchar *uri,
+				    gchar **out_cache_filename)
+{
+	gchar *filename;
+	gchar *hash;
+	gboolean exists = FALSE;
+
+	if (out_cache_filename)
+		*out_cache_filename = NULL;
+
+	if (!emd_global_http_cache | !uri)
+		return FALSE;
+
+	if (g_str_has_prefix (uri, "evo-"))
+		uri += 4;
+
+	hash = e_http_request_util_compute_uri_checksum (uri);
+	filename = camel_data_cache_get_filename (emd_global_http_cache, "http", hash);
+
+	if (filename != NULL) {
+		struct stat st;
+
+		exists = g_file_test (filename, G_FILE_TEST_EXISTS);
+		if (exists && g_stat (filename, &st) == 0) {
+			exists = st.st_size != 0;
+			if (exists && out_cache_filename) {
+				*out_cache_filename = filename;
+				filename = NULL;
+			}
+		} else {
+			exists = FALSE;
+		}
+		g_free (filename);
+	}
+
+	g_free (hash);
+
+	return exists;
+}
+
+static void
+mail_display_action_open_with_app_info_cb (GtkAction *action,
+					   EMailDisplay *mail_display)
+{
+	EAttachment *attachment;
+	GAppInfo *app_info;
+	gpointer parent;
+
+	parent = gtk_widget_get_toplevel (GTK_WIDGET (mail_display));
+	parent = gtk_widget_is_toplevel (parent) ? parent : NULL;
+
+	attachment = g_object_get_data (G_OBJECT (action), "attachment");
+	app_info = g_object_get_data (G_OBJECT (action), "app-info");
+
+	if (!app_info && !e_util_is_running_flatpak ()) {
+		GtkWidget *dialog;
+		GFileInfo *file_info;
+		const gchar *content_type;
+
+		file_info = e_attachment_ref_file_info (attachment);
+		g_return_if_fail (file_info != NULL);
+
+		content_type = g_file_info_get_content_type (file_info);
+
+		dialog = gtk_app_chooser_dialog_new_for_content_type (parent, 0, content_type);
+		if (gtk_dialog_run (GTK_DIALOG (dialog)) == GTK_RESPONSE_OK) {
+			GtkAppChooser *app_chooser = GTK_APP_CHOOSER (dialog);
+			app_info = gtk_app_chooser_get_app_info (app_chooser);
+		}
+
+		gtk_widget_destroy (dialog);
+		g_object_unref (file_info);
+	} else if (app_info) {
+		g_object_ref (app_info);
+	}
+
+	if (app_info) {
+		e_attachment_open_async (
+			attachment, app_info, (GAsyncReadyCallback)
+			e_attachment_open_handle_error, parent);
+		g_object_unref (app_info);
+	}
+}
+
+static void
+mai_display_fill_open_with (EWebView *web_view,
+			    const gchar *attachment_id)
+{
+	EMailDisplay *mail_display = E_MAIL_DISPLAY (web_view);
+	EAttachment *attachment;
+	GtkActionGroup *action_group;
+	GtkUIManager *ui_manager;
+	GList *apps, *link;
+
+	g_warn_if_fail (mail_display->priv->open_with_ui_id == 0);
+
+	attachment = g_hash_table_lookup (mail_display->priv->cid_attachments, attachment_id);
+	if (attachment) {
+		g_object_ref (attachment);
+	} else {
+		gchar *cache_filename = NULL;
+
+		if (g_ascii_strncasecmp (attachment_id, "cid:", 4) == 0) {
+			CamelMimePart *mime_part;
+
+			mime_part = e_cid_resolver_ref_part (E_CID_RESOLVER (mail_display), attachment_id);
+			if (!mime_part)
+				return;
+
+			attachment = e_attachment_new ();
+			e_attachment_set_mime_part (attachment, mime_part);
+
+			g_object_unref (mime_part);
+		} else if (mail_display_image_exists_in_cache (attachment_id, &cache_filename)) {
+			attachment = e_attachment_new_for_path (cache_filename);
+			g_free (cache_filename);
+		} else {
+			return;
+		}
+
+		/* To have set the file_info, which is used to get the list of apps */
+		e_attachment_load (attachment, NULL);
+
+		g_hash_table_insert (mail_display->priv->cid_attachments, g_strdup (attachment_id), g_object_ref (attachment));
+	}
+
+	ui_manager = e_web_view_get_ui_manager (web_view);
+	action_group = e_web_view_get_action_group (web_view, "image");
+	apps = e_attachment_list_apps (attachment);
+
+	if (!apps && e_util_is_running_flatpak ())
+		apps = g_list_prepend (apps, NULL);
+
+	for (link = apps; link; link = g_list_next (link)) {
+		GAppInfo *app_info = link->data;
+		GtkAction *action;
+		GIcon *app_icon;
+		const gchar *app_id;
+		const gchar *app_name;
+		gchar *action_tooltip;
+		gchar *action_label;
+		gchar *action_name;
+
+		if (app_info) {
+			app_id = g_app_info_get_id (app_info);
+			app_icon = g_app_info_get_icon (app_info);
+			app_name = g_app_info_get_name (app_info);
+		} else {
+			app_id = "org.gnome.evolution.flatpak.default-app";
+			app_icon = NULL;
+			app_name = NULL;
+		}
+
+		if (app_id == NULL)
+			continue;
+
+		/* Don't list 'Open With "Evolution"'. */
+		if (g_str_equal (app_id, "org.gnome.Evolution.desktop"))
+			continue;
+
+		action_name = g_strdup_printf ("mail-display-open-with-%s", app_id);
+
+		if (app_info) {
+			action_label = g_strdup_printf (_("Open With “%s”"), app_name);
+			action_tooltip = g_strdup_printf (_("Open this attachment in %s"), app_name);
+		} else {
+			action_label = g_strdup (_("Open With Default Application"));
+			action_tooltip = g_strdup (_("Open this attachment in default application"));
+		}
+
+		action = gtk_action_new (action_name, action_label, action_tooltip, NULL);
+
+		gtk_action_set_gicon (action, app_icon);
+
+		if (app_info) {
+			g_object_set_data_full (G_OBJECT (action), "app-info",
+				g_object_ref (app_info), g_object_unref);
+		}
+
+		g_object_set_data_full (G_OBJECT (action), "attachment",
+			g_object_ref (attachment), g_object_unref);
+
+		g_signal_connect (action, "activate",
+			G_CALLBACK (mail_display_action_open_with_app_info_cb), mail_display);
+
+		gtk_action_group_add_action (action_group, action);
+
+		if (!mail_display->priv->open_with_ui_id)
+			mail_display->priv->open_with_ui_id = gtk_ui_manager_new_merge_id (ui_manager);
+
+		gtk_ui_manager_add_ui (
+			ui_manager, mail_display->priv->open_with_ui_id,
+			"/context/custom-actions-3/open-actions", action_name,
+			action_name, GTK_UI_MANAGER_AUTO, FALSE);
+
+		g_free (action_name);
+		g_free (action_label);
+		g_free (action_tooltip);
+
+		if (!app_info) {
+			apps = g_list_remove (apps, app_info);
+			break;
+		}
+	}
+
+	if (link != apps && !e_util_is_running_flatpak ()) {
+		GtkAction *action;
+		const gchar *action_name = "mail-display-open-with-other";
+
+		action = gtk_action_new (action_name, _("Open With Other Application…"), NULL, NULL);
+
+		g_object_set_data_full (G_OBJECT (action), "attachment",
+			g_object_ref (attachment), g_object_unref);
+
+		g_signal_connect (action, "activate",
+			G_CALLBACK (mail_display_action_open_with_app_info_cb), mail_display);
+
+		gtk_action_group_add_action (action_group, action);
+
+		if (!mail_display->priv->open_with_ui_id)
+			mail_display->priv->open_with_ui_id = gtk_ui_manager_new_merge_id (ui_manager);
+
+		gtk_ui_manager_add_ui (
+			ui_manager, mail_display->priv->open_with_ui_id,
+			"/context/custom-actions-3/open-actions", action_name,
+			action_name, GTK_UI_MANAGER_AUTO, FALSE);
+	}
+
+	g_list_free_full (apps, g_object_unref);
+	g_object_unref (attachment);
+}
+
+static void
+mail_display_cleanup_open_with (EWebView *web_view)
+{
+	EMailDisplay *mail_display = E_MAIL_DISPLAY (web_view);
+	GtkActionGroup *action_group;
+	GList *actions, *link;
+
+	if (mail_display->priv->open_with_ui_id) {
+		GtkUIManager *ui_manager;
+
+		ui_manager = e_web_view_get_ui_manager (web_view);
+
+		gtk_ui_manager_remove_ui (ui_manager, mail_display->priv->open_with_ui_id);
+		mail_display->priv->open_with_ui_id = 0;
+	}
+
+	action_group = e_web_view_get_action_group (web_view, "image");
+	actions = gtk_action_group_list_actions (action_group);
+
+	for (link = actions; link; link = g_list_next (link)) {
+		GtkAction *action = link->data;
+		const gchar *name = gtk_action_get_name (action);
+		if (name && g_str_has_prefix (name, "mail-display-open-with-"))
+			gtk_action_group_remove_action (action_group, action);
+	}
+
+	g_list_free (actions);
+}
+
 static void
 mail_display_before_popup_event (EWebView *web_view,
 				 const gchar *uri)
 {
+	const gchar *cursor_image_source;
 	gchar *popup_iframe_src = NULL, *popup_iframe_id = NULL;
 	GList *list, *link;
 
 	e_web_view_get_last_popup_place (web_view, &popup_iframe_src, &popup_iframe_id, NULL, NULL);
+
+	mail_display_cleanup_open_with (web_view);
 
 	list = e_extensible_list_extensions (E_EXTENSIBLE (web_view), E_TYPE_EXTENSION);
 
@@ -1708,43 +2271,62 @@ mail_display_before_popup_event (EWebView *web_view,
 		e_mail_display_popup_extension_update_actions (E_MAIL_DISPLAY_POPUP_EXTENSION (extension), popup_iframe_src, popup_iframe_id);
 	}
 
+	cursor_image_source = e_web_view_get_cursor_image_src (web_view);
+	if (cursor_image_source) {
+		GtkAction *action;
+		GUri *img_uri;
+		gboolean img_is_available;
+		gboolean can_show;
+
+		mai_display_fill_open_with (web_view, cursor_image_source);
+
+		img_is_available = mail_display_image_exists_in_cache (cursor_image_source, NULL) ||
+			e_mail_display_can_download_uri (E_MAIL_DISPLAY (web_view), cursor_image_source);
+
+		img_uri = g_uri_parse (cursor_image_source, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+		can_show = !img_is_available && img_uri && g_uri_get_host (img_uri) && g_uri_get_scheme (img_uri) && (
+			g_ascii_strcasecmp (g_uri_get_scheme (img_uri), "http") == 0 ||
+			g_ascii_strcasecmp (g_uri_get_scheme (img_uri), "https") == 0 ||
+			g_ascii_strcasecmp (g_uri_get_scheme (img_uri), "evo-http") == 0 ||
+			g_ascii_strcasecmp (g_uri_get_scheme (img_uri), "evo-https") == 0);
+
+		action = e_web_view_get_action (web_view, "allow-remote-content-site");
+		gtk_action_set_sensitive (action, can_show);
+		gtk_action_set_visible (action, can_show);
+
+		if (can_show) {
+			gchar *label;
+
+			label = g_strdup_printf (_("Allow remote content from %s"), g_uri_get_host (img_uri));
+			gtk_action_set_label (action, label);
+			g_free (label);
+		}
+
+		action = e_web_view_get_action (web_view, "load-remote-content-site");
+		gtk_action_set_sensitive (action, can_show);
+		gtk_action_set_visible (action, can_show);
+
+		if (can_show) {
+			gchar *label;
+
+			label = g_strdup_printf (_("Load remote content from %s"), g_uri_get_host (img_uri));
+			gtk_action_set_label (action, label);
+			g_free (label);
+		}
+
+		action = e_web_view_get_action (web_view, "load-remote-content-this");
+		gtk_action_set_sensitive (action, can_show);
+		gtk_action_set_visible (action, can_show);
+
+		g_clear_pointer (&img_uri, g_uri_unref);
+	}
+
 	g_free (popup_iframe_src);
 	g_free (popup_iframe_id);
 	g_list_free (list);
 
 	/* Chain up to parent's method. */
 	E_WEB_VIEW_CLASS (e_mail_display_parent_class)->before_popup_event (web_view, uri);
-}
-
-static gboolean
-mail_display_image_exists_in_cache (const gchar *image_uri)
-{
-	gchar *filename;
-	gchar *hash;
-	gboolean exists = FALSE;
-
-	if (!emd_global_http_cache)
-		return FALSE;
-
-	hash = e_http_request_util_compute_uri_checksum (image_uri);
-	filename = camel_data_cache_get_filename (
-		emd_global_http_cache, "http", hash);
-
-	if (filename != NULL) {
-		struct stat st;
-
-		exists = g_file_test (filename, G_FILE_TEST_EXISTS);
-		if (exists && g_stat (filename, &st) == 0) {
-			exists = st.st_size != 0;
-		} else {
-			exists = FALSE;
-		}
-		g_free (filename);
-	}
-
-	g_free (hash);
-
-	return exists;
 }
 
 static void
@@ -1773,8 +2355,8 @@ mail_display_uri_requested_cb (EWebView *web_view,
 	if (uri_is_http) {
 		CamelFolder *folder;
 		const gchar *message_uid;
-		gchar *new_uri, *mail_uri;
-		SoupURI *soup_uri;
+		gchar *new_uri, *mail_uri, *query_str;
+		GUri *guri;
 		GHashTable *query;
 		gboolean can_download_uri;
 		EImageLoadingPolicy image_policy;
@@ -1782,8 +2364,7 @@ mail_display_uri_requested_cb (EWebView *web_view,
 		can_download_uri = e_mail_display_can_download_uri (display, uri);
 		if (!can_download_uri) {
 			/* Check Evolution's cache */
-			can_download_uri = mail_display_image_exists_in_cache (
-				uri + (g_str_has_prefix (uri, "evo-") ? 4 : 0));
+			can_download_uri = mail_display_image_exists_in_cache (uri, NULL);
 		}
 
 		/* If the URI is not cached and we are not allowed to load it
@@ -1803,10 +2384,10 @@ mail_display_uri_requested_cb (EWebView *web_view,
 		message_uid = e_mail_part_list_get_message_uid (part_list);
 
 		if (g_str_has_prefix (uri, "evo-")) {
-			soup_uri = soup_uri_new (uri);
+			guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
 		} else {
 			new_uri = g_strconcat ("evo-", uri, NULL);
-			soup_uri = soup_uri_new (new_uri);
+			guri = g_uri_parse (new_uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
 
 			g_free (new_uri);
 		}
@@ -1818,7 +2399,7 @@ mail_display_uri_requested_cb (EWebView *web_view,
 			g_str_hash, g_str_equal,
 			g_free, g_free);
 
-		if (soup_uri->query) {
+		if (g_uri_get_query (guri)) {
 			GHashTable *uri_query;
 			GHashTableIter iter;
 			gpointer key, value;
@@ -1826,7 +2407,7 @@ mail_display_uri_requested_cb (EWebView *web_view,
 			/* It's required to copy the hash table, because it's uncertain
 			   which of the key/value pair is freed and which not, while the code
 			   below expects to have freed both. */
-			uri_query = soup_form_decode (soup_uri->query);
+			uri_query = soup_form_decode (g_uri_get_query (guri));
 
 			g_hash_table_iter_init (&iter, uri_query);
 			while (g_hash_table_iter_next (&iter, &key, &value)) {
@@ -1836,9 +2417,9 @@ mail_display_uri_requested_cb (EWebView *web_view,
 			g_hash_table_unref (uri_query);
 		}
 
-		g_hash_table_insert (query, g_strdup ("__evo-mail"), soup_uri_encode (mail_uri, NULL));
+		g_hash_table_insert (query, g_strdup ("__evo-mail"), g_uri_escape_string (mail_uri, NULL, FALSE));
 
-		/* Required, because soup_uri_set_query_from_form() can change
+		/* Required, because soup_form_encode_hash() can change
 		   order of arguments, then the URL checksum doesn't match. */
 		g_hash_table_insert (query, g_strdup ("__evo-original-uri"), g_strdup (uri));
 
@@ -1851,11 +2432,13 @@ mail_display_uri_requested_cb (EWebView *web_view,
 			e_mail_display_claim_skipped_uri (display, uri);
 		}
 
-		soup_uri_set_query_from_form (soup_uri, query);
+		query_str = soup_form_encode_hash (query);
+		e_util_change_uri_component (&guri, SOUP_URI_QUERY, query_str);
+		g_free (query_str);
 
-		new_uri = soup_uri_to_string (soup_uri, FALSE);
+		new_uri = g_uri_to_string_partial (guri, G_URI_HIDE_PASSWORD);
 
-		soup_uri_free (soup_uri);
+		g_uri_unref (guri);
 		g_hash_table_unref (query);
 		g_free (mail_uri);
 
@@ -1895,7 +2478,7 @@ mail_display_suggest_filename (EWebView *web_view,
 {
 	EMailDisplay *display;
 	CamelMimePart *mime_part;
-	SoupURI *suri;
+	GUri *guri;
 
 	/* Note, this assumes the URI comes
 	 * from the currently loaded message. */
@@ -1906,14 +2489,14 @@ mail_display_suggest_filename (EWebView *web_view,
 	if (mime_part)
 		return g_strdup (camel_mime_part_get_filename (mime_part));
 
-	suri = soup_uri_new (uri);
-	if (suri) {
+	guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+	if (guri) {
 		gchar *filename = NULL;
 
-		if (suri->query) {
+		if (g_uri_get_query (guri)) {
 			GHashTable *uri_query;
 
-			uri_query = soup_form_decode (suri->query);
+			uri_query = soup_form_decode (g_uri_get_query (guri));
 			if (uri_query && g_hash_table_contains (uri_query, "filename"))
 				filename = g_strdup (g_hash_table_lookup (uri_query, "filename"));
 
@@ -1921,7 +2504,7 @@ mail_display_suggest_filename (EWebView *web_view,
 				g_hash_table_destroy (uri_query);
 		}
 
-		soup_uri_free (suri);
+		g_uri_unref (guri);
 
 		if (filename && *filename)
 			return filename;
@@ -2024,17 +2607,17 @@ mail_display_drag_data_get (GtkWidget *widget,
 	mime_part = camel_mime_part_from_cid (display, uri);
 
 	if (!mime_part && g_str_has_prefix (uri, "mail:")) {
-		SoupURI *soup_uri;
-		const gchar *soup_query;
+		GUri *guri;
+		const gchar *query_str;
 
-		soup_uri = soup_uri_new (uri);
-		if (soup_uri) {
-			soup_query = soup_uri_get_query (soup_uri);
-			if (soup_query) {
+		guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+		if (guri) {
+			query_str = g_uri_get_query (guri);
+			if (query_str) {
 				GHashTable *query;
 				const gchar *part_id_raw;
 
-				query = soup_form_decode (soup_query);
+				query = soup_form_decode (query_str);
 				part_id_raw = query ? g_hash_table_lookup (query, "part_id") : NULL;
 				if (part_id_raw && *part_id_raw) {
 					EMailPartList *part_list;
@@ -2042,9 +2625,9 @@ mail_display_drag_data_get (GtkWidget *widget,
 
 					part_list = e_mail_display_get_part_list (display);
 					if (part_list) {
-						gchar *part_id = soup_uri_decode (part_id_raw);
+						gchar *part_id = g_uri_unescape_string (part_id_raw, NULL);
 
-						mail_part = e_mail_part_list_ref_part (part_list, part_id);
+						mail_part = part_id ? e_mail_part_list_ref_part (part_list, part_id) : NULL;
 						g_free (part_id);
 
 						if (mail_part) {
@@ -2065,7 +2648,7 @@ mail_display_drag_data_get (GtkWidget *widget,
 					g_hash_table_unref (query);
 			}
 
-			soup_uri_free (soup_uri);
+			g_uri_unref (guri);
 		}
 	}
 
@@ -2108,12 +2691,13 @@ mail_display_drag_data_get (GtkWidget *widget,
 	g_free (uri);
 }
 
-static void
-e_mail_display_test_change_and_update_fonts_cb (EMailDisplay *mail_display,
-						const gchar *key,
-						GSettings *settings)
+static gboolean
+e_mail_display_test_key_changed (EMailDisplay *mail_display,
+				 const gchar *key,
+				 GSettings *settings)
 {
 	GVariant *new_value, *old_value;
+	gboolean changed = FALSE;
 
 	new_value = g_settings_get_value (settings, key);
 	old_value = g_hash_table_lookup (mail_display->priv->old_settings, key);
@@ -2124,14 +2708,35 @@ e_mail_display_test_change_and_update_fonts_cb (EMailDisplay *mail_display,
 		else
 			g_hash_table_remove (mail_display->priv->old_settings, key);
 
-		e_web_view_update_fonts (E_WEB_VIEW (mail_display));
+		changed = TRUE;
 	} else if (new_value) {
 		g_variant_unref (new_value);
 	}
+
+	return changed;
 }
 
 static void
-mail_display_web_process_crashed_cb (EMailDisplay *display)
+e_mail_display_test_change_and_update_fonts_cb (EMailDisplay *mail_display,
+						const gchar *key,
+						GSettings *settings)
+{
+	if (e_mail_display_test_key_changed (mail_display, key, settings))
+		e_web_view_update_fonts (E_WEB_VIEW (mail_display));
+}
+
+static void
+e_mail_display_test_change_and_reload_cb (EMailDisplay *mail_display,
+					  const gchar *key,
+					  GSettings *settings)
+{
+	if (e_mail_display_test_key_changed (mail_display, key, settings))
+		e_mail_display_reload (mail_display);
+}
+
+static void
+mail_display_web_process_terminated_cb (EMailDisplay *display,
+					WebKitWebProcessTerminationReason reason)
 {
 	EAlertSink *alert_sink;
 
@@ -2215,8 +2820,6 @@ e_mail_display_class_init (EMailDisplayClass *class)
 	EWebViewClass *web_view_class;
 	GtkWidgetClass *widget_class;
 
-	g_type_class_add_private (class, sizeof (EMailDisplayPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->constructed = mail_display_constructed;
 	object_class->set_property = mail_display_set_property;
@@ -2258,10 +2861,11 @@ e_mail_display_class_init (EMailDisplayClass *class)
 	g_object_class_install_property (
 		object_class,
 		PROP_FORMATTER,
-		g_param_spec_pointer (
+		g_param_spec_object (
 			"formatter",
 			"Mail Formatter",
 			NULL,
+			E_TYPE_MAIL_FORMATTER,
 			G_PARAM_READABLE |
 			G_PARAM_STATIC_STRINGS));
 
@@ -2329,6 +2933,16 @@ e_mail_display_class_init (EMailDisplayClass *class)
 		g_cclosure_marshal_VOID__BOXED,
 		G_TYPE_NONE, 1,
 		GDK_TYPE_RECTANGLE);
+
+	signals[AUTOCRYPT_IMPORT_CLICKED] = g_signal_new (
+		"autocrypt-import-clicked",
+		G_TYPE_FROM_CLASS (class),
+		G_SIGNAL_RUN_FIRST | G_SIGNAL_ACTION,
+		0,
+		NULL, NULL,
+		g_cclosure_marshal_VOID__BOXED,
+		G_TYPE_NONE, 1,
+		GDK_TYPE_RECTANGLE);
 }
 
 static void
@@ -2337,14 +2951,20 @@ e_mail_display_init (EMailDisplay *display)
 	GtkUIManager *ui_manager;
 	GtkActionGroup *actions;
 	GList *acts_list, *link;
+	GSettings *settings;
 
-	display->priv = E_MAIL_DISPLAY_GET_PRIVATE (display);
+	display->priv = e_mail_display_get_instance_private (display);
 
 	display->priv->attachment_store = E_ATTACHMENT_STORE (e_attachment_store_new ());
 	display->priv->attachment_flags = g_hash_table_new (g_direct_hash, g_direct_equal);
+	display->priv->cid_attachments = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_object_unref);
 	display->priv->attachment_inline_group = gtk_action_group_new ("e-mail-display-attachment-inline");
 	display->priv->attachment_accel_action_group = gtk_action_group_new ("e-mail-display-attachment-accel");
 	display->priv->attachment_accel_group = gtk_accel_group_new ();
+
+	settings = e_util_ref_settings ("org.gnome.evolution.mail");
+	display->priv->skip_insecure_parts = !g_settings_get_boolean (settings, "show-insecure-parts");
+	g_object_unref (settings);
 
 	gtk_action_group_add_actions (
 		display->priv->attachment_inline_group, attachment_inline_entries,
@@ -2383,8 +3003,8 @@ e_mail_display_init (EMailDisplay *display)
 	display->priv->scheduled_reload = 0;
 
 	g_signal_connect (
-		display, "web-process-crashed",
-		G_CALLBACK (mail_display_web_process_crashed_cb), NULL);
+		display, "web-process-terminated",
+		G_CALLBACK (mail_display_web_process_terminated_cb), NULL);
 
 	g_signal_connect (
 		display, "decide-policy",
@@ -2393,6 +3013,10 @@ e_mail_display_init (EMailDisplay *display)
 	g_signal_connect (
 		display, "process-mailto",
 		G_CALLBACK (mail_display_process_mailto), NULL);
+
+	g_signal_connect (
+		display, "resource-loaded",
+		G_CALLBACK (mail_display_schedule_iframes_height_update), NULL);
 
 	g_signal_connect_after (
 		display, "drag-data-get",
@@ -2408,6 +3032,9 @@ e_mail_display_init (EMailDisplay *display)
 	g_signal_connect_swapped (
 		display->priv->settings , "changed::use-custom-font",
 		G_CALLBACK (e_mail_display_test_change_and_update_fonts_cb), display);
+	g_signal_connect_swapped (
+		display->priv->settings , "changed::preview-unset-html-colors",
+		G_CALLBACK (e_mail_display_test_change_and_reload_cb), display);
 
 	g_signal_connect (
 		display, "load-changed",
@@ -2421,12 +3048,19 @@ e_mail_display_init (EMailDisplay *display)
 	gtk_action_group_add_actions (
 		actions, mailto_entries,
 		G_N_ELEMENTS (mailto_entries), display);
+
+	actions = e_web_view_get_action_group (E_WEB_VIEW (display), "image");
+	gtk_action_group_add_actions (
+		actions, image_entries,
+		G_N_ELEMENTS (image_entries), display);
+
 	ui_manager = e_web_view_get_ui_manager (E_WEB_VIEW (display));
 	gtk_ui_manager_add_ui_from_string (ui_manager, ui, -1, NULL);
 
 	g_mutex_init (&display->priv->remote_content_lock);
 	display->priv->remote_content = NULL;
 	display->priv->skipped_remote_content_sites = g_hash_table_new_full (camel_strcase_hash, camel_strcase_equal, g_free, NULL);
+	display->priv->temporary_allow_remote_content = g_hash_table_new_full (camel_strcase_hash, camel_strcase_equal, g_free, NULL);
 
 	g_signal_connect (display, "uri-requested", G_CALLBACK (mail_display_uri_requested_cb), NULL);
 
@@ -2650,6 +3284,10 @@ void
 e_mail_display_set_part_list (EMailDisplay *display,
                               EMailPartList *part_list)
 {
+	GSettings *settings;
+	GSList *insecure_part_ids = NULL;
+	gboolean has_secured_parts = FALSE;
+
 	g_return_if_fail (E_IS_MAIL_DISPLAY (display));
 
 	if (display->priv->part_list == part_list)
@@ -2664,6 +3302,52 @@ e_mail_display_set_part_list (EMailDisplay *display,
 		g_object_unref (display->priv->part_list);
 
 	display->priv->part_list = part_list;
+
+	if (part_list) {
+		GQueue queue = G_QUEUE_INIT;
+		GHashTable *secured_message_ids;
+		GList *link;
+
+		e_mail_part_list_queue_parts (part_list, NULL, &queue);
+
+		secured_message_ids = e_mail_formatter_utils_extract_secured_message_ids (g_queue_peek_head_link (&queue));
+		has_secured_parts = secured_message_ids != NULL;
+
+		if (has_secured_parts) {
+			gboolean has_encypted_part = FALSE;
+
+			for (link = g_queue_peek_head_link (&queue); link; link = g_list_next (link)) {
+				EMailPart *part = link->data;
+
+				if (!e_mail_formatter_utils_consider_as_secured_part (part, secured_message_ids))
+					continue;
+
+				if (!e_mail_part_has_validity (part)) {
+					insecure_part_ids = g_slist_prepend (insecure_part_ids, g_strdup (e_mail_part_get_id (part)));
+				} else if (e_mail_part_get_validity (part, E_MAIL_PART_VALIDITY_ENCRYPTED)) {
+					if (has_encypted_part) {
+						/* consider the second and following encrypted parts as evil */
+						insecure_part_ids = g_slist_prepend (insecure_part_ids, g_strdup (e_mail_part_get_id (part)));
+					} else {
+						has_encypted_part = TRUE;
+					}
+				}
+			}
+		}
+
+		while (!g_queue_is_empty (&queue))
+			g_object_unref (g_queue_pop_head (&queue));
+
+		g_clear_pointer (&secured_message_ids, g_hash_table_destroy);
+	}
+
+	g_slist_free_full (display->priv->insecure_part_ids, g_free);
+	display->priv->insecure_part_ids = insecure_part_ids;
+	display->priv->has_secured_parts = has_secured_parts;
+
+	settings = e_util_ref_settings ("org.gnome.evolution.mail");
+	display->priv->skip_insecure_parts = !g_settings_get_boolean (settings, "show-insecure-parts");
+	g_object_unref (settings);
 
 	g_object_notify (G_OBJECT (display), "part-list");
 }
@@ -2730,6 +3414,10 @@ e_mail_display_load (EMailDisplay *display,
 
 	e_mail_display_set_force_load_images (display, FALSE);
 
+	g_mutex_lock (&display->priv->remote_content_lock);
+	g_hash_table_remove_all (display->priv->temporary_allow_remote_content);
+	g_mutex_unlock (&display->priv->remote_content_lock);
+
 	part_list = display->priv->part_list;
 	if (part_list == NULL) {
 		e_web_view_clear (E_WEB_VIEW (display));
@@ -2766,7 +3454,7 @@ do_reload_display (EMailDisplay *display)
 	EWebView *web_view;
 	gchar *uri, *query;
 	GHashTable *table;
-	SoupURI *soup_uri;
+	GUri *guri;
 	gchar *mode, *collapsable, *collapsed;
 	const gchar *default_charset, *charset;
 
@@ -2783,7 +3471,7 @@ do_reload_display (EMailDisplay *display)
 		return FALSE;
 	}
 
-	soup_uri = soup_uri_new (uri);
+	guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
 
 	mode = g_strdup_printf ("%d", display->priv->mode);
 	collapsable = g_strdup_printf ("%d", display->priv->headers_collapsable);
@@ -2796,7 +3484,7 @@ do_reload_display (EMailDisplay *display)
 	if (!charset)
 		charset = "";
 
-	table = soup_form_decode (soup_uri->query);
+	table = soup_form_decode (g_uri_get_query (guri));
 	g_hash_table_replace (
 		table, g_strdup ("mode"), mode);
 	g_hash_table_replace (
@@ -2816,13 +3504,13 @@ do_reload_display (EMailDisplay *display)
 	g_free (collapsed);
 	g_hash_table_destroy (table);
 
-	soup_uri_set_query (soup_uri, query);
+	e_util_change_uri_component (&guri, SOUP_URI_QUERY, query);
 	g_free (query);
 
-	uri = soup_uri_to_string (soup_uri, FALSE);
+	uri = g_uri_to_string_partial (guri, G_URI_HIDE_PASSWORD);
 	e_web_view_load_uri (web_view, uri);
 	g_free (uri);
-	soup_uri_free (soup_uri);
+	g_uri_unref (guri);
 
 	return FALSE;
 }
@@ -3035,4 +3723,13 @@ e_mail_display_need_key_event (EMailDisplay *mail_display,
 
 	return gtk_accel_group_activate (accel_group, accel_quark, G_OBJECT (mail_display),
 		event->keyval, accel_mods);
+}
+
+gboolean
+e_mail_display_get_skip_insecure_parts (EMailDisplay *mail_display)
+{
+	return !mail_display ||
+	       !gtk_widget_is_visible (GTK_WIDGET (mail_display)) ||
+	       !mail_display->priv->insecure_part_ids ||
+	       mail_display->priv->skip_insecure_parts;
 }

@@ -1,18 +1,18 @@
 # Evolution build script
 
-cmake_minimum_required(VERSION 3.1)
-cmake_policy(VERSION 3.1)
+cmake_minimum_required(VERSION 3.15)
+cmake_policy(VERSION 3.15)
 
 project(evolution
-	VERSION 3.42.1
+	VERSION 3.54.3
 	LANGUAGES C)
 set(PROJECT_BUGREPORT "https://gitlab.gnome.org/GNOME/evolution/issues/")
-set(PROJECT_URL "http://wiki.gnome.org/Apps/Evolution/")
+set(PROJECT_URL "https://gitlab.gnome.org/GNOME/evolution/-/wikis/home")
 
 # Base Version: This is for API/version tracking for things like
 # D-Bus server files. This should always be the major/minor of
 # the stable version or stable version to be.
-set(BASE_VERSION 3.42)
+set(BASE_VERSION 3.54)
 
 # Used for pkg-config files
 set(INTERFACE_VERSION 3.0)
@@ -48,16 +48,16 @@ set(PROJECT_DISTCONFIGURE_PARAMS
 )
 
 # Keep these two definitions in agreement.
-set(glib_minimum_version 2.56)
-set(glib_encoded_version GLIB_VERSION_2_56)
+set(glib_minimum_version 2.66)
+set(glib_encoded_version GLIB_VERSION_2_66)
 
 # Keep these two definitions in agreement.
 set(gdk_minimum_version 3.22)
 set(gdk_encoded_version GDK_VERSION_3_22)
 
 # Keep these two definitions in agreement.
-set(soup_minimum_version 2.42)
-set(soup_encoded_version SOUP_VERSION_2_42)
+set(soup_minimum_version 3.0)
+set(soup_encoded_version SOUP_VERSION_3_0)
 
 # Warn about API usage that violates our minimum requirements.
 add_definitions(-DGLIB_VERSION_MAX_ALLOWED=${glib_encoded_version})
@@ -75,22 +75,23 @@ add_definitions(-DSOUP_VERSION_MIN_REQUIRED=${soup_encoded_version})
 set(eds_minimum_version ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH})
 set(enchant1_minimum_version 1.6.0)
 set(enchant2_minimum_version 2.2.0)
-set(gcr_minimum_version 3.4)
 set(gdk_pixbuf_minimum_version 2.24.0)
 set(gnome_desktop_minimum_version 2.91.3)
 set(gsettings_desktop_schemas_minimum_version 2.91.92)
 set(libpst_minimum_version 0.6.54)
+set(libsecret_minimum_version 0.5)
 set(libxml_minimum_version 2.7.3)
 set(shared_mime_info_minimum_version 0.22)
-set(webkit2gtk_minimum_version 2.28.0)
+set(webkit2gtk_minimum_version 2.34.0)
+set(sqlite_minimum_version 3.7.17)
 
 # Optional Packages
-set(champlain_minimum_version 0.12)
+set(champlain_minimum_version 0.12.21)
 set(clutter_gtk_minimum_version 0.90)
-set(geocode_glib_minimum_version 3.10)
+set(geocode_glib_minimum_version 3.26.3)
 set(gladeui_minimum_version 3.10.0)
 set(gnome_autoar_minimum_version 0.1.1)
-set(gweather_minimum_version 3.10)
+set(gweather_minimum_version 3.91)
 set(libcanberra_gtk_minimum_version 0.25)
 set(libnotify_minimum_version 0.7)
 set(libunity_minimum_version 7.1.4)
@@ -202,6 +203,12 @@ include(FindIntltool)
 include(FindLDAP)
 include(FindSMIME)
 
+# hidden option, usually not usable
+option(OVERRIDE_APPLICATION_ID "Override application ID" "")
+if(OVERRIDE_APPLICATION_ID STREQUAL "")
+	unset(OVERRIDE_APPLICATION_ID)
+endif(OVERRIDE_APPLICATION_ID STREQUAL "")
+
 add_printable_option(ENABLE_MAINTAINER_MODE "Enable maintainer mode" OFF)
 add_printable_variable(VERSION_SUBSTRING "Version substring, for packagers" "")
 add_printable_variable(VERSION_COMMENT "Define if you want a comment appended to the version number" "")
@@ -217,7 +224,6 @@ set(MATH_LDFLAGS -lm)
 
 CHECK_INCLUDE_FILE(sys/wait.h HAVE_SYS_WAIT_H)
 CHECK_INCLUDE_FILE(X11/XF86keysym.h HAVE_XFREE)
-CHECK_FUNCTION_EXISTS(mkdtemp HAVE_MKDTEMP)
 CHECK_FUNCTION_EXISTS(nl_langinfo HAVE_NL_LANGINFO)
 
 # ******************************
@@ -255,7 +261,6 @@ endif(ENABLE_GNOME_DESKTOP)
 pkg_check_modules(GNOME_PLATFORM REQUIRED
 	cairo-gobject
 	gail-3.0>=${gdk_minimum_version}
-	gcr-3>=${gcr_minimum_version}
 	gdk-pixbuf-2.0>=${gdk_pixbuf_minimum_version}
 	gio-2.0>=${glib_minimum_version}
 	${GIO_UNIX_REQUIREMENT}
@@ -265,7 +270,7 @@ pkg_check_modules(GNOME_PLATFORM REQUIRED
 	gtk+-3.0>=${gdk_minimum_version}
 	libxml-2.0>=${libxml_minimum_version}
 	shared-mime-info>=${shared_mime_info_minimum_version}
-	webkit2gtk-4.0>=${webkit2gtk_minimum_version}
+	webkit2gtk-4.1>=${webkit2gtk_minimum_version}
 )
 
 pkg_check_modules(EVOLUTION_DATA_SERVER REQUIRED
@@ -278,10 +283,13 @@ pkg_check_modules(EVOLUTION_DATA_SERVER REQUIRED
 )
 
 pkg_check_modules(A11Y REQUIRED atk)
-pkg_check_modules(LIBSOUP REQUIRED libsoup-2.4>=${soup_minimum_version})
-pkg_check_modules(WEB_EXTENSION REQUIRED webkit2gtk-4.0>=${webkit2gtk_minimum_version})
+pkg_check_modules(LIBSECRET REQUIRED libsecret-1>=${libsecret_minimum_version})
+pkg_check_modules(LIBSOUP REQUIRED libsoup-3.0>=${soup_minimum_version})
+pkg_check_modules(WEB_EXTENSION REQUIRED webkit2gtk-4.1>=${webkit2gtk_minimum_version})
+pkg_check_modules(SQLITE3 REQUIRED sqlite3>=${sqlite_minimum_version})
 
 pkg_check_variable(EDS_SOURCES_DBUS_SERVICE_NAME evolution-data-server-1.2 sourcesdbusservicename)
+pkg_check_variable(E_DATA_SERVER_ICONDIR evolution-data-server-1.2 icondir)
 
 # ******************************
 # Enchant - support both, but better to use the same as the dependencies (gspell, webkitgtk+,...)
@@ -579,8 +587,12 @@ unset(optupper)
 # as both gnutls and mozilla-nss have a header called "pkcs12.h" which is
 # included in smime/lib/e-pkcs12.c. It wants the Mozilla NSS one.
 
-set(CERT_UI_INCLUDES ${MANUAL_NSPR_INCLUDES} ${MANUAL_NSS_INCLUDES})
-set(CERT_UI_LIBS ${MANUAL_NSPR_LIBS} ${MANUAL_NSS_LIBS})
+if((NOT (mozilla_nspr STREQUAL "")) AND (NOT (mozilla_nss STREQUAL "")))
+	pkg_check_modules(CERT_UI REQUIRED ${mozilla_nspr} ${mozilla_nss})
+else((NOT (mozilla_nspr STREQUAL "")) AND (NOT (mozilla_nss STREQUAL "")))
+	set(CERT_UI_INCLUDE_DIRS ${MANUAL_NSPR_INCLUDES} ${MANUAL_NSS_INCLUDES})
+	set(CERT_UI_LDFLAGS ${MANUAL_NSPR_LIBS} ${MANUAL_NSS_LIBS})
+endif((NOT (mozilla_nspr STREQUAL "")) AND (NOT (mozilla_nss STREQUAL "")))
 
 # ******************************
 # Libnotify
@@ -612,7 +624,7 @@ endif(ENABLE_GSPELL)
 # ******************************
 
 CHECK_C_SOURCE_COMPILES("#include <gnu/libc-version.h>
-			int main(void) { const gchar *libc_version = gnu_get_libc_version (); return 0; }" HAVE_GNU_GET_LIBC_VERSION)
+			int main(void) { const char *libc_version = gnu_get_libc_version (); return 0; }" HAVE_GNU_GET_LIBC_VERSION)
 
 # ******************************
 # Plugins
@@ -662,7 +674,21 @@ endif(ENABLE_TEXT_HIGHLIGHT)
 add_printable_option(ENABLE_WEATHER "Enable weather calendars" ON)
 
 if(ENABLE_WEATHER)
-	pkg_check_modules_for_option(ENABLE_WEATHER "weather calendar" GWEATHER gweather-3.0>=${gweather_minimum_version})
+	pkg_check_modules_for_option(ENABLE_WEATHER "weather calendar" GWEATHER gweather4>=${gweather_minimum_version})
+	pkg_check_modules_for_option(ENABLE_WEATHER "weather calendar" GEO geocode-glib-2.0>=${geocode_glib_minimum_version})
+
+	# compatibility check
+	pkg_check_variable(gweather_soupapiversion gweather4 soupapiversion)
+	if(NOT "${gweather_soupapiversion}" STREQUAL "3.0")
+		message(FATAL_ERROR "Requires libgweather compiled with libsoup 3.0 API, but found version '${gweather_soupapiversion}' instead. If you want to disable weather calendar, please use -DENABLE_WEATHER=OFF argument to cmake command.")
+	endif(NOT "${gweather_soupapiversion}" STREQUAL "3.0")
+	unset(gweather_soupapiversion)
+
+	pkg_check_variable(geocode_glib_soupapiversion geocode-glib-2.0 soupapiversion)
+	if(NOT "${geocode_glib_soupapiversion}" STREQUAL "3.0")
+		message(FATAL_ERROR "Requires geocode-glib compiled with libsoup 3.0 API, but found version '${geocode_glib_soupapiversion}' instead. If you want to disable weather calendar, please use -DENABLE_WEATHER=OFF argument to cmake command.")
+	endif(NOT "${geocode_glib_soupapiversion}" STREQUAL "3.0")
+	unset(geocode_glib_soupapiversion)
 endif(ENABLE_WEATHER)
 
 # maps in Contacts preview
@@ -671,8 +697,20 @@ add_printable_option(ENABLE_CONTACT_MAPS "Enable contact maps" OFF)
 
 if(ENABLE_CONTACT_MAPS)
 	pkg_check_modules_for_option(ENABLE_CONTACT_MAPS "contact maps" CHAMPLAIN champlain-gtk-0.12>=${champlain_minimum_version})
-	pkg_check_modules_for_option(ENABLE_CONTACT_MAPS "contact maps" GEO geocode-glib-1.0>=${geocode_glib_minimum_version})
+	pkg_check_modules_for_option(ENABLE_CONTACT_MAPS "contact maps" GEO geocode-glib-2.0>=${geocode_glib_minimum_version})
 	pkg_check_modules_for_option(ENABLE_CONTACT_MAPS "contact maps" CLUTTER_GTK clutter-gtk-1.0>=${clutter_gtk_minimum_version})
+
+	pkg_check_variable(champlain_soupapiversion champlain-0.12 soupapiversion)
+	if(NOT "${champlain_soupapiversion}" STREQUAL "3.0")
+		message(FATAL_ERROR "Requires libchamplain compiled with libsoup 3.0 API, but found version '${champlain_soupapiversion}' instead. If you want to disable contact maps, please use -DENABLE_CONTACT_MAPS=OFF argument to cmake command.")
+	endif(NOT "${champlain_soupapiversion}" STREQUAL "3.0")
+	unset(champlain_soupapiversion)
+
+	pkg_check_variable(geocode_glib_soupapiversion geocode-glib-2.0 soupapiversion)
+	if(NOT "${geocode_glib_soupapiversion}" STREQUAL "3.0")
+		message(FATAL_ERROR "Requires geocode-glib compiled with libsoup 3.0 API, but found version '${geocode_glib_soupapiversion}' instead. If you want to disable contact maps, please use -DENABLE_CONTACT_MAPS=OFF argument to cmake command.")
+	endif(NOT "${geocode_glib_soupapiversion}" STREQUAL "3.0")
+	unset(geocode_glib_soupapiversion)
 endif(ENABLE_CONTACT_MAPS)
 
 # pst-import plugin
@@ -704,6 +742,44 @@ add_printable_option(WITH_GLADE_CATALOG "Install the catalog files for Glade 3 (
 if(WITH_GLADE_CATALOG)
 	pkg_check_modules_for_option(WITH_GLADE_CATALOG "Glade 3 catalog files" GLADEUI gladeui-2.0>=${gladeui_minimum_version})
 endif(WITH_GLADE_CATALOG)
+
+# ******************************
+# cmark for CommonMarkdown
+# ******************************
+
+add_printable_option(ENABLE_MARKDOWN "Enable markdown support" ON)
+
+if(ENABLE_MARKDOWN)
+	pkg_check_modules_for_option(ENABLE_MARKDOWN "markdown support" MARKDOWN
+		libcmark
+	)
+	set(HAVE_MARKDOWN ON)
+endif(ENABLE_MARKDOWN)
+
+# ******************************
+# news-to-appdata
+# ******************************
+
+set(CMAKE_REQUIRED_DEFINITIONS ${GNOME_PLATFORM_CFLAGS})
+set(CMAKE_REQUIRED_INCLUDES ${GNOME_PLATFORM_INCLUDE_DIRS})
+set(CMAKE_REQUIRED_LIBRARIES ${GNOME_PLATFORM_LDFLAGS})
+file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}/appdata-releases.txt" _output_filename)
+file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}/NEWS" _news_filename)
+CHECK_C_SOURCE_RUNS("#define BUILD_RUN 1
+		     #define BUILD_OUTPUT \"${_output_filename}\"
+		     #define BUILD_TYPE \"${APPDATA_RELEASE_TYPE}\"
+		     #define BUILD_VERSION \"${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}\"
+		     #define BUILD_NEWS_FILE \"${_news_filename}\"
+		     #include \"${CMAKE_SOURCE_DIR}/news-to-appdata.c\"" _news_to_appdata_result)
+unset(_news_filename)
+unset(_output_filename)
+unset(CMAKE_REQUIRED_LIBRARIES)
+unset(CMAKE_REQUIRED_INCLUDES)
+unset(CMAKE_REQUIRED_DEFINITIONS)
+
+if(NOT "${_news_to_appdata_result}" EQUAL "1")
+	message(FATAL_ERROR "Failed to run news-to-appdata")
+endif(NOT "${_news_to_appdata_result}" EQUAL "1")
 
 # Generate the ${PROJECT_NAME}-config.h file
 CONFIGURE_FILE(${CMAKE_SOURCE_DIR}/config.h.in ${CMAKE_BINARY_DIR}/${PROJECT_NAME}-config.h)

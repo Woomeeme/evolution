@@ -95,7 +95,7 @@ add_list_to_rdf (xmlNodePtr node,
 
 			switch (type) {
 			case ECALCOMPONENTATTENDEE:
-				str = itip_strip_mailto (e_cal_component_attendee_get_value ((ECalComponentAttendee *) list->data));
+				str = e_cal_util_get_attendee_email ((ECalComponentAttendee *) list->data);
 				break;
 			case ECALCOMPONENTTEXT:
 				str = e_cal_component_text_get_value ((ECalComponentText *) list->data);
@@ -197,7 +197,7 @@ do_save_calendar_rdf (FormatHandler *handler,
 	/* open source client */
 	primary_source = e_source_selector_ref_primary_selection (selector);
 	source_client = e_client_cache_get_client_sync (client_cache,
-		primary_source, e_source_selector_get_extension_name (selector), 30, NULL, &error);
+		primary_source, e_source_selector_get_extension_name (selector), E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, NULL, &error);
 	g_object_unref (primary_source);
 
 	/* Sanity check. */

@@ -24,10 +24,6 @@
 #include "e-util/e-util.h"
 #include "e-mail-config-identity-page.h"
 
-#define E_MAIL_CONFIG_IDENTITY_PAGE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_CONFIG_IDENTITY_PAGE, EMailConfigIdentityPagePrivate))
-
 struct _EMailConfigIdentityPagePrivate {
 	ESource *identity_source;
 	ESourceRegistry *registry;
@@ -62,15 +58,10 @@ enum {
 static void	e_mail_config_identity_page_interface_init
 					(EMailConfigPageInterface *iface);
 
-G_DEFINE_TYPE_WITH_CODE (
-	EMailConfigIdentityPage,
-	e_mail_config_identity_page,
-	GTK_TYPE_SCROLLED_WINDOW,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL)
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_MAIL_CONFIG_PAGE,
-		e_mail_config_identity_page_interface_init))
+G_DEFINE_TYPE_WITH_CODE (EMailConfigIdentityPage, e_mail_config_identity_page, GTK_TYPE_SCROLLED_WINDOW,
+	G_ADD_PRIVATE (EMailConfigIdentityPage)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL)
+	G_IMPLEMENT_INTERFACE (E_TYPE_MAIL_CONFIG_PAGE, e_mail_config_identity_page_interface_init))
 
 static gboolean
 mail_config_identity_page_is_email (const gchar *email_address)
@@ -463,12 +454,10 @@ mail_config_identity_page_get_property (GObject *object,
 static void
 mail_config_identity_page_dispose (GObject *object)
 {
-	EMailConfigIdentityPagePrivate *priv;
+	EMailConfigIdentityPage *self = E_MAIL_CONFIG_IDENTITY_PAGE (object);
 
-	priv = E_MAIL_CONFIG_IDENTITY_PAGE_GET_PRIVATE (object);
-
-	g_clear_object (&priv->identity_source);
-	g_clear_object (&priv->registry);
+	g_clear_object (&self->priv->identity_source);
+	g_clear_object (&self->priv->registry);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_mail_config_identity_page_parent_class)->dispose (object);
@@ -676,7 +665,7 @@ mail_config_identity_page_constructed (GObject *object)
 	widget = gtk_grid_new ();
 	gtk_grid_set_row_spacing (GTK_GRID (widget), 6);
 	gtk_grid_set_column_spacing (GTK_GRID (widget), 6);
-	gtk_box_pack_start (GTK_BOX (main_box), widget, FALSE, FALSE, 0);
+	gtk_box_pack_start (GTK_BOX (main_box), widget, TRUE, TRUE, 0);
 	gtk_widget_show (widget);
 
 	container = widget;
@@ -798,6 +787,10 @@ mail_config_identity_page_constructed (GObject *object)
 	label = GTK_LABEL (widget);
 
 	widget = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
+	g_object_set (G_OBJECT (widget),
+		"valign", GTK_ALIGN_FILL,
+		"vexpand", TRUE,
+		NULL);
 	gtk_grid_attach (GTK_GRID (container), widget, 1, 4, 2, 1);
 	gtk_widget_show (widget);
 
@@ -1132,8 +1125,6 @@ e_mail_config_identity_page_class_init (EMailConfigIdentityPageClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (EMailConfigIdentityPagePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_config_identity_page_set_property;
 	object_class->get_property = mail_config_identity_page_get_property;
@@ -1237,7 +1228,7 @@ e_mail_config_identity_page_interface_init (EMailConfigPageInterface *iface)
 static void
 e_mail_config_identity_page_init (EMailConfigIdentityPage *page)
 {
-	page->priv = E_MAIL_CONFIG_IDENTITY_PAGE_GET_PRIVATE (page);
+	page->priv = e_mail_config_identity_page_get_instance_private (page);
 }
 
 EMailConfigPage *

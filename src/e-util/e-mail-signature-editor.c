@@ -23,13 +23,12 @@
 #include "e-alert-dialog.h"
 #include "e-alert-sink.h"
 #include "e-alert-bar.h"
+#include "e-misc-utils.h"
 #include "e-simple-async-result.h"
 
 #include "e-mail-signature-editor.h"
 
-#define E_MAIL_SIGNATURE_EDITOR_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_SIGNATURE_EDITOR, EMailSignatureEditorPrivate))
+#include "e-menu-bar.h"
 
 typedef struct _AsyncContext AsyncContext;
 
@@ -43,13 +42,15 @@ struct _EMailSignatureEditorPrivate {
 	gchar *original_name;
 
 	GtkWidget *entry;		/* not referenced */
+
+	EMenuBar *menu_bar;
 };
 
 struct _AsyncContext {
 	ESourceRegistry *registry;
 	ESource *source;
-	GCancellable *cancellable;
 	EContentEditorGetContentFlags contents_flag;
+	EContentEditorMode editor_mode;
 	gchar *contents;
 	gsize length;
 	GDestroyNotify destroy_contents;
@@ -81,17 +82,13 @@ static const gchar *ui =
 "  </toolbar>\n"
 "</ui>";
 
-G_DEFINE_TYPE (
-	EMailSignatureEditor,
-	e_mail_signature_editor,
-	GTK_TYPE_WINDOW)
+G_DEFINE_TYPE_WITH_PRIVATE (EMailSignatureEditor, e_mail_signature_editor, GTK_TYPE_WINDOW)
 
 static void
 async_context_free (AsyncContext *async_context)
 {
 	g_clear_object (&async_context->registry);
 	g_clear_object (&async_context->source);
-	g_clear_object (&async_context->cancellable);
 
 	if (async_context->destroy_contents)
 		async_context->destroy_contents (async_context->contents);
@@ -108,13 +105,13 @@ mail_signature_editor_loaded_cb (GObject *object,
 {
 	EHTMLEditor *editor;
 	EContentEditor *cnt_editor;
+	EContentEditorMode mode;
 	ESource *source;
 	EMailSignatureEditor *window;
 	ESourceMailSignature *extension;
 	const gchar *extension_name;
 	const gchar *mime_type;
 	gchar *contents = NULL;
-	gboolean is_html;
 	GError *error = NULL;
 
 	source = E_SOURCE (object);
@@ -147,27 +144,40 @@ mail_signature_editor_loaded_cb (GObject *object,
 	extension_name = E_SOURCE_EXTENSION_MAIL_SIGNATURE;
 	extension = e_source_get_extension (source, extension_name);
 	mime_type = e_source_mail_signature_get_mime_type (extension);
-	is_html = (g_strcmp0 (mime_type, "text/html") == 0);
+	if (g_strcmp0 (mime_type, "text/html") == 0)
+		mode = E_CONTENT_EDITOR_MODE_HTML;
+	else if (g_strcmp0 (mime_type, "text/markdown") == 0)
+		mode = E_CONTENT_EDITOR_MODE_MARKDOWN;
+	else if (g_strcmp0 (mime_type, "text/markdown-plain") == 0)
+		mode = E_CONTENT_EDITOR_MODE_MARKDOWN_PLAIN_TEXT;
+	else if (g_strcmp0 (mime_type, "text/markdown-html") == 0)
+		mode = E_CONTENT_EDITOR_MODE_MARKDOWN_HTML;
+	else
+		mode = E_CONTENT_EDITOR_MODE_PLAIN_TEXT;
+
+	if (mode == E_CONTENT_EDITOR_MODE_HTML &&
+	    strstr (contents, "data-evo-signature-plain-text-mode"))
+		mode = E_CONTENT_EDITOR_MODE_PLAIN_TEXT;
 
 	editor = e_mail_signature_editor_get_editor (window);
+	e_html_editor_set_mode (editor, mode);
+	/* no need to transfer the current content from old editor to the new, the content is set below */
+	e_html_editor_cancel_mode_change_content_update (editor);
 	cnt_editor = e_html_editor_get_content_editor (editor);
-	e_content_editor_set_html_mode (cnt_editor, is_html);
 
-	if (is_html) {
-		if (strstr (contents, "data-evo-signature-plain-text-mode"))
-			e_content_editor_set_html_mode (cnt_editor, FALSE);
-
+	if (mode == E_CONTENT_EDITOR_MODE_HTML) {
 		e_content_editor_insert_content (
 			cnt_editor,
 			contents,
 			E_CONTENT_EDITOR_INSERT_TEXT_HTML |
 			E_CONTENT_EDITOR_INSERT_REPLACE_ALL);
-	} else
+	} else {
 		e_content_editor_insert_content (
 			cnt_editor,
 			contents,
 			E_CONTENT_EDITOR_INSERT_TEXT_PLAIN |
 			E_CONTENT_EDITOR_INSERT_REPLACE_ALL);
+	}
 
 	g_free (contents);
 
@@ -460,39 +470,34 @@ mail_signature_editor_get_property (GObject *object,
 static void
 mail_signature_editor_dispose (GObject *object)
 {
-	EMailSignatureEditorPrivate *priv;
+	EMailSignatureEditor *self = E_MAIL_SIGNATURE_EDITOR (object);
 
-	priv = E_MAIL_SIGNATURE_EDITOR_GET_PRIVATE (object);
-	g_clear_object (&priv->editor);
-	g_clear_object (&priv->action_group);
-	g_clear_object (&priv->focus_tracker);
+	g_clear_object (&self->priv->editor);
+	g_clear_object (&self->priv->action_group);
+	g_clear_object (&self->priv->focus_tracker);
+	g_clear_object (&self->priv->menu_bar);
 
-	if (priv->cancellable != NULL) {
-		g_cancellable_cancel (priv->cancellable);
-		g_object_unref (priv->cancellable);
-		priv->cancellable = NULL;
+	if (self->priv->cancellable != NULL) {
+		g_cancellable_cancel (self->priv->cancellable);
+		g_clear_object (&self->priv->cancellable);
 	}
 
-	g_clear_object (&priv->registry);
-	g_clear_object (&priv->source);
+	g_clear_object (&self->priv->registry);
+	g_clear_object (&self->priv->source);
 
 	/* Chain up to parent's dispose() method. */
-	G_OBJECT_CLASS (e_mail_signature_editor_parent_class)->
-		dispose (object);
+	G_OBJECT_CLASS (e_mail_signature_editor_parent_class)->dispose (object);
 }
 
 static void
 mail_signature_editor_finalize (GObject *object)
 {
-	EMailSignatureEditorPrivate *priv;
+	EMailSignatureEditor *self = E_MAIL_SIGNATURE_EDITOR (object);
 
-	priv = E_MAIL_SIGNATURE_EDITOR_GET_PRIVATE (object);
-
-	g_free (priv->original_name);
+	g_free (self->priv->original_name);
 
 	/* Chain up to parent's finalize() method. */
-	G_OBJECT_CLASS (e_mail_signature_editor_parent_class)->
-		finalize (object);
+	G_OBJECT_CLASS (e_mail_signature_editor_parent_class)->finalize (object);
 }
 
 static void
@@ -508,7 +513,10 @@ mail_signature_editor_constructed (GObject *object)
 	GtkAction *action;
 	GtkWidget *container;
 	GtkWidget *widget;
+	GtkWidget *button;
 	GtkWidget *hbox;
+	GtkWidget *menu_button = NULL;
+	GtkHeaderBar *header_bar;
 	const gchar *display_name;
 	GError *error = NULL;
 
@@ -546,8 +554,7 @@ mail_signature_editor_constructed (GObject *object)
 
 	gtk_ui_manager_ensure_update (ui_manager);
 
-	gtk_window_set_title (GTK_WINDOW (window), _("Edit Signature"));
-	gtk_window_set_default_size (GTK_WINDOW (window), 600, 440);
+	gtk_window_set_default_size (GTK_WINDOW (window), -1, 440);
 
 	widget = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	gtk_container_add (GTK_CONTAINER (window), widget);
@@ -555,15 +562,44 @@ mail_signature_editor_constructed (GObject *object)
 
 	container = widget;
 
+	widget = e_html_editor_get_managed_widget (editor, "/main-menu");
+	window->priv->menu_bar = e_menu_bar_new (GTK_MENU_BAR (widget), GTK_WINDOW (window), &menu_button);
+	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+
 	/* Construct the main menu and toolbar. */
 
-	widget = e_html_editor_get_managed_widget (editor, "/main-menu");
-	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
-	gtk_widget_show (widget);
+	if (e_util_get_use_header_bar ()) {
+		widget = gtk_header_bar_new ();
+		gtk_widget_show (widget);
+		header_bar = GTK_HEADER_BAR (widget);
+		gtk_header_bar_set_show_close_button (header_bar, TRUE);
+		gtk_header_bar_set_title (header_bar, _("Edit Signature"));
+		gtk_window_set_titlebar (GTK_WINDOW (window), widget);
 
-	widget = e_html_editor_get_managed_widget (editor, "/main-toolbar");
-	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
-	gtk_widget_show (widget);
+		action = gtk_action_group_get_action (window->priv->action_group, "save-and-close");
+		button = e_header_bar_button_new (_("Save"), action);
+		e_header_bar_button_css_add_class (E_HEADER_BAR_BUTTON (button), "suggested-action");
+		e_header_bar_button_set_show_icon_only (E_HEADER_BAR_BUTTON (button), FALSE);
+		gtk_widget_show (button);
+		gtk_header_bar_pack_start (header_bar, button);
+
+		if (menu_button)
+			gtk_header_bar_pack_end (header_bar, menu_button);
+
+		widget = e_html_editor_get_managed_widget (editor, "/main-toolbar/pre-main-toolbar/save-and-close");
+		gtk_widget_destroy (widget);
+	} else {
+		gtk_window_set_title (GTK_WINDOW (window), _("Edit Signature"));
+
+		widget = e_html_editor_get_managed_widget (editor, "/main-toolbar");
+		gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+		gtk_widget_show (widget);
+
+		if (menu_button) {
+			g_object_ref_sink (menu_button);
+			gtk_widget_destroy (menu_button);
+		}
+	}
 
 	/* Construct the signature name entry. */
 
@@ -597,17 +633,7 @@ mail_signature_editor_constructed (GObject *object)
 	/* Configure an EFocusTracker to manage selection actions. */
 	focus_tracker = e_focus_tracker_new (GTK_WINDOW (window));
 
-	action = e_html_editor_get_action (editor, "cut");
-	e_focus_tracker_set_cut_clipboard_action (focus_tracker, action);
-
-	action = e_html_editor_get_action (editor, "copy");
-	e_focus_tracker_set_copy_clipboard_action (focus_tracker, action);
-
-	action = e_html_editor_get_action (editor, "paste");
-	e_focus_tracker_set_paste_clipboard_action (focus_tracker, action);
-
-	action = e_html_editor_get_action (editor, "select-all");
-	e_focus_tracker_set_select_all_action (focus_tracker, action);
+	e_html_editor_connect_focus_tracker (editor, focus_tracker);
 
 	window->priv->focus_tracker = focus_tracker;
 
@@ -636,8 +662,6 @@ static void
 e_mail_signature_editor_class_init (EMailSignatureEditorClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EMailSignatureEditorPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_signature_editor_set_property;
@@ -697,7 +721,7 @@ e_mail_signature_editor_class_init (EMailSignatureEditorClass *class)
 static void
 e_mail_signature_editor_init (EMailSignatureEditor *editor)
 {
-	editor->priv = E_MAIL_SIGNATURE_EDITOR_GET_PRIVATE (editor);
+	editor->priv = e_mail_signature_editor_get_instance_private (editor);
 }
 
 typedef struct _CreateEditorData {
@@ -858,20 +882,20 @@ mail_signature_editor_replace_cb (GObject *object,
                                   GAsyncResult *result,
                                   gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	GError *error = NULL;
 
-	simple = G_SIMPLE_ASYNC_RESULT (user_data);
+	task = G_TASK (user_data);
 
 	e_source_mail_signature_replace_finish (
 		E_SOURCE (object), result, &error);
 
 	if (error != NULL)
-		g_simple_async_result_take_error (simple, error);
+		g_task_return_error (task, g_steal_pointer (&error));
+	else
+		g_task_return_boolean (task, TRUE);
 
-	g_simple_async_result_complete (simple);
-
-	g_object_unref (simple);
+	g_object_unref (task);
 }
 
 static void
@@ -879,20 +903,19 @@ mail_signature_editor_commit_cb (GObject *object,
                                  GAsyncResult *result,
                                  gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	AsyncContext *async_context;
 	GError *error = NULL;
 
-	simple = G_SIMPLE_ASYNC_RESULT (user_data);
-	async_context = g_simple_async_result_get_op_res_gpointer (simple);
+	task = G_TASK (user_data);
+	async_context = g_task_get_task_data (task);
 
 	e_source_registry_commit_source_finish (
 		E_SOURCE_REGISTRY (object), result, &error);
 
 	if (error != NULL) {
-		g_simple_async_result_take_error (simple, error);
-		g_simple_async_result_complete (simple);
-		g_object_unref (simple);
+		g_task_return_error (task, g_steal_pointer (&error));
+		g_object_unref (task);
 		return;
 	}
 
@@ -903,9 +926,9 @@ mail_signature_editor_commit_cb (GObject *object,
 		async_context->contents,
 		async_context->length,
 		G_PRIORITY_DEFAULT,
-		async_context->cancellable,
+		g_task_get_cancellable (task),
 		mail_signature_editor_replace_cb,
-		simple);
+		task);
 }
 
 static void
@@ -913,10 +936,11 @@ mail_signature_editor_content_hash_ready_cb (GObject *source_object,
 					     GAsyncResult *result,
 					     gpointer user_data)
 {
-	GSimpleAsyncResult *simple = user_data;
+	GTask *task = user_data;
 	EContentEditorContentHash *content_hash;
 	ESourceMailSignature *extension;
 	AsyncContext *async_context;
+	const gchar *mime_type = "text/plain";
 	GError *error = NULL;
 
 	g_return_if_fail (E_IS_CONTENT_EDITOR (source_object));
@@ -924,13 +948,12 @@ mail_signature_editor_content_hash_ready_cb (GObject *source_object,
 	content_hash = e_content_editor_get_content_finish (E_CONTENT_EDITOR (source_object), result, &error);
 
 	if (!content_hash) {
-		g_simple_async_result_take_error (simple, error);
-		g_simple_async_result_complete (simple);
-		g_object_unref (simple);
+		g_task_return_error (task, g_steal_pointer (&error));
+		g_object_unref (task);
 		return;
 	}
 
-	async_context = g_simple_async_result_get_op_res_gpointer (simple);
+	async_context = g_task_get_task_data (task);
 
 	async_context->contents = e_content_editor_util_steal_content_data (content_hash,
 		async_context->contents_flag, &async_context->destroy_contents);
@@ -946,15 +969,35 @@ mail_signature_editor_content_hash_ready_cb (GObject *source_object,
 
 	async_context->length = strlen (async_context->contents);
 
+	switch (async_context->editor_mode) {
+	case E_CONTENT_EDITOR_MODE_UNKNOWN:
+		g_warn_if_reached ();
+		break;
+	case E_CONTENT_EDITOR_MODE_PLAIN_TEXT:
+		mime_type = "text/plain";
+		break;
+	case E_CONTENT_EDITOR_MODE_HTML:
+		mime_type = "text/html";
+		break;
+	case E_CONTENT_EDITOR_MODE_MARKDOWN:
+		mime_type = "text/markdown";
+		break;
+	case E_CONTENT_EDITOR_MODE_MARKDOWN_PLAIN_TEXT:
+		mime_type = "text/markdown-plain";
+		break;
+	case E_CONTENT_EDITOR_MODE_MARKDOWN_HTML:
+		mime_type = "text/markdown-html";
+		break;
+	}
+
 	extension = e_source_get_extension (async_context->source, E_SOURCE_EXTENSION_MAIL_SIGNATURE);
-	e_source_mail_signature_set_mime_type (extension,
-		async_context->contents_flag == E_CONTENT_EDITOR_GET_RAW_BODY_HTML ? "text/html" : "text/plain");
+	e_source_mail_signature_set_mime_type (extension, mime_type);
 
 	e_source_registry_commit_source (
 		async_context->registry, async_context->source,
-		async_context->cancellable,
+		g_task_get_cancellable (task),
 		mail_signature_editor_commit_cb,
-		simple);
+		task);
 }
 
 void
@@ -963,7 +1006,7 @@ e_mail_signature_editor_commit (EMailSignatureEditor *window,
                                 GAsyncReadyCallback callback,
                                 gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	AsyncContext *async_context;
 	ESourceRegistry *registry;
 	ESource *source;
@@ -981,20 +1024,16 @@ e_mail_signature_editor_commit (EMailSignatureEditor *window,
 	async_context = g_slice_new0 (AsyncContext);
 	async_context->registry = g_object_ref (registry);
 	async_context->source = g_object_ref (source);
-	async_context->contents_flag = e_content_editor_get_html_mode (cnt_editor) ? E_CONTENT_EDITOR_GET_RAW_BODY_HTML : E_CONTENT_EDITOR_GET_TO_SEND_PLAIN;
+	async_context->editor_mode = e_html_editor_get_mode (editor);
+	async_context->contents_flag = async_context->editor_mode == E_CONTENT_EDITOR_MODE_HTML ?
+		E_CONTENT_EDITOR_GET_RAW_BODY_HTML : E_CONTENT_EDITOR_GET_TO_SEND_PLAIN;
 
-	if (G_IS_CANCELLABLE (cancellable))
-		async_context->cancellable = g_object_ref (cancellable);
-
-	simple = g_simple_async_result_new (
-		G_OBJECT (window), callback, user_data,
-		e_mail_signature_editor_commit);
-
-	g_simple_async_result_set_op_res_gpointer (
-		simple, async_context, (GDestroyNotify) async_context_free);
+	task = g_task_new (window, cancellable, callback, user_data);
+	g_task_set_source_tag (task, e_mail_signature_editor_commit);
+	g_task_set_task_data (task, async_context, (GDestroyNotify) async_context_free);
 
 	e_content_editor_get_content (cnt_editor, async_context->contents_flag, NULL,
-		cancellable, mail_signature_editor_content_hash_ready_cb, simple);
+		cancellable, mail_signature_editor_content_hash_ready_cb, task);
 }
 
 gboolean
@@ -1002,16 +1041,9 @@ e_mail_signature_editor_commit_finish (EMailSignatureEditor *editor,
                                        GAsyncResult *result,
                                        GError **error)
 {
-	GSimpleAsyncResult *simple;
+	g_return_val_if_fail (g_task_is_valid (result, editor), FALSE);
+	g_return_val_if_fail (g_async_result_is_tagged (result, e_mail_signature_editor_commit), FALSE);
 
-	g_return_val_if_fail (
-		g_simple_async_result_is_valid (
-		result, G_OBJECT (editor),
-		e_mail_signature_editor_commit), FALSE);
-
-	simple = G_SIMPLE_ASYNC_RESULT (result);
-
-	/* Assume success unless a GError is set. */
-	return !g_simple_async_result_propagate_error (simple, error);
+	return g_task_propagate_boolean (G_TASK (result), error);
 }
 

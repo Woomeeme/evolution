@@ -304,7 +304,8 @@ e_text_to_html_full (const gchar *input,
 			    !g_ascii_strncasecmp ((gchar *) cur, "h323:", 5) ||
 			    !g_ascii_strncasecmp ((gchar *) cur, "sip:", 4) ||
 			    !g_ascii_strncasecmp ((gchar *) cur, "tel:", 4) ||
-			    !g_ascii_strncasecmp ((gchar *) cur, "webcal:", 7)) {
+			    !g_ascii_strncasecmp ((gchar *) cur, "webcal:", 7) ||
+			    !g_ascii_strncasecmp ((gchar *) cur, "webcals:", 8)) {
 				tmpurl = url_extract (&cur, TRUE, (flags & E_TEXT_TO_HTML_URL_IS_WHOLE_TEXT) != 0);
 				if (tmpurl) {
 					refurl = e_text_to_html (tmpurl, 0);
@@ -398,7 +399,7 @@ e_text_to_html_full (const gchar *input,
 		} else
 			next = (const guchar *) g_utf8_next_char (cur);
 
-		out = check_size (&buffer, &buffer_size, out, 10);
+		out = check_size (&buffer, &buffer_size, out, 11);
 
 		switch (u) {
 		case '<':
@@ -472,7 +473,7 @@ e_text_to_html_full (const gchar *input,
 				if (flags & E_TEXT_TO_HTML_ESCAPE_8BIT)
 					*out++ = '?';
 				else
-					out += g_snprintf (out, 9, "&#%d;", u);
+					out += g_snprintf (out, 10, "&#%d;", u);
 			}
 			col++;
 			break;

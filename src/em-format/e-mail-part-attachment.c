@@ -15,14 +15,13 @@
  *
  */
 
-#include "e-mail-part-attachment.h"
+#include "evolution-config.h"
 
-#define E_MAIL_PART_ATTACHMENT_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_PART_ATTACHMENT, EMailPartAttachmentPrivate))
+#include "e-mail-part-attachment.h"
 
 struct _EMailPartAttachmentPrivate {
 	EAttachment *attachment;
+	gchar *guessed_mime_type;
 	gboolean expandable;
 };
 
@@ -32,10 +31,7 @@ enum {
 	PROP_EXPANDABLE
 };
 
-G_DEFINE_TYPE (
-	EMailPartAttachment,
-	e_mail_part_attachment,
-	E_TYPE_MAIL_PART)
+G_DEFINE_TYPE_WITH_PRIVATE (EMailPartAttachment, e_mail_part_attachment, E_TYPE_MAIL_PART)
 
 static void
 mail_part_attachment_set_property (GObject *object,
@@ -82,15 +78,12 @@ mail_part_attachment_get_property (GObject *object,
 static void
 mail_part_attachment_dispose (GObject *object)
 {
-	EMailPartAttachmentPrivate *priv;
+	EMailPartAttachment *self = E_MAIL_PART_ATTACHMENT (object);
 
-	priv = E_MAIL_PART_ATTACHMENT_GET_PRIVATE (object);
-
-	g_clear_object (&priv->attachment);
+	g_clear_object (&self->priv->attachment);
 
 	/* Chain up to parent's dispose() method. */
-	G_OBJECT_CLASS (e_mail_part_attachment_parent_class)->
-		dispose (object);
+	G_OBJECT_CLASS (e_mail_part_attachment_parent_class)->dispose (object);
 }
 
 static void
@@ -99,6 +92,7 @@ mail_part_attachment_finalize (GObject *object)
 	EMailPartAttachment *part = E_MAIL_PART_ATTACHMENT (object);
 
 	g_free (part->part_id_with_attachment);
+	g_free (part->priv->guessed_mime_type);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_mail_part_attachment_parent_class)->
@@ -108,14 +102,14 @@ mail_part_attachment_finalize (GObject *object)
 static void
 mail_part_attachment_constructed (GObject *object)
 {
-	EMailPartAttachmentPrivate *priv;
 	CamelMimePart *mime_part;
 	EAttachment *attachment;
 	EMailPart *part;
+	EMailPartAttachment *self;
 	const gchar *cid;
 
 	part = E_MAIL_PART (object);
-	priv = E_MAIL_PART_ATTACHMENT_GET_PRIVATE (object);
+	self = E_MAIL_PART_ATTACHMENT (object);
 
 	/* Chain up to parent's constructed() method. */
 	G_OBJECT_CLASS (e_mail_part_attachment_parent_class)->constructed (object);
@@ -136,8 +130,7 @@ mail_part_attachment_constructed (GObject *object)
 
 	attachment = e_attachment_new ();
 	e_attachment_set_mime_part (attachment, mime_part);
-	priv->attachment = g_object_ref (attachment);
-	g_object_unref (attachment);
+	self->priv->attachment = attachment;
 
 	g_object_unref (mime_part);
 }
@@ -146,8 +139,6 @@ static void
 e_mail_part_attachment_class_init (EMailPartAttachmentClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EMailPartAttachmentPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->get_property = mail_part_attachment_get_property;
@@ -182,7 +173,7 @@ e_mail_part_attachment_class_init (EMailPartAttachmentClass *class)
 static void
 e_mail_part_attachment_init (EMailPartAttachment *part)
 {
-	part->priv = E_MAIL_PART_ATTACHMENT_GET_PRIVATE (part);
+	part->priv = e_mail_part_attachment_get_instance_private (part);
 	part->priv->expandable = FALSE;
 }
 
@@ -225,4 +216,26 @@ e_mail_part_attachment_get_expandable (EMailPartAttachment *part)
 	g_return_val_if_fail (E_IS_MAIL_PART_ATTACHMENT (part), FALSE);
 
 	return part->priv->expandable;
+}
+
+void
+e_mail_part_attachment_take_guessed_mime_type (EMailPartAttachment *part,
+					       gchar *guessed_mime_type)
+{
+	g_return_if_fail (E_IS_MAIL_PART_ATTACHMENT (part));
+
+	if (g_strcmp0 (guessed_mime_type, part->priv->guessed_mime_type) != 0) {
+		g_free (part->priv->guessed_mime_type);
+		part->priv->guessed_mime_type = guessed_mime_type;
+	} else if (guessed_mime_type != part->priv->guessed_mime_type) {
+		g_free (guessed_mime_type);
+	}
+}
+
+const gchar *
+e_mail_part_attachment_get_guessed_mime_type (EMailPartAttachment *part)
+{
+	g_return_val_if_fail (E_IS_MAIL_PART_ATTACHMENT (part), NULL);
+
+	return part->priv->guessed_mime_type;
 }

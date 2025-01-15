@@ -80,7 +80,8 @@ typedef enum {
 	ITIP_VIEW_RESPONSE_CANCEL,
 	ITIP_VIEW_RESPONSE_REFRESH,
 	ITIP_VIEW_RESPONSE_OPEN,
-	ITIP_VIEW_RESPONSE_SAVE
+	ITIP_VIEW_RESPONSE_SAVE,
+	ITIP_VIEW_RESPONSE_IMPORT
 } ItipViewResponse;
 
 typedef enum {
@@ -158,6 +159,8 @@ void		itip_view_set_summary		(ItipView *view,
 const gchar *	itip_view_get_location		(ItipView *view);
 void		itip_view_set_location		(ItipView *view,
 						 const gchar *location);
+void		itip_view_set_geo		(ItipView *view,
+						 const gchar *geo);
 const gchar *	itip_view_get_url		(ItipView *view);
 void		itip_view_set_url		(ItipView *view,
 						 const gchar *url);
@@ -253,6 +256,10 @@ void		itip_view_set_show_inherit_alarm_check
 void		itip_view_set_error		(ItipView *view,
 						 const gchar *error_html,
 						 gboolean show_save_btn);
+
+gchar *		itip_view_util_extract_part_content
+						(CamelMimePart *part,
+						 gboolean convert_charset);
 
 G_END_DECLS
 

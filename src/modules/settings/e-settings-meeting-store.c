@@ -21,47 +21,12 @@
 
 #include <calendar/gui/e-meeting-store.h>
 
-#define E_SETTINGS_MEETING_STORE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_SETTINGS_MEETING_STORE, ESettingsMeetingStorePrivate))
-
 struct _ESettingsMeetingStorePrivate {
 	gint placeholder;
 };
 
-G_DEFINE_DYNAMIC_TYPE (
-	ESettingsMeetingStore,
-	e_settings_meeting_store,
-	E_TYPE_EXTENSION)
-
-static gboolean
-settings_map_string_to_icaltimezone (GValue *value,
-                                     GVariant *variant,
-                                     gpointer user_data)
-{
-	GSettings *settings;
-	const gchar *location = NULL;
-	ICalTimezone *timezone = NULL;
-
-	settings = e_util_ref_settings ("org.gnome.evolution.calendar");
-
-	if (g_settings_get_boolean (settings, "use-system-timezone"))
-		timezone = e_cal_util_get_system_timezone ();
-	else
-		location = g_variant_get_string (variant, NULL);
-
-	if (location != NULL && *location != '\0')
-		timezone = i_cal_timezone_get_builtin_timezone (location);
-
-	if (timezone == NULL)
-		timezone = i_cal_timezone_get_utc_timezone ();
-
-	g_value_set_object (value, timezone);
-
-	g_object_unref (settings);
-
-	return TRUE;
-}
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (ESettingsMeetingStore, e_settings_meeting_store, E_TYPE_EXTENSION, 0,
+	G_ADD_PRIVATE_DYNAMIC (ESettingsMeetingStore))
 
 static void
 settings_meeting_store_constructed (GObject *object)
@@ -90,13 +55,9 @@ settings_meeting_store_constructed (GObject *object)
 		extensible, "free-busy-template",
 		G_SETTINGS_BIND_GET);
 
-	g_settings_bind_with_mapping (
-		settings, "timezone",
-		extensible, "timezone",
-		G_SETTINGS_BIND_GET,
-		settings_map_string_to_icaltimezone,
-		NULL, /* one-way binding */
-		NULL, (GDestroyNotify) NULL);
+	/* Do not bind the timezone property, the EMeetingStore
+	   user is supposed to update it as needed (like from the GUI,
+	   instead of the settings). */
 
 	g_object_unref (settings);
 
@@ -119,9 +80,6 @@ e_settings_meeting_store_class_init (ESettingsMeetingStoreClass *class)
 	GObjectClass *object_class;
 	EExtensionClass *extension_class;
 
-	g_type_class_add_private (
-		class, sizeof (ESettingsMeetingStorePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->constructed = settings_meeting_store_constructed;
 
@@ -137,7 +95,7 @@ e_settings_meeting_store_class_finalize (ESettingsMeetingStoreClass *class)
 static void
 e_settings_meeting_store_init (ESettingsMeetingStore *extension)
 {
-	extension->priv = E_SETTINGS_MEETING_STORE_GET_PRIVATE (extension);
+	extension->priv = e_settings_meeting_store_get_instance_private (extension);
 }
 
 void

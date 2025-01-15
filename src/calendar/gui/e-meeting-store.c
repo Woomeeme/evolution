@@ -40,10 +40,6 @@
 #define ROW_VALID(store, row) \
 	(row >= 0 && row < store->priv->attendees->len)
 
-#define E_MEETING_STORE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MEETING_STORE, EMeetingStorePrivate))
-
 struct _EMeetingStorePrivate {
 	GPtrArray *attendees;
 	gint stamp;
@@ -99,8 +95,8 @@ enum {
 /* Forward Declarations */
 static void ems_tree_model_init (GtkTreeModelIface *iface);
 
-G_DEFINE_TYPE_WITH_CODE (
-	EMeetingStore, e_meeting_store, GTK_TYPE_LIST_STORE,
+G_DEFINE_TYPE_WITH_CODE (EMeetingStore, e_meeting_store, GTK_TYPE_LIST_STORE,
+	G_ADD_PRIVATE (EMeetingStore)
 	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL)
 	G_IMPLEMENT_INTERFACE (GTK_TYPE_TREE_MODEL, ems_tree_model_init))
 
@@ -325,7 +321,7 @@ get_value (GtkTreeModel *model,
 	case E_MEETING_STORE_ADDRESS_COL:
 		g_value_init (value, G_TYPE_STRING);
 		g_value_set_string (
-			value, itip_strip_mailto (
+			value, e_cal_util_strip_mailto (
 			e_meeting_attendee_get_address (attendee)));
 		break;
 	case E_MEETING_STORE_MEMBER_COL:
@@ -353,13 +349,13 @@ get_value (GtkTreeModel *model,
 	case E_MEETING_STORE_DELTO_COL:
 		g_value_init (value, G_TYPE_STRING);
 		g_value_set_string (
-			value, itip_strip_mailto (
+			value, e_cal_util_strip_mailto (
 			e_meeting_attendee_get_delto (attendee)));
 		break;
 	case E_MEETING_STORE_DELFROM_COL:
 		g_value_init (value, G_TYPE_STRING);
 		g_value_set_string (
-			value, itip_strip_mailto (
+			value, e_cal_util_strip_mailto (
 			e_meeting_attendee_get_delfrom (attendee)));
 		break;
 	case E_MEETING_STORE_STATUS_COL:
@@ -384,7 +380,7 @@ get_value (GtkTreeModel *model,
 		if (cn && *cn) {
 			if (e_meeting_store_get_show_address (store) ||
 			    e_meeting_attendee_get_show_address (attendee)) {
-				const gchar *email = itip_strip_mailto (e_meeting_attendee_get_address (attendee));
+				const gchar *email = e_cal_util_strip_mailto (e_meeting_attendee_get_address (attendee));
 
 				if (email && *email) {
 					g_value_take_string (value, camel_internet_address_format_address (cn, email));
@@ -396,7 +392,7 @@ get_value (GtkTreeModel *model,
 			}
 		} else {
 			g_value_set_string (
-				value, itip_strip_mailto (
+				value, e_cal_util_strip_mailto (
 				e_meeting_attendee_get_address (attendee)));
 		}
 		break;
@@ -596,7 +592,7 @@ refresh_queue_remove (EMeetingStore *store,
 
 	/* Free the queue data */
 	qdata = g_hash_table_lookup (
-		priv->refresh_data, itip_strip_mailto (
+		priv->refresh_data, e_cal_util_strip_mailto (
 		e_meeting_attendee_get_address (attendee)));
 	if (!qdata) {
 		struct FindAttendeeData fad = { 0 };
@@ -612,7 +608,7 @@ refresh_queue_remove (EMeetingStore *store,
 	if (qdata) {
 		g_mutex_lock (&priv->mutex);
 		g_hash_table_remove (
-			priv->refresh_data, itip_strip_mailto (
+			priv->refresh_data, e_cal_util_strip_mailto (
 			e_meeting_attendee_get_address (attendee)));
 		g_mutex_unlock (&priv->mutex);
 		g_ptr_array_free (qdata->call_backs, TRUE);
@@ -738,33 +734,30 @@ meeting_store_constructed (GObject *object)
 static void
 meeting_store_finalize (GObject *object)
 {
-	EMeetingStorePrivate *priv;
+	EMeetingStore *self = E_MEETING_STORE (object);
 	gint i;
 
-	priv = E_MEETING_STORE_GET_PRIVATE (object);
+	for (i = 0; i < self->priv->attendees->len; i++)
+		g_object_unref (g_ptr_array_index (self->priv->attendees, i));
+	g_ptr_array_free (self->priv->attendees, TRUE);
 
-	for (i = 0; i < priv->attendees->len; i++)
-		g_object_unref (g_ptr_array_index (priv->attendees, i));
-	g_ptr_array_free (priv->attendees, TRUE);
+	g_clear_object (&self->priv->client);
 
-	if (priv->client != NULL)
-		g_object_unref (priv->client);
-
-	while (priv->refresh_queue->len > 0)
+	while (self->priv->refresh_queue->len > 0)
 		refresh_queue_remove (
-			E_MEETING_STORE (object),
-			g_ptr_array_index (priv->refresh_queue, 0));
-	g_ptr_array_free (priv->refresh_queue, TRUE);
-	g_hash_table_destroy (priv->refresh_data);
+			self,
+			g_ptr_array_index (self->priv->refresh_queue, 0));
+	g_ptr_array_free (self->priv->refresh_queue, TRUE);
+	g_hash_table_destroy (self->priv->refresh_data);
 
-	if (priv->refresh_idle_id)
-		g_source_remove (priv->refresh_idle_id);
+	if (self->priv->refresh_idle_id)
+		g_source_remove (self->priv->refresh_idle_id);
 
-	g_free (priv->fb_uri);
+	g_free (self->priv->fb_uri);
 
-	g_clear_object (&priv->zone);
+	g_clear_object (&self->priv->zone);
 
-	g_mutex_clear (&priv->mutex);
+	g_mutex_clear (&self->priv->mutex);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_meeting_store_parent_class)->finalize (object);
@@ -774,8 +767,6 @@ static void
 e_meeting_store_class_init (EMeetingStoreClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EMeetingStorePrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = meeting_store_set_property;
@@ -851,7 +842,7 @@ e_meeting_store_class_init (EMeetingStoreClass *class)
 static void
 e_meeting_store_init (EMeetingStore *store)
 {
-	store->priv = E_MEETING_STORE_GET_PRIVATE (store);
+	store->priv = e_meeting_store_get_instance_private (store);
 
 	store->priv->attendees = g_ptr_array_new ();
 	store->priv->refresh_queue = g_ptr_array_new ();
@@ -984,7 +975,7 @@ e_meeting_store_set_timezone (EMeetingStore *store,
 		return;
 
 	g_clear_object (&store->priv->zone);
-	store->priv->zone = e_cal_util_copy_timezone (timezone);
+	store->priv->zone = timezone ? e_cal_util_copy_timezone (timezone) : NULL;
 
 	g_object_notify (G_OBJECT (store), "timezone");
 }
@@ -1157,7 +1148,7 @@ e_meeting_store_find_self (EMeetingStore *store,
 	EMeetingAttendee *attendee = NULL;
 	ESourceRegistry *registry;
 	EShell *shell;
-	GList *list, *iter;
+	GList *list, *link;
 	const gchar *extension_name;
 
 	g_return_val_if_fail (E_IS_MEETING_STORE (store), NULL);
@@ -1169,8 +1160,8 @@ e_meeting_store_find_self (EMeetingStore *store,
 
 	list = e_source_registry_list_sources (registry, extension_name);
 
-	for (iter = list; iter != NULL; iter = g_list_next (iter)) {
-		ESource *source = E_SOURCE (iter->data);
+	for (link = list; link != NULL; link = g_list_next (link)) {
+		ESource *source = E_SOURCE (link->data);
 		ESourceMailIdentity *extension;
 		GHashTable *aliases;
 		const gchar *address;
@@ -1228,8 +1219,8 @@ e_meeting_store_find_attendee (EMeetingStore *store,
 
 		attendee_address = e_meeting_attendee_get_address (attendee);
 		if (attendee_address && !g_ascii_strcasecmp (
-			itip_strip_mailto (attendee_address),
-			itip_strip_mailto (address))) {
+			e_cal_util_strip_mailto (attendee_address),
+			e_cal_util_strip_mailto (address))) {
 			if (row != NULL)
 				*row = i;
 
@@ -1752,7 +1743,7 @@ refresh_busy_periods (gpointer data)
 		g_return_val_if_fail (attendee != NULL, FALSE);
 
 		qdata = g_hash_table_lookup (
-			priv->refresh_data, itip_strip_mailto (
+			priv->refresh_data, e_cal_util_strip_mailto (
 			e_meeting_attendee_get_address (attendee)));
 		if (!qdata)
 			continue;
@@ -1781,7 +1772,7 @@ refresh_busy_periods (gpointer data)
 	fbd->qdata = qdata;
 	fbd->fb_uri = priv->fb_uri;
 	fbd->store = store;
-	fbd->email = g_strdup (itip_strip_mailto (
+	fbd->email = g_strdup (e_cal_util_strip_mailto (
 		e_meeting_attendee_get_address (attendee)));
 
 	/* Check the server for free busy data */
@@ -1857,7 +1848,7 @@ refresh_queue_add (EMeetingStore *store,
 	priv = store->priv;
 
 	attendee = g_ptr_array_index (priv->attendees, row);
-	if ((attendee == NULL) || !strcmp (itip_strip_mailto (
+	if ((attendee == NULL) || !strcmp (e_cal_util_strip_mailto (
 		e_meeting_attendee_get_address (attendee)), ""))
 		return;
 
@@ -1874,7 +1865,7 @@ refresh_queue_add (EMeetingStore *store,
 
 	g_mutex_lock (&priv->mutex);
 	qdata = g_hash_table_lookup (
-		priv->refresh_data, itip_strip_mailto (
+		priv->refresh_data, e_cal_util_strip_mailto (
 		e_meeting_attendee_get_address (attendee)));
 
 	if (qdata == NULL) {
@@ -1894,7 +1885,7 @@ refresh_queue_add (EMeetingStore *store,
 		g_ptr_array_add (qdata->data, data);
 
 		g_hash_table_insert (
-			priv->refresh_data, g_strdup (itip_strip_mailto (
+			priv->refresh_data, g_strdup (e_cal_util_strip_mailto (
 			e_meeting_attendee_get_address (attendee))), qdata);
 	} else {
 		if (e_meeting_time_compare_times (start, &qdata->start) == -1)
@@ -1957,42 +1948,41 @@ async_read (GObject *source_object,
 	}
 }
 
-static void
-soup_authenticate (SoupSession *session,
-                   SoupMessage *msg,
+static gboolean
+soup_authenticate (SoupMessage *msg,
                    SoupAuth *auth,
                    gboolean retrying,
                    gpointer data)
 {
-	SoupURI *suri;
+	GUri *guri;
 	const gchar *orig_uri;
 	gboolean tried = FALSE;
 
-	g_return_if_fail (msg != NULL);
-	g_return_if_fail (auth != NULL);
+	g_return_val_if_fail (msg != NULL, FALSE);
+	g_return_val_if_fail (auth != NULL, FALSE);
 
 	orig_uri = g_object_get_data (G_OBJECT (msg), "orig-uri");
-	g_return_if_fail (orig_uri != NULL);
+	g_return_val_if_fail (orig_uri != NULL, FALSE);
 
-	suri = soup_uri_new (orig_uri);
-	if (!suri)
-		return;
+	guri = g_uri_parse (orig_uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+	if (!guri)
+		return FALSE;
 
-	if (!suri->user || !*suri->user) {
-		soup_uri_free (suri);
-		return;
+	if (!g_uri_get_user (guri) || !g_uri_get_user (guri)[0]) {
+		g_uri_unref (guri);
+		return FALSE;
 	}
 
 	if (!retrying) {
-		if (suri->password) {
-			soup_auth_authenticate (auth, suri->user, suri->password);
+		if (g_uri_get_password (guri)) {
+			soup_auth_authenticate (auth, g_uri_get_user (guri), g_uri_get_password (guri));
 			tried = TRUE;
 		} else {
 			gchar *password;
 
 			password = e_passwords_get_password (orig_uri);
 			if (password) {
-				soup_auth_authenticate (auth, suri->user, password);
+				soup_auth_authenticate (auth, g_uri_get_user (guri), password);
 				tried = TRUE;
 
 				memset (password, 0, strlen (password));
@@ -2006,8 +1996,8 @@ soup_authenticate (SoupSession *session,
 		gchar *password, *bold_host, *bold_user;
 		GString *description;
 
-		bold_host = g_strconcat ("<b>", suri->host, "</b>", NULL);
-		bold_user = g_strconcat ("<b>", suri->user, "</b>", NULL);
+		bold_host = g_strconcat ("<b>", g_uri_get_host (guri), "</b>", NULL);
+		bold_user = g_strconcat ("<b>", g_uri_get_user (guri), "</b>", NULL);
 
 		description = g_string_new ("");
 
@@ -2019,11 +2009,11 @@ soup_authenticate (SoupSession *session,
 		g_free (bold_host);
 		g_free (bold_user);
 
-		if (retrying && msg->reason_phrase && *msg->reason_phrase) {
+		if (retrying && soup_message_get_reason_phrase (msg) && *soup_message_get_reason_phrase (msg)) {
 			g_string_append_c (description, '\n');
 			g_string_append_printf (
 				description, _("Failure reason: %s"),
-				msg->reason_phrase);
+				soup_message_get_reason_phrase (msg));
 		}
 
 		password = e_passwords_ask_password (
@@ -2036,70 +2026,46 @@ soup_authenticate (SoupSession *session,
 		g_string_free (description, TRUE);
 
 		if (password) {
-			soup_auth_authenticate (auth, suri->user, password);
+			soup_auth_authenticate (auth, g_uri_get_user (guri), password);
 
 			memset (password, 0, strlen (password));
 			g_free (password);
 		}
 	}
 
-	soup_uri_free (suri);
+	g_uri_unref (guri);
+
+	return FALSE;
 }
 
 static void
-redirect_handler (SoupMessage *msg,
-                  gpointer user_data)
-{
-	if (SOUP_STATUS_IS_REDIRECTION (msg->status_code)) {
-		SoupSession *soup_session = user_data;
-		SoupURI *new_uri;
-		const gchar *new_loc;
-
-		new_loc = soup_message_headers_get_list (msg->response_headers, "Location");
-		if (!new_loc)
-			return;
-
-		new_uri = soup_uri_new_with_base (soup_message_get_uri (msg), new_loc);
-		if (!new_uri) {
-			soup_message_set_status_full (
-				msg,
-				SOUP_STATUS_MALFORMED,
-				"Invalid Redirect URL");
-			return;
-		}
-
-		soup_message_set_uri (msg, new_uri);
-		soup_session_requeue_message (soup_session, msg);
-
-		soup_uri_free (new_uri);
-	}
-}
-
-static void
-soup_msg_ready_cb (SoupSession *session,
-                   SoupMessage *msg,
+soup_msg_ready_cb (GObject *source_object,
+                   GAsyncResult *result,
                    gpointer user_data)
 {
 	EMeetingStoreQueueData *qdata = user_data;
+	GBytes *bytes;
+	GError *local_error = NULL;
 
-	g_return_if_fail (session != NULL);
-	g_return_if_fail (msg != NULL);
+	g_return_if_fail (source_object != NULL);
 	g_return_if_fail (qdata != NULL);
 
-	if (SOUP_STATUS_IS_SUCCESSFUL (msg->status_code)) {
+	bytes = soup_session_send_and_read_finish (SOUP_SESSION (source_object), result, &local_error);
+	if (bytes && !local_error) {
 		qdata->string = g_string_new_len (
-			msg->response_body->data,
-			msg->response_body->length);
+			g_bytes_get_data (bytes, NULL),
+			g_bytes_get_size (bytes));
 		process_free_busy (qdata, qdata->string->str);
 	} else {
 		g_warning (
 			"Unable to access free/busy url: %s",
-			msg->reason_phrase && *msg->reason_phrase ?
-			msg->reason_phrase : (soup_status_get_phrase (
-			msg->status_code) ? soup_status_get_phrase (
-			msg->status_code) : "Unknown error"));
+			local_error ? local_error->message : "Unknown error");
 		process_callbacks (qdata);
 	}
+
+	if (bytes)
+		g_bytes_unref (bytes);
+	g_clear_error (&local_error);
 }
 
 static void
@@ -2122,17 +2088,13 @@ download_with_libsoup (const gchar *uri,
 	g_object_set_data_full (G_OBJECT (msg), "orig-uri", g_strdup (uri), g_free);
 
 	session = soup_session_new ();
-	g_object_set (session, SOUP_SESSION_TIMEOUT, 90, NULL);
+	g_object_set (session, "timeout", 60, NULL);
 	g_signal_connect (
-		session, "authenticate",
+		msg, "authenticate",
 		G_CALLBACK (soup_authenticate), NULL);
 
-	soup_message_set_flags (msg, SOUP_MESSAGE_NO_REDIRECT);
-	soup_message_add_header_handler (
-		msg, "got_body", "Location",
-		G_CALLBACK (redirect_handler), session);
-	soup_message_headers_append (msg->request_headers, "Connection", "close");
-	soup_session_queue_message (session, msg, soup_msg_ready_cb, qdata);
+	soup_message_headers_append (soup_message_get_request_headers (msg), "Connection", "close");
+	soup_session_send_and_read_async (session, msg, G_PRIORITY_DEFAULT, NULL, soup_msg_ready_cb, qdata);
 }
 
 static void
@@ -2154,7 +2116,7 @@ start_async_read (const gchar *uri,
 
 	istream = G_INPUT_STREAM (g_file_read (file, NULL, &error));
 
-	if (g_error_matches (error, SOUP_HTTP_ERROR, SOUP_STATUS_UNAUTHORIZED) ||
+	if (g_error_matches (error, E_SOUP_SESSION_ERROR, SOUP_STATUS_UNAUTHORIZED) ||
 	    g_error_matches (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED)) {
 		download_with_libsoup (uri, qdata);
 		g_object_unref (file);

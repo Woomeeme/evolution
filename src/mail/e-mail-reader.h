@@ -89,7 +89,6 @@ enum {
 	E_MAIL_READER_SELECTION_IS_MAILING_LIST = 1 << 16,
 	E_MAIL_READER_FOLDER_IS_JUNK = 1 << 17,
 	E_MAIL_READER_FOLDER_IS_VTRASH = 1 << 18,
-	E_MAIL_READER_FOLDER_ARCHIVE_FOLDER_SET = 1 << 19,
 	E_MAIL_READER_SELECTION_HAS_IGNORE_THREAD = 1 << 20,
 	E_MAIL_READER_SELECTION_HAS_NOTIGNORE_THREAD = 1 << 21,
 	E_MAIL_READER_SELECTION_HAS_MAIL_NOTE = 1 << 22,
@@ -215,6 +214,9 @@ void		e_mail_reader_composer_created	(EMailReader *reader,
 						 CamelMimeMessage *message);
 void		e_mail_reader_reload		(EMailReader *reader);
 void		e_mail_reader_remove_ui		(EMailReader *reader);
+GtkWidget *	e_mail_reader_create_reply_menu	(EMailReader *reader);
+GtkWidget *	e_mail_reader_create_forward_menu
+						(EMailReader *reader);
 
 G_END_DECLS
 

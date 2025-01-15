@@ -111,6 +111,14 @@ struct _EMFolderTreeModelClass {
 	void		(*loaded_row)		(EMFolderTreeModel *model,
 						 GtkTreePath *path,
 						 GtkTreeIter *iter);
+	void		(*folder_custom_icon)	(EMFolderTreeModel *model,
+						 GtkTreeIter *iter,
+						 CamelStore *store,
+						 const gchar *full_name);
+	gint		(*compare_folders)	(EMFolderTreeModel *model,
+						 const gchar *store_uid,
+						 GtkTreeIter *iter1,
+						 GtkTreeIter *iter2);
 };
 
 GType		em_folder_tree_model_get_type	(void);
@@ -172,6 +180,9 @@ void		em_folder_tree_model_user_marked_unread
 void		em_folder_tree_model_update_row_tweaks
 					(EMFolderTreeModel *model,
 					 GtkTreeIter *iter);
+void		em_folder_tree_model_update_folder_icons_for_store
+					(EMFolderTreeModel *model,
+					 CamelStore *store);
 
 G_END_DECLS
 

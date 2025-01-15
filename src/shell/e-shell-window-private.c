@@ -203,6 +203,30 @@ shell_window_construct_taskbar (EShellWindow *shell_window)
 	return class->construct_taskbar (shell_window);
 }
 
+static gboolean
+shell_window_active_view_to_prefer_item (GBinding *binding,
+                                         const GValue *source_value,
+                                         GValue *target_value,
+                                         gpointer user_data)
+{
+	GObject *source_object;
+	EShell *shell;
+	EShellBackend *shell_backend;
+	const gchar *active_view;
+	const gchar *prefer_item;
+
+	active_view = g_value_get_string (source_value);
+
+	source_object = g_binding_get_source (binding);
+	shell = e_shell_window_get_shell (E_SHELL_WINDOW (source_object));
+	shell_backend = e_shell_get_backend_by_name (shell, active_view);
+	prefer_item = e_shell_backend_get_prefer_new_item (shell_backend);
+
+	g_value_set_string (target_value, prefer_item);
+
+	return TRUE;
+}
+
 void
 e_shell_window_private_init (EShellWindow *shell_window)
 {
@@ -243,107 +267,6 @@ e_shell_window_private_init (EShellWindow *shell_window)
 	g_signal_connect_swapped (
 		priv->ui_manager, "connect-proxy",
 		G_CALLBACK (shell_window_connect_proxy_cb), shell_window);
-}
-
-static gboolean
-delayed_menubar_show_cb (gpointer user_data)
-{
-	EShellWindow *shell_window = user_data;
-
-	g_return_val_if_fail (E_IS_SHELL_WINDOW (shell_window), FALSE);
-
-	shell_window->priv->delayed_menubar_show_id = 0;
-
-	if (!e_shell_window_get_menubar_visible (shell_window)) {
-		GtkWidget *main_menu;
-
-		main_menu = e_shell_window_get_managed_widget (shell_window, "/main-menu");
-
-		gtk_widget_show (main_menu);
-	}
-
-	return FALSE;
-}
-
-static gboolean
-delayed_menubar_hide_cb (gpointer user_data)
-{
-	EShellWindow *shell_window = user_data;
-
-	g_return_val_if_fail (E_IS_SHELL_WINDOW (shell_window), FALSE);
-
-	shell_window->priv->delayed_menubar_hide_id = 0;
-
-	if (!e_shell_window_get_menubar_visible (shell_window) &&
-	    !shell_window->priv->delayed_menubar_show_id) {
-		GtkWidget *main_menu;
-
-		main_menu = e_shell_window_get_managed_widget (shell_window, "/main-menu");
-
-		if (gtk_widget_get_visible (main_menu) &&
-		    !gtk_menu_shell_get_selected_item (GTK_MENU_SHELL (main_menu)))
-			gtk_widget_hide (main_menu);
-	}
-
-	return FALSE;
-}
-
-static void
-e_shell_window_event_after_cb (EShellWindow *shell_window,
-			       GdkEvent *event)
-{
-	GtkWidget *main_menu;
-
-	g_return_if_fail (event != NULL);
-
-	if (event->type != GDK_KEY_PRESS &&
-	    event->type != GDK_KEY_RELEASE &&
-	    event->type != GDK_BUTTON_RELEASE &&
-	    event->type != GDK_FOCUS_CHANGE)
-		return;
-
-	g_return_if_fail (E_IS_SHELL_WINDOW (shell_window));
-
-	if (e_shell_window_get_menubar_visible (shell_window))
-		return;
-
-	main_menu = e_shell_window_get_managed_widget (shell_window, "/main-menu");
-
-	if (event->type == GDK_KEY_PRESS) {
-		GdkEventKey *key_event;
-
-		key_event = (GdkEventKey *) event;
-
-		if ((key_event->keyval == GDK_KEY_Alt_L || key_event->keyval == GDK_KEY_Alt_R) &&
-		    !(key_event->state & (GDK_SHIFT_MASK | GDK_CONTROL_MASK | GDK_SUPER_MASK | GDK_HYPER_MASK | GDK_META_MASK))) {
-			if (shell_window->priv->delayed_menubar_hide_id) {
-				g_source_remove (shell_window->priv->delayed_menubar_hide_id);
-				shell_window->priv->delayed_menubar_hide_id = 0;
-			}
-
-			if (shell_window->priv->delayed_menubar_show_id) {
-				g_source_remove (shell_window->priv->delayed_menubar_show_id);
-				shell_window->priv->delayed_menubar_show_id = 0;
-
-				delayed_menubar_show_cb (shell_window);
-			} else {
-				/* To not flash when using Alt+Tab or similar system-wide shortcuts */
-				shell_window->priv->delayed_menubar_show_id =
-					e_named_timeout_add (250, delayed_menubar_show_cb, shell_window);
-			}
-		}
-	} else if (event->type != GDK_BUTTON_RELEASE || !(event->button.state & GDK_MOD1_MASK)) {
-		if (shell_window->priv->delayed_menubar_show_id) {
-			g_source_remove (shell_window->priv->delayed_menubar_show_id);
-			shell_window->priv->delayed_menubar_show_id = 0;
-		}
-
-		if (gtk_widget_get_visible (main_menu) &&
-		    !shell_window->priv->delayed_menubar_hide_id) {
-			shell_window->priv->delayed_menubar_hide_id =
-				e_named_timeout_add (500, delayed_menubar_hide_cb, shell_window);
-		}
-	}
 }
 
 static gboolean
@@ -403,7 +326,7 @@ e_shell_window_private_constructed (EShellWindow *shell_window)
 	GtkUIManager *ui_manager;
 	GtkBox *box;
 	GtkPaned *paned;
-	GtkWidget *widget;
+	GtkWidget *widget, *menubar, *menu_button = NULL;
 	GtkWindow *window;
 	guint merge_id;
 	const gchar *id;
@@ -435,15 +358,27 @@ e_shell_window_private_constructed (EShellWindow *shell_window)
 
 	/* Construct window widgets. */
 
+	menubar = shell_window_construct_menubar (shell_window);
+	if (menubar)
+		shell_window->priv->menu_bar = e_menu_bar_new (GTK_MENU_BAR (menubar), window, &menu_button);
+
+	if (e_util_get_use_header_bar ()) {
+		priv->headerbar = e_shell_header_bar_new (shell_window, menu_button);
+		gtk_window_set_titlebar (window, priv->headerbar);
+		gtk_widget_show (priv->headerbar);
+	} else if (menu_button) {
+		g_object_ref_sink (menu_button);
+		gtk_widget_destroy (menu_button);
+	}
+
 	widget = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	gtk_container_add (GTK_CONTAINER (shell_window), widget);
 	gtk_widget_show (widget);
 
 	box = GTK_BOX (widget);
 
-	widget = shell_window_construct_menubar (shell_window);
-	if (widget != NULL)
-		gtk_box_pack_start (box, widget, FALSE, FALSE, 0);
+	if (menubar)
+		gtk_box_pack_start (box, menubar, FALSE, FALSE, 0);
 
 	widget = shell_window_construct_toolbar (shell_window);
 	if (widget != NULL)
@@ -656,11 +591,30 @@ e_shell_window_private_constructed (EShellWindow *shell_window)
 
 	g_object_unref (settings);
 
-	g_signal_connect (shell_window, "event-after",
-		G_CALLBACK (e_shell_window_event_after_cb), NULL);
-
 	g_signal_connect (shell_window, "key-press-event",
 		G_CALLBACK (e_shell_window_key_press_event_cb), NULL);
+
+	if (e_util_get_use_header_bar ()) {
+		/* XXX The ECalShellBackend has a hack where it forces the
+		 *     EMenuButton to update its button image by forcing
+		 *     a "notify::active-view" signal emission on the window.
+		 *     This will trigger the property binding, which will set
+		 *     EMenuButton's "prefer-item" property, which will
+		 *     invoke header_bar_update_new_menu(), which
+		 *     will cause EMenuButton to update its button image.
+		 *
+		 *     It's a bit of a Rube Goldberg machine and should be
+		 *     reworked, but it's just serving one (now documented)
+		 *     corner case and works for now. */
+		e_binding_bind_property_full (
+			shell_window, "active-view",
+			e_shell_header_bar_get_new_button (E_SHELL_HEADER_BAR (priv->headerbar)),
+			"prefer-item",
+			G_BINDING_SYNC_CREATE,
+			shell_window_active_view_to_prefer_item,
+			(GBindingTransformFunc) NULL,
+			NULL, (GDestroyNotify) NULL);
+	}
 }
 
 void
@@ -668,14 +622,12 @@ e_shell_window_private_dispose (EShellWindow *shell_window)
 {
 	EShellWindowPrivate *priv = shell_window->priv;
 
-	if (priv->delayed_menubar_show_id) {
-		g_source_remove (priv->delayed_menubar_show_id);
-		priv->delayed_menubar_show_id = 0;
-	}
+	if (priv->active_view && *priv->active_view) {
+		GSettings *settings;
 
-	if (priv->delayed_menubar_hide_id) {
-		g_source_remove (priv->delayed_menubar_hide_id);
-		priv->delayed_menubar_hide_id = 0;
+		settings = e_util_ref_settings ("org.gnome.evolution.shell");
+		g_settings_set_string (settings, "default-component-id", priv->active_view);
+		g_clear_object (&settings);
 	}
 
 	/* Need to disconnect handlers before we unref the shell. */
@@ -711,8 +663,7 @@ e_shell_window_private_dispose (EShellWindow *shell_window)
 	g_clear_object (&priv->switcher);
 	g_clear_object (&priv->tooltip_label);
 	g_clear_object (&priv->status_notebook);
-
-	priv->destroyed = TRUE;
+	g_clear_object (&priv->menu_bar);
 }
 
 void
@@ -810,7 +761,6 @@ e_shell_window_update_title (EShellWindow *shell_window)
 	EShellView *shell_view;
 	const gchar *view_title;
 	const gchar *view_name;
-	gchar *window_title;
 
 	g_return_if_fail (E_IS_SHELL_WINDOW (shell_window));
 
@@ -818,8 +768,14 @@ e_shell_window_update_title (EShellWindow *shell_window)
 	shell_view = e_shell_window_get_shell_view (shell_window, view_name);
 	view_title = e_shell_view_get_title (shell_view);
 
-	/* Translators: This is used for the main window title. */
-	window_title = g_strdup_printf (_("%s — Evolution"), view_title);
-	gtk_window_set_title (GTK_WINDOW (shell_window), window_title);
-	g_free (window_title);
+	if (e_util_get_use_header_bar ()) {
+		gtk_window_set_title (GTK_WINDOW (shell_window), view_title);
+	} else {
+		gchar *window_title;
+
+		/* Translators: This is used for the main window title. */
+		window_title = g_strdup_printf (_("%s — Evolution"), view_title);
+		gtk_window_set_title (GTK_WINDOW (shell_window), window_title);
+		g_free (window_title);
+	}
 }

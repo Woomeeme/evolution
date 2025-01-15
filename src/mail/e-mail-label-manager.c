@@ -28,10 +28,6 @@
 #include "e-mail-label-dialog.h"
 #include "e-mail-label-tree-view.h"
 
-#define E_MAIL_LABEL_MANAGER_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_LABEL_MANAGER, EMailLabelManagerPrivate))
-
 struct _EMailLabelManagerPrivate {
 	GtkWidget *tree_view;
 	GtkWidget *add_button;
@@ -53,7 +49,7 @@ enum {
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE (EMailLabelManager, e_mail_label_manager, GTK_TYPE_TABLE)
+G_DEFINE_TYPE_WITH_PRIVATE (EMailLabelManager, e_mail_label_manager, GTK_TYPE_TABLE)
 
 static void
 mail_label_manager_selection_changed_cb (EMailLabelManager *manager,
@@ -123,13 +119,12 @@ mail_label_manager_get_property (GObject *object,
 static void
 mail_label_manager_dispose (GObject *object)
 {
-	EMailLabelManagerPrivate *priv;
+	EMailLabelManager *self = E_MAIL_LABEL_MANAGER (object);
 
-	priv = E_MAIL_LABEL_MANAGER_GET_PRIVATE (object);
-	g_clear_object (&priv->tree_view);
-	g_clear_object (&priv->add_button);
-	g_clear_object (&priv->edit_button);
-	g_clear_object (&priv->remove_button);
+	g_clear_object (&self->priv->tree_view);
+	g_clear_object (&self->priv->add_button);
+	g_clear_object (&self->priv->edit_button);
+	g_clear_object (&self->priv->remove_button);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_mail_label_manager_parent_class)->dispose (object);
@@ -145,28 +140,39 @@ mail_label_manager_add_label (EMailLabelManager *manager)
 	gpointer parent;
 	GdkColor label_color;
 	const gchar *label_name;
+	gboolean repeat = TRUE;
 
 	parent = gtk_widget_get_toplevel (GTK_WIDGET (manager));
 	parent = gtk_widget_is_toplevel (parent) ? parent : NULL;
 	dialog = e_mail_label_dialog_new (parent);
-
-	gtk_window_set_title (GTK_WINDOW (dialog), _("Add Label"));
-
-	if (gtk_dialog_run (GTK_DIALOG (dialog)) != GTK_RESPONSE_OK)
-		goto exit;
-
 	label_dialog = E_MAIL_LABEL_DIALOG (dialog);
-	label_name = e_mail_label_dialog_get_label_name (label_dialog);
-	e_mail_label_dialog_get_label_color (label_dialog, &label_color);
-
 	tree_view = GTK_TREE_VIEW (manager->priv->tree_view);
 	model = gtk_tree_view_get_model (tree_view);
 
-	e_mail_label_list_store_set (
-		E_MAIL_LABEL_LIST_STORE (model),
-		NULL, label_name, &label_color);
+	gtk_window_set_title (GTK_WINDOW (dialog), _("Add Label"));
 
-exit:
+	while (repeat) {
+		repeat = FALSE;
+
+		if (gtk_dialog_run (GTK_DIALOG (dialog)) != GTK_RESPONSE_OK)
+			break;
+
+		label_name = e_mail_label_dialog_get_label_name (label_dialog);
+		e_mail_label_dialog_get_label_color (label_dialog, &label_color);
+
+		if (e_mail_label_list_store_lookup_by_name (E_MAIL_LABEL_LIST_STORE (model), label_name, NULL)) {
+			repeat = TRUE;
+			e_alert_run_dialog_for_args (
+				GTK_WINDOW (dialog),
+				"mail:error-label-exists", label_name, NULL);
+			continue;
+		}
+
+		e_mail_label_list_store_set (
+			E_MAIL_LABEL_LIST_STORE (model),
+			NULL, label_name, &label_color);
+	}
+
 	gtk_widget_destroy (dialog);
 }
 
@@ -184,6 +190,7 @@ mail_label_manager_edit_label (EMailLabelManager *manager)
 	GdkColor label_color;
 	const gchar *new_name;
 	gchar *label_name;
+	gboolean repeat = TRUE;
 
 	tree_view = GTK_TREE_VIEW (manager->priv->tree_view);
 	selection = gtk_tree_view_get_selection (tree_view);
@@ -203,16 +210,28 @@ mail_label_manager_edit_label (EMailLabelManager *manager)
 	e_mail_label_dialog_set_label_color (label_dialog, &label_color);
 	gtk_window_set_title (GTK_WINDOW (dialog), _("Edit Label"));
 
-	if (gtk_dialog_run (GTK_DIALOG (dialog)) != GTK_RESPONSE_OK)
-		goto exit;
+	while (repeat) {
+		repeat = FALSE;
 
-	new_name = e_mail_label_dialog_get_label_name (label_dialog);
-	e_mail_label_dialog_get_label_color (label_dialog, &label_color);
+		if (gtk_dialog_run (GTK_DIALOG (dialog)) != GTK_RESPONSE_OK)
+			break;
 
-	e_mail_label_list_store_set (
-		label_store, &iter, new_name, &label_color);
+		new_name = e_mail_label_dialog_get_label_name (label_dialog);
+		e_mail_label_dialog_get_label_color (label_dialog, &label_color);
 
-exit:
+		if (g_strcmp0 (new_name, label_name) != 0 &&
+		    e_mail_label_list_store_lookup_by_name (label_store, new_name, NULL)) {
+			repeat = TRUE;
+			e_alert_run_dialog_for_args (
+				GTK_WINDOW (dialog),
+				"mail:error-label-exists", new_name, NULL);
+			continue;
+		}
+
+		e_mail_label_list_store_set (
+			label_store, &iter, new_name, &label_color);
+	}
+
 	gtk_widget_destroy (dialog);
 
 	g_free (label_name);
@@ -239,8 +258,6 @@ static void
 e_mail_label_manager_class_init (EMailLabelManagerClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EMailLabelManagerPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_label_manager_set_property;
@@ -296,7 +313,7 @@ e_mail_label_manager_init (EMailLabelManager *manager)
 	GtkWidget *container;
 	GtkWidget *widget;
 
-	manager->priv = E_MAIL_LABEL_MANAGER_GET_PRIVATE (manager);
+	manager->priv = e_mail_label_manager_get_instance_private (manager);
 
 	gtk_table_resize (GTK_TABLE (manager), 2, 2);
 	gtk_table_set_col_spacings (GTK_TABLE (manager), 6);

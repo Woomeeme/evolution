@@ -34,11 +34,13 @@
 
 struct _EWebExtensionPrivate {
 	WebKitWebExtension *wk_extension;
+	GSList *known_plugins; /* gchar * - full filename to known plugins */
 
 	gboolean initialized;
 };
 
 G_DEFINE_TYPE_WITH_CODE (EWebExtension, e_web_extension, G_TYPE_OBJECT,
+	G_ADD_PRIVATE (EWebExtension)
 	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 static void
@@ -56,6 +58,9 @@ e_web_extension_dispose (GObject *object)
 
 	g_clear_object (&extension->priv->wk_extension);
 
+	g_slist_free_full (extension->priv->known_plugins, g_free);
+	extension->priv->known_plugins = NULL;
+
 	G_OBJECT_CLASS (e_web_extension_parent_class)->dispose (object);
 }
 
@@ -64,8 +69,6 @@ e_web_extension_class_init (EWebExtensionClass *class)
 {
 	GObjectClass *object_class = G_OBJECT_CLASS (class);
 
-	g_type_class_add_private (object_class, sizeof (EWebExtensionPrivate));
-
 	object_class->constructed = e_web_extension_constructed;
 	object_class->dispose = e_web_extension_dispose;
 }
@@ -73,7 +76,7 @@ e_web_extension_class_init (EWebExtensionClass *class)
 static void
 e_web_extension_init (EWebExtension *extension)
 {
-	extension->priv = G_TYPE_INSTANCE_GET_PRIVATE (extension, E_TYPE_WEB_EXTENSION, EWebExtensionPrivate);
+	extension->priv = e_web_extension_get_instance_private (extension);
 
 	extension->priv->initialized = FALSE;
 }
@@ -149,6 +152,14 @@ evo_jsc_get_uri_tooltip (const gchar *uri,
 }
 
 static gboolean
+evo_convert_jsc_link_requires_reference (const gchar *href,
+					 const gchar *text,
+					 gpointer user_data)
+{
+	return e_util_link_requires_reference (href, text);
+}
+
+static gboolean
 use_sources_js_file (void)
 {
 	static gint res = -1;
@@ -159,15 +170,100 @@ use_sources_js_file (void)
 	return res;
 }
 
-static void
+static gboolean
 load_javascript_file (JSCContext *jsc_context,
-		      const gchar *js_filename)
+		      const gchar *js_filename,
+		      const gchar *filename)
 {
 	JSCValue *result;
 	JSCException *exception;
-	gchar *content, *filename = NULL, *resource_uri;
+	gchar *content, *resource_uri;
 	gsize length = 0;
 	GError *error = NULL;
+	gboolean success = TRUE;
+
+	g_return_val_if_fail (jsc_context != NULL, FALSE);
+
+	if (!g_file_get_contents (filename, &content, &length, &error)) {
+		g_warning ("Failed to load '%s': %s", filename, error ? error->message : "Unknown error");
+
+		g_clear_error (&error);
+
+		return FALSE;
+	}
+
+	resource_uri = g_strconcat ("resource:///", js_filename, NULL);
+
+	result = jsc_context_evaluate_with_source_uri (jsc_context, content, length, resource_uri, 1);
+
+	g_free (resource_uri);
+
+	exception = jsc_context_get_exception (jsc_context);
+
+	if (exception) {
+		g_warning ("Failed to call script '%s': %d:%d: %s",
+			filename,
+			jsc_exception_get_line_number (exception),
+			jsc_exception_get_column_number (exception),
+			jsc_exception_get_message (exception));
+
+		jsc_context_clear_exception (jsc_context);
+		success = FALSE;
+	}
+
+	g_clear_object (&result);
+	g_free (content);
+
+	return success;
+}
+
+static void
+load_javascript_plugins (JSCContext *jsc_context,
+			 const gchar *top_path,
+			 GSList **out_loaded_plugins)
+{
+	const gchar *dirfile;
+	gchar *path;
+	GDir *dir;
+
+	g_return_if_fail (jsc_context != NULL);
+
+	/* Do not load plugins during unit tests */
+	if (use_sources_js_file ())
+		return;
+
+	path = g_build_filename (top_path, "preview-plugins", NULL);
+
+	dir = g_dir_open (path, 0, NULL);
+	if (!dir) {
+		g_free (path);
+		return;
+	}
+
+	while (dirfile = g_dir_read_name (dir), dirfile) {
+		if (g_str_has_suffix (dirfile, ".js") ||
+		    g_str_has_suffix (dirfile, ".Js") ||
+		    g_str_has_suffix (dirfile, ".jS") ||
+		    g_str_has_suffix (dirfile, ".JS")) {
+			gchar *filename;
+
+			filename = g_build_filename (path, dirfile, NULL);
+			if (load_javascript_file (jsc_context, filename, filename))
+				*out_loaded_plugins = g_slist_prepend (*out_loaded_plugins, filename);
+			else
+				g_free (filename);
+		}
+	}
+
+	g_dir_close (dir);
+	g_free (path);
+}
+
+static void
+load_javascript_builtin_file (JSCContext *jsc_context,
+			      const gchar *js_filename)
+{
+	gchar *filename = NULL;
 
 	g_return_if_fail (jsc_context != NULL);
 
@@ -192,36 +288,9 @@ load_javascript_file (JSCContext *jsc_context,
 	if (!filename)
 		filename = g_build_filename (EVOLUTION_WEBKITDATADIR, js_filename, NULL);
 
-	if (!g_file_get_contents (filename, &content, &length, &error)) {
-		g_warning ("Failed to load '%s': %s", filename, error ? error->message : "Unknown error");
+	load_javascript_file (jsc_context, js_filename, filename);
 
-		g_clear_error (&error);
-		g_free (filename);
-
-		return;
-	}
-
-	resource_uri = g_strconcat ("resource:///", js_filename, NULL);
-
-	result = jsc_context_evaluate_with_source_uri (jsc_context, content, length, resource_uri, 1);
-
-	g_free (resource_uri);
-
-	exception = jsc_context_get_exception (jsc_context);
-
-	if (exception) {
-		g_warning ("Failed to call script '%s': %d:%d: %s",
-			filename,
-			jsc_exception_get_line_number (exception),
-			jsc_exception_get_column_number (exception),
-			jsc_exception_get_message (exception));
-
-		jsc_context_clear_exception (jsc_context);
-	}
-
-	g_clear_object (&result);
 	g_free (filename);
-	g_free (content);
 }
 
 static void
@@ -230,8 +299,10 @@ window_object_cleared_cb (WebKitScriptWorld *world,
 			  WebKitFrame *frame,
 			  gpointer user_data)
 {
+	EWebExtension *extension = user_data;
 	JSCContext *jsc_context;
 	JSCValue *jsc_evo_object;
+	JSCValue *jsc_convert;
 
 	/* Load the javascript files only to the main frame, not to the subframes */
 	if (!webkit_frame_is_main_frame (frame))
@@ -240,8 +311,8 @@ window_object_cleared_cb (WebKitScriptWorld *world,
 	jsc_context = webkit_frame_get_js_context (frame);
 
 	/* Read e-convert.js first, because e-web-view.js uses it */
-	load_javascript_file (jsc_context, "e-convert.js");
-	load_javascript_file (jsc_context, "e-web-view.js");
+	load_javascript_builtin_file (jsc_context, "e-convert.js");
+	load_javascript_builtin_file (jsc_context, "e-web-view.js");
 
 	jsc_evo_object = jsc_context_get_value (jsc_context, "Evo");
 
@@ -262,6 +333,44 @@ window_object_cleared_cb (WebKitScriptWorld *world,
 	}
 
 	g_clear_object (&jsc_evo_object);
+
+	jsc_convert = jsc_context_get_value (jsc_context, "EvoConvert");
+
+	if (jsc_convert) {
+		JSCValue *jsc_function;
+		const gchar *func_name;
+
+		/* EvoConvert.linkRequiresReference(href, text) */
+		func_name = "linkRequiresReference";
+		jsc_function = jsc_value_new_function (jsc_context, func_name,
+			G_CALLBACK (evo_convert_jsc_link_requires_reference), NULL, NULL,
+			G_TYPE_BOOLEAN, 2, G_TYPE_STRING, G_TYPE_STRING);
+
+		jsc_value_object_set_property (jsc_convert, func_name, jsc_function);
+
+		g_clear_object (&jsc_function);
+		g_clear_object (&jsc_convert);
+	}
+
+	if (extension->priv->known_plugins) {
+		GSList *link;
+
+		for (link = extension->priv->known_plugins; link; link = g_slist_next (link)) {
+			const gchar *filename = link->data;
+
+			if (filename)
+				load_javascript_file (jsc_context, filename, filename);
+		}
+	} else {
+		load_javascript_plugins (jsc_context, EVOLUTION_WEBKITDATADIR, &extension->priv->known_plugins);
+		load_javascript_plugins (jsc_context, e_get_user_data_dir (), &extension->priv->known_plugins);
+
+		if (!extension->priv->known_plugins)
+			extension->priv->known_plugins = g_slist_prepend (extension->priv->known_plugins, NULL);
+		else
+			extension->priv->known_plugins = g_slist_reverse (extension->priv->known_plugins);
+	}
+
 	g_clear_object (&jsc_context);
 }
 
@@ -287,7 +396,7 @@ e_web_extension_initialize (EWebExtension *extension,
 	script_world = webkit_script_world_get_default ();
 
 	g_signal_connect (script_world, "window-object-cleared",
-		G_CALLBACK (window_object_cleared_cb), NULL);
+		G_CALLBACK (window_object_cleared_cb), extension);
 }
 
 WebKitWebExtension *

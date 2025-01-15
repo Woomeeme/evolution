@@ -23,6 +23,7 @@
 #include <libedataserver/libedataserver.h>
 
 #include <e-util/e-util.h>
+#include "e-util/e-util-private.h"
 #include <libemail-engine/libemail-engine.h>
 #include <shell/e-shell.h>
 
@@ -148,6 +149,12 @@ format_short_headers (EMailFormatter *formatter,
 		" id=\"__evo-remote-content-img-small\" class=\"__evo-remote-content-img\" title=\"%s\" style=\"cursor:pointer;\" hidden/>",
 		GTK_ICON_SIZE_MENU, icon_width, icon_height,
 		_("Remote content download had been blocked for this message."));
+	g_string_append_printf (buffer,
+		"&nbsp;"
+		"<img src=\"gtk-stock://stock_signature/?size=%d\" width=\"%dpx\" height=\"%dpx\""
+		" id=\"__evo-autocrypt-import-img-small\" class=\"__evo-autocrypt-import-img\" title=\"%s\" style=\"cursor:pointer;\" hidden/>",
+		GTK_ICON_SIZE_MENU, icon_width, icon_height,
+		_("Import OpenPGP key provided in this message"));
 	g_string_append (buffer, "</td>");
 
 	g_string_append (buffer, "</tr></table>");
@@ -387,7 +394,7 @@ format_full_headers (EMailFormatter *formatter,
 	} else {
 		CamelMedium *medium;
 		gchar **default_headers;
-		guint ii, length = 0;
+		guint length = 0;
 
 		medium = CAMEL_MEDIUM (mime_part);
 
@@ -468,9 +475,9 @@ format_full_headers (EMailFormatter *formatter,
 
 	/* Prefer contact photos over archaic "Face" headers. */
 	if (show_sender_photo && photo_name != NULL) {
-		gchar *name;
+		gchar *escaped_name;
 
-		name = g_uri_escape_string (photo_name, NULL, FALSE);
+		escaped_name = g_uri_escape_string (photo_name, NULL, FALSE);
 		g_string_append (
 			buffer,
 			"<td align=\"right\" valign=\"top\">");
@@ -478,10 +485,10 @@ format_full_headers (EMailFormatter *formatter,
 			buffer,
 			"<img src=\"mail://contact-photo?mailaddr=\" "
 			"data-mailaddr=\"%s\" id=\"__evo-contact-photo\"/>",
-			name);
+			escaped_name);
 		g_string_append (buffer, "</td>");
 
-		g_free (name);
+		g_free (escaped_name);
 
 	} else if (!is_rfc822_headers && face_header_value != NULL) {
 		CamelMimePart *image_part;
@@ -512,6 +519,12 @@ format_full_headers (EMailFormatter *formatter,
 		" id=\"__evo-remote-content-img-large\" class=\"__evo-remote-content-img\" title=\"%s\" style=\"cursor:pointer;\" hidden/>",
 		GTK_ICON_SIZE_LARGE_TOOLBAR, icon_width, icon_height,
 		_("Remote content download had been blocked for this message."));
+	g_string_append_printf (buffer,
+		"&nbsp;"
+		"<img src=\"gtk-stock://stock_signature/?size=%d\" width=\"%dpx\" height=\"%dpx\""
+		" id=\"__evo-autocrypt-import-img-large\" class=\"__evo-autocrypt-import-img\" title=\"%s\" style=\"cursor:pointer;\" hidden/>",
+		GTK_ICON_SIZE_LARGE_TOOLBAR, icon_width, icon_height,
+		_("Import OpenPGP key provided in this message"));
 	g_string_append (buffer, "</td>");
 
 	g_string_append (buffer, "</tr></table>");
@@ -605,11 +618,12 @@ emfe_headers_format (EMailFormatterExtension *extension,
 			buffer,
 			"<td valign=\"top\" width=\"18\" style=\"padding-left: 0px\">"
 			"<button type=\"button\" class=\"header-collapse\" id=\"__evo-collapse-headers-img\">"
-			"<img src=\"gtk-stock://%s?size=%d\" width=\"%dpx\" height=\"%dpx\"/>"
+			"<img src=\"gtk-stock://%s?size=%d\" width=\"%dpx\" height=\"%dpx\" class=\"-evo-color-scheme-light\"/>"
+			"<img src=\"gtk-stock://%s?size=%d&amp;color-scheme=dark\" width=\"%dpx\" height=\"%dpx\" class=\"-evo-color-scheme-dark\"/>"
 			"</button>"
 			"</td>",
-			is_collapsed ? "pan-end-symbolic" : "pan-down-symbolic",
-			GTK_ICON_SIZE_BUTTON, icon_width, icon_height);
+			is_collapsed ? "x-evolution-pan-end" : "x-evolution-pan-down", GTK_ICON_SIZE_BUTTON, icon_width, icon_height,
+			is_collapsed ? "x-evolution-pan-end" : "x-evolution-pan-down", GTK_ICON_SIZE_BUTTON, icon_width, icon_height);
 	}
 
 	g_string_append (buffer, "<td>");

@@ -152,6 +152,7 @@ typedef enum {
  * @E_CONTENT_EDITOR_INSERT_TEXT_PLAIN:
  * @E_CONTENT_EDITOR_INSERT_CONVERT_PREFER_PRE: Set when should convert plain text into &lt;pre&gt; instead of &lt;div&gt;. Since 3.40
  * @E_CONTENT_EDITOR_INSERT_CLEANUP_SIGNATURE_ID: Set when should cleanup signature ID in the body. Since 3.42
+ * @E_CONTENT_EDITOR_INSERT_FROM_PLAIN_TEXT: Set when the HTML source is a plain text editor. Since: 3.48
  *
  * Since: 3.22
  **/
@@ -163,7 +164,8 @@ typedef enum {
 	E_CONTENT_EDITOR_INSERT_TEXT_HTML		= 1 << 3,
 	E_CONTENT_EDITOR_INSERT_TEXT_PLAIN		= 1 << 4,
 	E_CONTENT_EDITOR_INSERT_CONVERT_PREFER_PRE	= 1 << 5,
-	E_CONTENT_EDITOR_INSERT_CLEANUP_SIGNATURE_ID	= 1 << 6
+	E_CONTENT_EDITOR_INSERT_CLEANUP_SIGNATURE_ID	= 1 << 6,
+	E_CONTENT_EDITOR_INSERT_FROM_PLAIN_TEXT 	= 1 << 7
 } EContentEditorInsertContentFlags;
 
 /**
@@ -526,6 +528,28 @@ typedef enum {
 } EContentEditorFindFlags;
 
 /**
+ * EContentEditorMode:
+ * @E_CONTENT_EDITOR_MODE_UNKNOWN: unknown mode
+ * @E_CONTENT_EDITOR_MODE_PLAIN_TEXT: plain text, expects export as text/plain
+ * @E_CONTENT_EDITOR_MODE_HTML: HTML, expects export as text/html
+ * @E_CONTENT_EDITOR_MODE_MARKDOWN: markdown, expects export as text/markdown
+ * @E_CONTENT_EDITOR_MODE_MARKDOWN_PLAIN_TEXT: markdown, expects export as text/plain
+ * @E_CONTENT_EDITOR_MODE_MARKDOWN_HTML: markdown, expects export as text/html
+ *
+ * Editing mode of a content editor.
+ *
+ * Since: 3.44
+ **/
+typedef enum {
+	E_CONTENT_EDITOR_MODE_UNKNOWN = -1,
+	E_CONTENT_EDITOR_MODE_PLAIN_TEXT,
+	E_CONTENT_EDITOR_MODE_HTML,
+	E_CONTENT_EDITOR_MODE_MARKDOWN,
+	E_CONTENT_EDITOR_MODE_MARKDOWN_PLAIN_TEXT,
+	E_CONTENT_EDITOR_MODE_MARKDOWN_HTML
+} EContentEditorMode;
+
+/**
  * EUndoRedoState:
  * @E_UNDO_REDO_STATE_NONE: Cannot undo, neither redo.
  * @E_UNDO_REDO_STATE_CAN_UNDO: Undo is available.
@@ -550,6 +574,7 @@ typedef enum {
  * @DND_TARGET_TYPE_TEXT_PLAIN: text/plain
  * @DND_TARGET_TYPE_STRING: STRING
  * @DND_TARGET_TYPE_TEXT_PLAIN_UTF8: text/plain;charser=utf-8
+ * @E_DND_TARGET_TYPE_TEXT_X_MOZ_URL: text/x-moz-url ; Since:3.52
  *
  * Drag and drop targets supported by EContentEditor.
  *
@@ -562,7 +587,8 @@ typedef enum {
 	E_DND_TARGET_TYPE_UTF8_STRING,
 	E_DND_TARGET_TYPE_TEXT_PLAIN,
 	E_DND_TARGET_TYPE_STRING,
-	E_DND_TARGET_TYPE_TEXT_PLAIN_UTF8
+	E_DND_TARGET_TYPE_TEXT_PLAIN_UTF8,
+	E_DND_TARGET_TYPE_TEXT_X_MOZ_URL
 } EDnDTargetType;
 
 /**
@@ -619,6 +645,80 @@ typedef enum {
  * Since: 3.28
  **/
 #define E_CONFIG_LOOKUP_RESULT_LAST_KIND E_CONFIG_LOOKUP_RESULT_TASK_LIST
+
+/**
+ * EMarkdownHTMLToTextFlags:
+ * @E_MARKDOWN_HTML_TO_TEXT_FLAG_NONE: no flag set
+ * @E_MARKDOWN_HTML_TO_TEXT_FLAG_PLAIN_TEXT: disallow any HTML, save in pure plain text
+ * @E_MARKDOWN_HTML_TO_TEXT_FLAG_COMPOSER_QUIRKS: enable composer quirks to post-process the text
+ * @E_MARKDOWN_HTML_TO_TEXT_FLAG_SIGNIFICANT_NL: whether new lines in the text are significant,
+ *    aka whether they work the same as the &lt;br&gt; elements. Since: 3.48
+ * @E_MARKDOWN_HTML_TO_TEXT_FLAG_LINK_INLINE: this flag is used only together with %E_MARKDOWN_HTML_TO_TEXT_FLAG_PLAIN_TEXT,
+ *    and it converts links in a way that it shows href beside the text link, like: "label &lt;href&gt;". Since: 3.52
+ * @E_MARKDOWN_HTML_TO_TEXT_FLAG_LINK_REFERENCE: this flag is used only together with %E_MARKDOWN_HTML_TO_TEXT_FLAG_PLAIN_TEXT,
+ *    and it converts links in a way that it shows href as reference to the end of the text, like: "label [1] ...... [1] label href". Since: 3.52
+ * @E_MARKDOWN_HTML_TO_TEXT_FLAG_LINK_REFERENCE_WITHOUT_LABEL: this flag is used only together with %E_MARKDOWN_HTML_TO_TEXT_FLAG_PLAIN_TEXT,
+ *    and it converts links in a way that it shows href as reference to the end of the text without label, like: "label [1] ...... [1] href". Since: 3.52
+ *
+ * Flags used in e_markdown_util_html_to_text(). The %E_MARKDOWN_HTML_TO_TEXT_FLAG_LINK_INLINE,
+ * %E_MARKDOWN_HTML_TO_TEXT_FLAG_LINK_REFERENCE and %E_MARKDOWN_HTML_TO_TEXT_FLAG_LINK_REFERENCE_WITHOUT_LABEL
+ * are mutually exclusive and are used only together with the %E_MARKDOWN_HTML_TO_TEXT_FLAG_PLAIN_TEXT flag.
+ *
+ * Since: 3.44
+ **/
+typedef enum { /*< flags >*/
+	E_MARKDOWN_HTML_TO_TEXT_FLAG_NONE				= 0,
+	E_MARKDOWN_HTML_TO_TEXT_FLAG_PLAIN_TEXT				= 1 << 0,
+	E_MARKDOWN_HTML_TO_TEXT_FLAG_COMPOSER_QUIRKS			= 1 << 1,
+	E_MARKDOWN_HTML_TO_TEXT_FLAG_SIGNIFICANT_NL			= 1 << 2,
+	E_MARKDOWN_HTML_TO_TEXT_FLAG_LINK_INLINE			= 1 << 3,
+	E_MARKDOWN_HTML_TO_TEXT_FLAG_LINK_REFERENCE			= 1 << 4,
+	E_MARKDOWN_HTML_TO_TEXT_FLAG_LINK_REFERENCE_WITHOUT_LABEL	= 1 << 5
+} EMarkdownHTMLToTextFlags;
+
+/**
+ * EMarkdownTextToHTMLFlags:
+ * @E_MARKDOWN_TEXT_TO_HTML_FLAG_NONE: no flag set
+ * @E_MARKDOWN_TEXT_TO_HTML_FLAG_INCLUDE_SOURCEPOS: include source position in the generated HTML
+ *
+ * Flags used in e_markdown_util_text_to_html_full().
+ *
+ * Since: 3.48
+ **/
+typedef enum { /*< flags >*/
+	E_MARKDOWN_TEXT_TO_HTML_FLAG_NONE		= 0,
+	E_MARKDOWN_TEXT_TO_HTML_FLAG_INCLUDE_SOURCEPOS	= 1 << 0
+} EMarkdownTextToHTMLFlags;
+
+typedef enum {
+	E_TOOLBAR_ICON_SIZE_DEFAULT	= 0,
+	E_TOOLBAR_ICON_SIZE_SMALL	= 1,
+	E_TOOLBAR_ICON_SIZE_LARGE	= 2
+} EToolbarIconSize;
+
+typedef enum {
+	E_PREFER_SYMBOLIC_ICONS_NO	= 0,
+	E_PREFER_SYMBOLIC_ICONS_YES	= 1,
+	E_PREFER_SYMBOLIC_ICONS_AUTO	= 2
+} EPreferSymbolicIcons;
+
+/**
+ * EHTMLLinkToText:
+ * @E_HTML_LINK_TO_TEXT_NONE: do not store href in the plain text
+ * @E_HTML_LINK_TO_TEXT_INLINE: show href beside the text link, like: "label &lt;href&gt;"
+ * @E_HTML_LINK_TO_TEXT_REFERENCE: show href as reference to the end of the text, like: "label [1] ...... [1] label href"
+ * @E_HTML_LINK_TO_TEXT_REFERENCE_WITHOUT_LABEL: show href as reference to the end of the text without label, like: "label [1] ...... [1] href"
+ *
+ * How to convert links from HTML to plain text.
+ *
+ * Since: 3.52
+ **/
+typedef enum {
+	E_HTML_LINK_TO_TEXT_NONE = 0,
+	E_HTML_LINK_TO_TEXT_INLINE = 1,
+	E_HTML_LINK_TO_TEXT_REFERENCE = 2,
+	E_HTML_LINK_TO_TEXT_REFERENCE_WITHOUT_LABEL = 3
+} EHTMLLinkToText;
 
 G_END_DECLS
 

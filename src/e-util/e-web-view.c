@@ -42,10 +42,6 @@
 
 #include "e-web-view.h"
 
-#define E_WEB_VIEW_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_WEB_VIEW, EWebViewPrivate))
-
 typedef struct _AsyncContext AsyncContext;
 
 typedef struct _ElementClickedData {
@@ -100,6 +96,7 @@ struct _EWebViewPrivate {
 };
 
 struct _AsyncContext {
+	GTask *task;
 	EActivity *activity;
 	GFile *destination;
 	GInputStream *input_stream;
@@ -134,6 +131,8 @@ enum {
 	URI_REQUESTED,
 	CONTENT_LOADED,
 	BEFORE_POPUP_EVENT,
+	RESOURCE_LOADED,
+	SET_FONTS,
 	LAST_SIGNAL
 };
 
@@ -170,18 +169,11 @@ static const gchar *ui =
 static void e_web_view_alert_sink_init (EAlertSinkInterface *iface);
 static void e_web_view_selectable_init (ESelectableInterface *iface);
 
-G_DEFINE_TYPE_WITH_CODE (
-	EWebView,
-	e_web_view,
-	WEBKIT_TYPE_WEB_VIEW,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL)
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_ALERT_SINK,
-		e_web_view_alert_sink_init)
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_SELECTABLE,
-		e_web_view_selectable_init))
+G_DEFINE_TYPE_WITH_CODE (EWebView, e_web_view, WEBKIT_TYPE_WEB_VIEW,
+	G_ADD_PRIVATE (EWebView)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL)
+	G_IMPLEMENT_INTERFACE (E_TYPE_ALERT_SINK, e_web_view_alert_sink_init)
+	G_IMPLEMENT_INTERFACE (E_TYPE_SELECTABLE, e_web_view_selectable_init))
 
 static void
 async_context_free (gpointer ptr)
@@ -191,6 +183,7 @@ async_context_free (gpointer ptr)
 	if (!async_context)
 		return;
 
+	g_clear_object (&async_context->task);
 	g_clear_object (&async_context->activity);
 	g_clear_object (&async_context->destination);
 	g_clear_object (&async_context->input_stream);
@@ -198,6 +191,39 @@ async_context_free (gpointer ptr)
 	g_free (async_context->uri);
 
 	g_slice_free (AsyncContext, async_context);
+}
+
+static void
+e_web_view_update_spell_checking (EWebView *web_view,
+				  GSettings *settings)
+{
+	WebKitWebContext *web_context;
+
+	web_context = webkit_web_view_get_context (WEBKIT_WEB_VIEW (web_view));
+
+	if (g_settings_get_boolean (settings, "composer-inline-spelling")) {
+		gchar **languages;
+
+		languages = g_settings_get_strv (settings, "composer-spell-languages");
+
+		if (languages)
+			webkit_web_context_set_spell_checking_languages (web_context, (const gchar * const *) languages);
+		webkit_web_context_set_spell_checking_enabled (web_context, languages != NULL);
+
+		g_strfreev (languages);
+	} else {
+		webkit_web_context_set_spell_checking_enabled (web_context, FALSE);
+	}
+}
+
+static void
+e_web_view_spell_settings_changed_cb (GSettings *settings,
+				      const gchar *key,
+				      gpointer user_data)
+{
+	EWebView *web_view = user_data;
+
+	e_web_view_update_spell_checking (web_view, settings);
 }
 
 static void
@@ -423,16 +449,16 @@ static GtkActionEntry mailto_entries[] = {
 
 	{ "mailto-copy",
 	  "edit-copy",
-	  N_("_Copy Email Address"),
+	  N_("_Copy Name and Email Address"),
 	  "<Control>c",
-	  N_("Copy the email address to the clipboard"),
+	  N_("Copy the email address with the name to the clipboard"),
 	  G_CALLBACK (action_mailto_copy_cb) },
 
 	{ "mailto-copy-raw",
 	  "edit-copy",
-	  N_("Copy _Raw Email Address"),
+	  N_("Copy Only Email Add_ress"),
 	  NULL,
-	  N_("Copy the raw email address to the clipboard"),
+	  N_("Copy only the email address without the name to the clipboard"),
 	  G_CALLBACK (action_mailto_copy_raw_cb) },
 
 	{ "send-message",
@@ -643,6 +669,10 @@ web_view_context_menu_cb (WebKitWebView *webkit_web_view,
 
 	context = webkit_hit_test_result_get_context (hit_test_result);
 
+	/* Show the default menu for an editable */
+	if ((context & WEBKIT_HIT_TEST_RESULT_CONTEXT_EDITABLE) != 0)
+		return FALSE;
+
 	if (context & WEBKIT_HIT_TEST_RESULT_CONTEXT_IMAGE) {
 		gchar *image_uri = NULL;
 
@@ -721,31 +751,31 @@ web_view_decide_policy_cb (EWebView *web_view,
 
 	/* Allow navigation through fragments in page */
 	if (uri && *uri && view_uri && *view_uri) {
-		SoupURI *uri_link, *uri_view;
+		GUri *uri_link, *uri_view;
 
-		uri_link = soup_uri_new (uri);
-		uri_view = soup_uri_new (view_uri);
+		uri_link = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+		uri_view = g_uri_parse (view_uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
 		if (uri_link && uri_view) {
 			const gchar *tmp1, *tmp2;
 
-			tmp1 = soup_uri_get_scheme (uri_link);
-			tmp2 = soup_uri_get_scheme (uri_view);
+			tmp1 = g_uri_get_scheme (uri_link);
+			tmp2 = g_uri_get_scheme (uri_view);
 
 			/* The scheme on both URIs should be the same */
 			if (tmp1 && tmp2 && g_ascii_strcasecmp (tmp1, tmp2) != 0)
 				goto free_uris;
 
-			tmp1 = soup_uri_get_host (uri_link);
-			tmp2 = soup_uri_get_host (uri_view);
+			tmp1 = g_uri_get_host (uri_link);
+			tmp2 = g_uri_get_host (uri_view);
 
 			/* The host on both URIs should be the same */
 			if (tmp1 && tmp2 && g_ascii_strcasecmp (tmp1, tmp2) != 0)
 				goto free_uris;
 
 			/* URI from link should have fragment set - could be empty */
-			if (soup_uri_get_fragment (uri_link)) {
-				soup_uri_free (uri_link);
-				soup_uri_free (uri_view);
+			if (g_uri_get_fragment (uri_link)) {
+				g_uri_unref (uri_link);
+				g_uri_unref (uri_view);
 				webkit_policy_decision_use (decision);
 				return TRUE;
 			}
@@ -753,9 +783,9 @@ web_view_decide_policy_cb (EWebView *web_view,
 
  free_uris:
 		if (uri_link)
-			soup_uri_free (uri_link);
+			g_uri_unref (uri_link);
 		if (uri_view)
-			soup_uri_free (uri_view);
+			g_uri_unref (uri_view);
 	}
 
 	/* XXX WebKitWebView does not provide a class method for
@@ -782,6 +812,7 @@ e_web_view_update_styles (EWebView *web_view,
 	gchar *style;
 	GtkStyleContext *style_context;
 	WebKitWebView *webkit_web_view;
+	gdouble bg_brightness, fg_brightness;
 
 	style_context = gtk_widget_get_style_context (GTK_WIDGET (web_view));
 
@@ -810,6 +841,8 @@ e_web_view_update_styles (EWebView *web_view,
 		style,
 		web_view->priv->cancellable);
 
+	bg_brightness = e_utils_get_color_brightness (&color);
+
 	g_free (color_value);
 	g_free (style);
 
@@ -827,8 +860,51 @@ e_web_view_update_styles (EWebView *web_view,
 		style,
 		web_view->priv->cancellable);
 
+	fg_brightness = e_utils_get_color_brightness (&color);
+
 	g_free (color_value);
 	g_free (style);
+
+	/* assume darker background than text color means dark theme */
+	if (bg_brightness < fg_brightness) {
+		e_web_view_jsc_add_rule_into_style_sheet (webkit_web_view,
+			iframe_id,
+			"-e-web-view-style-sheet",
+			"button",
+			"color-scheme: dark;",
+			web_view->priv->cancellable);
+		e_web_view_jsc_add_rule_into_style_sheet (webkit_web_view,
+			iframe_id,
+			"-e-web-view-style-sheet",
+			".-evo-color-scheme-light",
+			"display: none;",
+			web_view->priv->cancellable);
+		e_web_view_jsc_add_rule_into_style_sheet (webkit_web_view,
+			iframe_id,
+			"-e-web-view-style-sheet",
+			".-evo-color-scheme-dark",
+			"display: initial;",
+			web_view->priv->cancellable);
+	} else {
+		e_web_view_jsc_add_rule_into_style_sheet (webkit_web_view,
+			iframe_id,
+			"-e-web-view-style-sheet",
+			"button",
+			"color-scheme: inherit;",
+			web_view->priv->cancellable);
+		e_web_view_jsc_add_rule_into_style_sheet (webkit_web_view,
+			iframe_id,
+			"-e-web-view-style-sheet",
+			".-evo-color-scheme-light",
+			"display: initial;",
+			web_view->priv->cancellable);
+		e_web_view_jsc_add_rule_into_style_sheet (webkit_web_view,
+			iframe_id,
+			"-e-web-view-style-sheet",
+			".-evo-color-scheme-dark",
+			"display: none;",
+			web_view->priv->cancellable);
+	}
 
 	e_web_view_jsc_add_rule_into_style_sheet (webkit_web_view,
 		iframe_id,
@@ -845,6 +921,20 @@ style_updated_cb (EWebView *web_view)
 }
 
 static void
+e_web_view_set_has_selection (EWebView *web_view,
+			      gboolean has_selection)
+{
+	g_return_if_fail (E_IS_WEB_VIEW (web_view));
+
+	if ((!web_view->priv->has_selection) == (!has_selection))
+		return;
+
+	web_view->priv->has_selection = has_selection;
+
+	g_object_notify (G_OBJECT (web_view), "has-selection");
+}
+
+static void
 web_view_load_changed_cb (WebKitWebView *webkit_web_view,
                           WebKitLoadEvent load_event,
                           gpointer user_data)
@@ -853,8 +943,10 @@ web_view_load_changed_cb (WebKitWebView *webkit_web_view,
 
 	web_view = E_WEB_VIEW (webkit_web_view);
 
-	if (load_event == WEBKIT_LOAD_STARTED)
+	if (load_event == WEBKIT_LOAD_STARTED) {
 		g_hash_table_remove_all (web_view->priv->element_clicked_cbs);
+		e_web_view_set_has_selection (web_view, FALSE);
+	}
 
 	if (load_event != WEBKIT_LOAD_FINISHED)
 		return;
@@ -888,6 +980,7 @@ web_view_uri_request_done_cb (GObject *source_object,
 			      gpointer user_data)
 {
 	WebKitURISchemeRequest *request = user_data;
+	WebKitWebView *web_view;
 	GInputStream *stream = NULL;
 	gint64 stream_length = -1;
 	gchar *mime_type = NULL;
@@ -898,6 +991,8 @@ web_view_uri_request_done_cb (GObject *source_object,
 
 	if (!e_content_request_process_finish (E_CONTENT_REQUEST (source_object),
 		result, &stream, &stream_length, &mime_type, &error)) {
+		if (!error)
+			error = g_error_new (G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to get '%s'", webkit_uri_scheme_request_get_uri (request));
 		webkit_uri_scheme_request_finish_error (request, error);
 		g_clear_error (&error);
 	} else {
@@ -906,6 +1001,9 @@ web_view_uri_request_done_cb (GObject *source_object,
 		g_clear_object (&stream);
 		g_free (mime_type);
 	}
+
+	web_view = webkit_uri_scheme_request_get_web_view (request);
+	g_signal_emit (web_view, signals[RESOURCE_LOADED], 0, NULL);
 
 	g_object_unref (request);
 }
@@ -1048,6 +1146,7 @@ web_view_constructor (GType type,
 
 			if (!web_context) {
 				GSList *link;
+				gchar *plugins_path;
 				#ifdef ENABLE_MAINTAINER_MODE
 				const gchar *source_webkitdatadir;
 				#endif
@@ -1058,6 +1157,11 @@ web_view_constructor (GType type,
 				webkit_web_context_set_web_extensions_directory (web_context, EVOLUTION_WEB_EXTENSIONS_DIR);
 				webkit_web_context_set_sandbox_enabled (web_context, TRUE);
 				webkit_web_context_add_path_to_sandbox (web_context, EVOLUTION_WEBKITDATADIR, TRUE);
+
+				plugins_path = g_build_filename (e_get_user_data_dir (), "preview-plugins", NULL);
+				if (g_file_test (plugins_path, G_FILE_TEST_IS_DIR))
+					webkit_web_context_add_path_to_sandbox (web_context, plugins_path, TRUE);
+				g_free (plugins_path);
 
 				#ifdef ENABLE_MAINTAINER_MODE
 				source_webkitdatadir = g_getenv ("EVOLUTION_SOURCE_WEBKITDATADIR");
@@ -1247,54 +1351,52 @@ web_view_get_property (GObject *object,
 static void
 web_view_dispose (GObject *object)
 {
-	EWebViewPrivate *priv;
+	EWebView *self = E_WEB_VIEW (object);
 
 	/* This can be called during dispose, thus disconnect early */
 	g_signal_handlers_disconnect_by_func (object, G_CALLBACK (style_updated_cb), NULL);
 
-	priv = E_WEB_VIEW_GET_PRIVATE (object);
-
-	if (priv->cancellable) {
-		g_cancellable_cancel (priv->cancellable);
-		g_clear_object (&priv->cancellable);
+	if (self->priv->cancellable) {
+		g_cancellable_cancel (self->priv->cancellable);
+		g_clear_object (&self->priv->cancellable);
 	}
 
-	if (priv->font_name_changed_handler_id > 0) {
+	if (self->priv->font_name_changed_handler_id > 0) {
 		g_signal_handler_disconnect (
-			priv->font_settings,
-			priv->font_name_changed_handler_id);
-		priv->font_name_changed_handler_id = 0;
+			self->priv->font_settings,
+			self->priv->font_name_changed_handler_id);
+		self->priv->font_name_changed_handler_id = 0;
 	}
 
-	if (priv->monospace_font_name_changed_handler_id > 0) {
+	if (self->priv->monospace_font_name_changed_handler_id > 0) {
 		g_signal_handler_disconnect (
-			priv->font_settings,
-			priv->monospace_font_name_changed_handler_id);
-		priv->monospace_font_name_changed_handler_id = 0;
+			self->priv->font_settings,
+			self->priv->monospace_font_name_changed_handler_id);
+		self->priv->monospace_font_name_changed_handler_id = 0;
 	}
 
-	if (priv->found_text_handler_id > 0) {
+	if (self->priv->found_text_handler_id > 0) {
 		g_signal_handler_disconnect (
-			priv->find_controller,
-			priv->found_text_handler_id);
-		priv->found_text_handler_id = 0;
+			self->priv->find_controller,
+			self->priv->found_text_handler_id);
+		self->priv->found_text_handler_id = 0;
 	}
 
-	if (priv->failed_to_find_text_handler_id > 0) {
+	if (self->priv->failed_to_find_text_handler_id > 0) {
 		g_signal_handler_disconnect (
-			priv->find_controller,
-			priv->failed_to_find_text_handler_id);
-		priv->failed_to_find_text_handler_id = 0;
+			self->priv->find_controller,
+			self->priv->failed_to_find_text_handler_id);
+		self->priv->failed_to_find_text_handler_id = 0;
 	}
 
-	g_hash_table_remove_all (priv->scheme_handlers);
-	g_hash_table_remove_all (priv->element_clicked_cbs);
+	g_hash_table_remove_all (self->priv->scheme_handlers);
+	g_hash_table_remove_all (self->priv->element_clicked_cbs);
 
-	g_clear_object (&priv->ui_manager);
-	g_clear_object (&priv->open_proxy);
-	g_clear_object (&priv->print_proxy);
-	g_clear_object (&priv->save_as_proxy);
-	g_clear_object (&priv->font_settings);
+	g_clear_object (&self->priv->ui_manager);
+	g_clear_object (&self->priv->open_proxy);
+	g_clear_object (&self->priv->print_proxy);
+	g_clear_object (&self->priv->save_as_proxy);
+	g_clear_object (&self->priv->font_settings);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_web_view_parent_class)->dispose (object);
@@ -1303,24 +1405,22 @@ web_view_dispose (GObject *object)
 static void
 web_view_finalize (GObject *object)
 {
-	EWebViewPrivate *priv;
+	EWebView *self = E_WEB_VIEW (object);
 
-	priv = E_WEB_VIEW_GET_PRIVATE (object);
+	g_clear_pointer (&self->priv->last_popup_iframe_src, g_free);
+	g_clear_pointer (&self->priv->last_popup_iframe_id, g_free);
+	g_clear_pointer (&self->priv->last_popup_element_id, g_free);
+	g_clear_pointer (&self->priv->last_popup_link_uri, g_free);
+	g_free (self->priv->selected_uri);
+	g_free (self->priv->cursor_image_src);
 
-	g_clear_pointer (&priv->last_popup_iframe_src, g_free);
-	g_clear_pointer (&priv->last_popup_iframe_id, g_free);
-	g_clear_pointer (&priv->last_popup_element_id, g_free);
-	g_clear_pointer (&priv->last_popup_link_uri, g_free);
-	g_free (priv->selected_uri);
-	g_free (priv->cursor_image_src);
+	while (!g_queue_is_empty (&self->priv->highlights))
+		g_free (g_queue_pop_head (&self->priv->highlights));
 
-	while (!g_queue_is_empty (&priv->highlights))
-		g_free (g_queue_pop_head (&priv->highlights));
+	g_clear_pointer (&self->priv->old_settings, g_hash_table_destroy);
 
-	g_clear_pointer (&priv->old_settings, g_hash_table_destroy);
-
-	g_hash_table_destroy (priv->scheme_handlers);
-	g_hash_table_destroy (priv->element_clicked_cbs);
+	g_hash_table_destroy (self->priv->scheme_handlers);
+	g_hash_table_destroy (self->priv->element_clicked_cbs);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_web_view_parent_class)->finalize (object);
@@ -1386,6 +1486,7 @@ e_web_view_element_clicked_cb (WebKitUserContentManager *manager,
 	GPtrArray *listeners;
 	JSCValue *jsc_object;
 	gchar *iframe_id, *elem_id, *elem_class, *elem_value;
+	gdouble zoom_level;
 
 	g_return_if_fail (web_view != NULL);
 	g_return_if_fail (js_result != NULL);
@@ -1401,6 +1502,12 @@ e_web_view_element_clicked_cb (WebKitUserContentManager *manager,
 	elem_position.y = e_web_view_jsc_get_object_property_int32 (jsc_object, "top", 0);
 	elem_position.width = e_web_view_jsc_get_object_property_int32 (jsc_object, "width", 0);
 	elem_position.height = e_web_view_jsc_get_object_property_int32 (jsc_object, "height", 0);
+
+	zoom_level = webkit_web_view_get_zoom_level (WEBKIT_WEB_VIEW (web_view));
+	elem_position.x *= zoom_level;
+	elem_position.y *= zoom_level;
+	elem_position.width *= zoom_level;
+	elem_position.height *= zoom_level;
 
 	listeners = g_hash_table_lookup (web_view->priv->element_clicked_cbs, elem_class);
 
@@ -1481,21 +1588,6 @@ e_web_view_content_loaded_cb (WebKitUserContentManager *manager,
 
 	g_free (iframe_id);
 }
-
-static void
-e_web_view_set_has_selection (EWebView *web_view,
-			      gboolean has_selection)
-{
-	g_return_if_fail (E_IS_WEB_VIEW (web_view));
-
-	if ((!web_view->priv->has_selection) == (!has_selection))
-		return;
-
-	web_view->priv->has_selection = has_selection;
-
-	g_object_notify (G_OBJECT (web_view), "has-selection");
-}
-
 
 static void
 e_web_view_has_selection_cb (WebKitUserContentManager *manager,
@@ -1622,6 +1714,14 @@ web_view_constructed (GObject *object)
 	webkit_user_content_manager_register_script_message_handler (manager, "elementClicked");
 	webkit_user_content_manager_register_script_message_handler (manager, "hasSelection");
 	webkit_user_content_manager_register_script_message_handler (manager, "needInputChanged");
+
+	settings = e_util_ref_settings ("org.gnome.evolution.mail");
+	g_signal_connect_object (settings, "changed::composer-inline-spelling",
+		G_CALLBACK (e_web_view_spell_settings_changed_cb), web_view, 0);
+	g_signal_connect_object (settings, "changed::composer-spell-languages",
+		G_CALLBACK (e_web_view_spell_settings_changed_cb), web_view, 0);
+	e_web_view_update_spell_checking (web_view, settings);
+	g_clear_object (&settings);
 }
 
 static void
@@ -1745,6 +1845,18 @@ web_view_link_clicked (EWebView *web_view,
 
 	parent = gtk_widget_get_toplevel (GTK_WIDGET (web_view));
 	parent = gtk_widget_is_toplevel (parent) ? parent : NULL;
+
+	if (g_ascii_strncasecmp (uri, "open-map:", 9) == 0) {
+		GUri *guri;
+
+		guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+		if (guri) {
+			e_open_map_uri (parent, g_uri_get_path (guri));
+			g_uri_unref (guri);
+		}
+
+		return;
+	}
 
 	e_show_uri (parent, uri);
 }
@@ -2170,8 +2282,6 @@ e_web_view_class_init (EWebViewClass *class)
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
 
-	g_type_class_add_private (class, sizeof (EWebViewPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->constructor = web_view_constructor;
 	object_class->set_property = web_view_set_property;
@@ -2322,6 +2432,14 @@ e_web_view_class_init (EWebViewClass *class)
 			NULL,
 			G_PARAM_READWRITE));
 
+	signals[SET_FONTS] = g_signal_new (
+		"set-fonts",
+		G_TYPE_FROM_CLASS (class),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		G_STRUCT_OFFSET (EWebViewClass, set_fonts),
+		NULL, NULL, NULL,
+		G_TYPE_NONE, 2, G_TYPE_POINTER, G_TYPE_POINTER);
+
 	signals[NEW_ACTIVITY] = g_signal_new (
 		"new-activity",
 		G_TYPE_FROM_CLASS (class),
@@ -2406,6 +2524,14 @@ e_web_view_class_init (EWebViewClass *class)
 		G_STRUCT_OFFSET (EWebViewClass, content_loaded),
 		NULL, NULL, NULL,
 		G_TYPE_NONE, 1, G_TYPE_STRING);
+
+	signals[RESOURCE_LOADED] = g_signal_new (
+		"resource-loaded",
+		G_TYPE_FROM_CLASS (class),
+		G_SIGNAL_RUN_LAST,
+		0,
+		NULL, NULL, NULL,
+		G_TYPE_NONE, 0, G_TYPE_NONE);
 }
 
 static void
@@ -2436,7 +2562,7 @@ e_web_view_init (EWebView *web_view)
 	gulong handler_id;
 	GError *error = NULL;
 
-	web_view->priv = E_WEB_VIEW_GET_PRIVATE (web_view);
+	web_view->priv = e_web_view_get_instance_private (web_view);
 
 	web_view->priv->highlights_enabled = TRUE;
 	web_view->priv->old_settings = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, (GDestroyNotify) g_variant_unref);
@@ -3327,13 +3453,22 @@ e_web_view_update_fonts_settings (GSettings *font_settings,
 			"monospace-font-name");
 
 		ms = pango_font_description_from_string (
-			(font != NULL) ? font : "monospace 10");
+			(font && *font) ? font : "monospace 10");
 
 		clean_ms = TRUE;
 
 		g_free (font);
 	} else
 		ms = ms_font;
+
+	if (!pango_font_description_get_family (ms) ||
+	    !pango_font_description_get_size (ms)) {
+		if (clean_ms)
+			pango_font_description_free (ms);
+
+		clean_ms = TRUE;
+		ms = pango_font_description_from_string ("monospace 10");
+	}
 
 	if (!vw_font) {
 		gchar *font;
@@ -3343,13 +3478,22 @@ e_web_view_update_fonts_settings (GSettings *font_settings,
 			"font-name");
 
 		vw = pango_font_description_from_string (
-			(font != NULL) ? font : "serif 10");
+			(font && *font) ? font : "serif 10");
 
 		clean_vw = TRUE;
 
 		g_free (font);
 	} else
 		vw = vw_font;
+
+	if (!pango_font_description_get_family (vw) ||
+	    !pango_font_description_get_size (vw)) {
+		if (clean_vw)
+			pango_font_description_free (vw);
+
+		clean_vw = TRUE;
+		vw = pango_font_description_from_string ("serif 10");
+	}
 
 	stylesheet = g_string_new ("");
 	g_ascii_dtostr (fsbuff, G_ASCII_DTOSTR_BUF_SIZE,
@@ -3444,12 +3588,16 @@ e_web_view_update_fonts_settings (GSettings *font_settings,
 
 		g_string_append_printf (
 			stylesheet,
+			"span.navigable, div.navigable, p.navigable {\n"
+			"  color: #%06x;\n"
+			"}\n"
 			"a {\n"
 			"  color: #%06x;\n"
 			"}\n"
 			"a:visited {\n"
 			"  color: #%06x;\n"
 			"}\n",
+			e_color_to_value (link),
 			e_color_to_value (link),
 			e_color_to_value (visited));
 
@@ -3596,9 +3744,9 @@ e_web_view_get_default_webkit_settings (void)
 		"enable-javascript-markup", FALSE, /* Discards user-provided javascript in HTML */
 		"enable-offline-web-application-cache", FALSE,
 		"enable-page-cache", FALSE,
-		"enable-plugins", FALSE,
 		"enable-smooth-scrolling", FALSE,
 		"media-playback-allows-inline", FALSE,
+		"hardware-acceleration-policy", WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER,
 		NULL);
 
 	e_web_view_utils_apply_minimum_font_size (settings);
@@ -3670,8 +3818,7 @@ e_web_view_update_fonts (EWebView *web_view)
 	class = E_WEB_VIEW_GET_CLASS (web_view);
 	g_return_if_fail (class != NULL);
 
-	if (class->set_fonts != NULL)
-		class->set_fonts (web_view, &ms, &vw);
+	g_signal_emit (web_view, signals[SET_FONTS], 0, &ms, &vw, NULL);
 
 	e_web_view_update_fonts_settings (
 		web_view->priv->font_settings,
@@ -4039,27 +4186,26 @@ e_web_view_cursor_image_save (EWebView *web_view)
 	}
 }
 
-/* Helper for e_web_view_request() */
 static void
-web_view_request_process_thread (GTask *task,
-				 gpointer source_object,
-				 gpointer task_data,
-				 GCancellable *cancellable)
+web_view_content_request_processed_cb (GObject *source_object,
+				       GAsyncResult *result,
+				       gpointer user_data)
 {
-	AsyncContext *async_context = task_data;
+	AsyncContext *async_context = user_data;
+	GTask *task = g_steal_pointer (&async_context->task);
 	gint64 stream_length = -1;
 	gchar *mime_type = NULL;
 	GError *local_error = NULL;
 
-	if (!e_content_request_process_sync (async_context->content_request,
-		async_context->uri, source_object, &async_context->input_stream,
-		&stream_length, &mime_type, cancellable, &local_error)) {
+	if (!e_content_request_process_finish (E_CONTENT_REQUEST (source_object), result,
+		&async_context->input_stream, &stream_length, &mime_type, &local_error)) {
 		g_task_return_error (task, local_error);
 	} else {
 		g_task_return_boolean (task, TRUE);
 	}
 
 	g_free (mime_type);
+	g_clear_object (&task);
 }
 
 /**
@@ -4114,7 +4260,13 @@ e_web_view_request (EWebView *web_view,
 
 	if (content_request) {
 		async_context->content_request = g_object_ref (content_request);
-		g_task_run_in_thread (task, web_view_request_process_thread);
+		async_context->task = g_object_ref (task);
+		e_content_request_process (async_context->content_request,
+			async_context->uri,
+			G_OBJECT (web_view),
+			cancellable,
+			web_view_content_request_processed_cb,
+			async_context);
 		is_processed = TRUE;
 
 	/* Handle base64-encoded "data:" URIs manually */

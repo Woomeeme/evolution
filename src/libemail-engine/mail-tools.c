@@ -150,16 +150,17 @@ mail_tool_do_movemail (CamelStore *store,
 }
 
 gchar *
-mail_tool_generate_forward_subject (CamelMimeMessage *msg)
+mail_tool_generate_forward_subject (CamelMimeMessage *msg,
+				    const gchar *orig_subject)
 {
-	const gchar *orig_subject;
 	gchar *subject = NULL;
 	gchar *fwd_subj;
 	const gint max_subject_length = 1024;
 	const gchar *format;
 	GSettings *settings;
 
-	orig_subject = camel_mime_message_get_subject (msg);
+	if ((!orig_subject || !*orig_subject) && msg)
+		orig_subject = camel_mime_message_get_subject (msg);
 
 	if (orig_subject && *orig_subject) {
 		gchar *utf8;
@@ -184,7 +185,7 @@ mail_tool_generate_forward_subject (CamelMimeMessage *msg)
 		g_free (utf8);
 	}
 
-	if (!subject) {
+	if (!subject && msg) {
 		const CamelInternetAddress *from;
 
 		from = camel_mime_message_get_from (msg);
@@ -293,6 +294,13 @@ mail_tool_make_message_attachment (CamelMimeMessage *message)
 	part = camel_mime_part_new ();
 	camel_mime_part_set_disposition (part, "inline");
 	camel_mime_part_set_description (part, desc);
+	if (!g_str_has_suffix (desc, ".eml")) {
+		gchar *fnm;
+
+		fnm = g_strconcat (desc, ".eml", NULL);
+		camel_mime_part_set_filename (part, fnm);
+		g_free (fnm);
+	}
 	camel_medium_set_content (
 		CAMEL_MEDIUM (part), CAMEL_DATA_WRAPPER (message));
 	camel_mime_part_set_content_type (part, "message/rfc822");

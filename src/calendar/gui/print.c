@@ -45,8 +45,6 @@
 #include "e-week-view-layout.h"
 #include "e-task-table.h"
 
-#include "data/xpm/jump.xpm"
-
 typedef struct PrintCompItem PrintCompItem;
 typedef struct PrintCalItem PrintCalItem;
 
@@ -57,12 +55,38 @@ struct PrintCompItem {
 	gboolean use_24_hour_format;
 };
 
+static void
+print_comp_item_free (gpointer ptr)
+{
+	PrintCompItem *pci = ptr;
+
+	if (pci) {
+		g_clear_object (&pci->client);
+		g_clear_object (&pci->comp);
+		g_clear_object (&pci->zone);
+		g_slice_free (PrintCompItem, pci);
+	}
+}
+
 struct PrintCalItem {
 	ECalendarView *cal_view;
 	ETable *tasks_table;
 	EPrintView print_view_type;
 	time_t start;
 };
+
+static void
+print_cal_item_free (gpointer ptr,
+		     GClosure *closure)
+{
+	PrintCalItem *pci = ptr;
+
+	if (pci) {
+		g_clear_object (&pci->cal_view);
+		g_clear_object (&pci->tasks_table);
+		g_slice_free (PrintCalItem, pci);
+	}
+}
 
 static gdouble
 evo_calendar_print_renderer_get_width (GtkPrintContext *context,
@@ -178,6 +202,9 @@ get_day_view_time_divisions (void)
 
 /* Allowance for small errors in floating point comparisons. */
 #define EPSILON			0.01
+
+/* border of the top title, the other-month's days and such */
+#define DARKER_BORDER 0.94
 
 /* The weird month of September 1752, where 3 Sep through 13 Sep were
  * eliminated due to the Gregorian reformation. */
@@ -468,15 +495,21 @@ shrink_text_to_line (PangoLayout *layout,
                      gdouble y1,
                      gdouble y2)
 {
-	gint new_length;
+	gint new_length, len;
 
 	if (layout_width == 0 || x2 - x1 < EPSILON)
 		return layout; /* Do nothing */
 
+	len = strlen (text);
 	new_length = (gint) floor (pango_units_from_double (x2 - x1) /
-			(gdouble) layout_width * (gdouble) strlen (text));
+			(gdouble) layout_width * (gdouble) len);
 
-	if (new_length < strlen (text)) {
+	/* in case the cut would be in the middle of a UTF-8 character */
+	while (new_length < len && !g_utf8_validate (text, new_length, NULL)) {
+		new_length++;
+	}
+
+	if (new_length < len) {
 		g_object_unref (layout); /* Destroy old layout */
 		layout = gtk_print_context_create_pango_layout (context);
 
@@ -636,7 +669,7 @@ titled_box (GtkPrintContext *context,
 	gdouble size;
 
 	size = evo_calendar_print_renderer_get_height (context, font, text);
-	print_border (context, *x1, *x2, *y1, *y1 + size + 2, linewidth, 0.9);
+	print_border (context, *x1, *x2, *y1, *y1 + size + 2, linewidth, DARKER_BORDER);
 	print_border (context, *x1, *x2, *y1 + size + 2, *y2, linewidth, -1.0);
 	*x1 += 2;
 	*x2 -= 2;
@@ -809,7 +842,7 @@ print_month_small (GtkPrintContext *context,
 
 	font = get_font_for_size (header_size, PANGO_WEIGHT_BOLD);
 	if (bordertitle)
-		print_border (context, x1, x2, y1, y1 + header_size, 1.0, 0.9);
+		print_border (context, x1, x2, y1, y1 + header_size, 1.0, DARKER_BORDER);
 	print_text (
 		context, font, buf, PANGO_ALIGN_CENTER, x1, x2,
 		y1, y1 + header_size);
@@ -1041,7 +1074,7 @@ print_day_background (GtkPrintContext *context,
 	use_24_hour = e_cal_model_get_use_24_hour_format (model);
 
 	/* Fill the time column in light-gray. */
-	print_border (context, left, left + width, top, bottom, -1.0, 0.9);
+	print_border (context, left, left + width, top, bottom, -1.0, DARKER_BORDER);
 
 	/* Draw the border around the entire view. */
 	cr = gtk_print_context_get_cairo_context (context);
@@ -1312,7 +1345,7 @@ print_attendees (GtkPrintContext *context,
 		if (!attendee)
 			continue;
 
-		value = e_cal_component_attendee_get_value (attendee);
+		value = e_cal_util_get_attendee_email (attendee);
 		if (value && *value) {
 			GString *text;
 			const gchar *tmp;
@@ -1326,7 +1359,7 @@ print_attendees (GtkPrintContext *context,
 			if (e_cal_component_attendee_get_cn (attendee) && e_cal_component_attendee_get_cn (attendee)[0])
 				g_string_append (text, e_cal_component_attendee_get_cn (attendee));
 			else {
-				g_string_append (text, itip_strip_mailto (value));
+				g_string_append (text, e_cal_util_strip_mailto (value));
 			}
 
 			tmp = get_role_as_string (e_cal_component_attendee_get_role (attendee));
@@ -1669,22 +1702,19 @@ print_day_details (GtkPrintContext *context,
 			DAY_VIEW_ROW_HEIGHT, event, &pdi, model);
 	}
 
+	cr = gtk_print_context_get_cairo_context (context);
+
 	if (rows_in_top_display < pdi.long_events->len) {
 		/* too many events */
-		cairo_t *cr = gtk_print_context_get_cairo_context (context);
 		gint x, y;
 
 		if (!pixbuf) {
-			const gchar **xpm = (const gchar **) jump_xpm;
+			GError *error = NULL;
 
-			/* this ugly thing is here only to get rid of compiler warning
-			 * about unused 'jump_xpm_focused' */
-			if (pixbuf) {
-				/* coverity[dead_error_line] */
-				xpm = (const gchar **) jump_xpm_focused;
-			}
-
-			pixbuf = gdk_pixbuf_new_from_xpm_data (xpm);
+			pixbuf = gdk_pixbuf_new_from_resource ("/org.gnome.Evolution/jump.svg", &error);
+			if (!pixbuf)
+				g_warning ("%s: Failed to load 'jump.svg': %s", G_STRFUNC, error ? error->message : "Unknown error");
+			g_clear_error (&error);
 		}
 
 		/* Right align - 10 comes from print_day_long_event  too */
@@ -1706,7 +1736,6 @@ print_day_details (GtkPrintContext *context,
 		rows_in_top_display++;
 
 	/* Draw the border around the long events. */
-	cr = gtk_print_context_get_cairo_context (context);
 
 	cairo_set_source_rgb (cr, 0, 0, 0);
 	print_border (
@@ -2030,9 +2059,12 @@ print_week_event (GtkPrintContext *context,
 			}
 
 			if (!pixbuf) {
-				const gchar **xpm = (const gchar **) jump_xpm;
+				GError *error = NULL;
 
-				pixbuf = gdk_pixbuf_new_from_xpm_data (xpm);
+				pixbuf = gdk_pixbuf_new_from_resource ("/org.gnome.Evolution/jump.svg", &error);
+				if (!pixbuf)
+					g_warning ("%s: Failed to load 'jump.svg': %s", G_STRFUNC, error ? error->message : "Unknown error");
+				g_clear_error (&error);
 			}
 
 			x1 = left + (start_x + 1) * cell_width - 6 -
@@ -2087,12 +2119,12 @@ print_week_view_background (GtkPrintContext *context,
 		 * of the previous month and the start of the following. */
 		fillcolor = -1.0;
 		if (psi->multi_week_view && (tm.tm_mon != psi->month))
-			fillcolor = 0.9;
+			fillcolor = DARKER_BORDER;
 
 		print_border (context, x1, x2, y1, y2, 1.0, fillcolor);
 
 		if (psi->multi_week_view) {
-			if (tm.tm_mday == 1)
+			if (!day || tm.tm_mday == 1)
 				format_string = _("%d %B");
 			else
 				format_string = "%d";
@@ -2324,6 +2356,16 @@ print_month_summary (GtkPrintContext *context,
 	weekday = e_cal_model_get_week_start_day (model);
 	compress_weekend = e_cal_model_get_compress_weekend (model);
 
+	/* Remember which month we want. */
+	date = time_day_begin_with_zone (whence, zone);
+	if (date != time_month_begin_with_zone (date, zone)) {
+		date = time_month_begin_with_zone (date, zone);
+		date = time_add_month_with_zone (date, 1, zone);
+	}
+	tt = i_cal_time_new_from_timet_with_zone (date, FALSE, zone);
+	month = i_cal_time_get_month (tt) - 1;
+	g_clear_object (&tt);
+
 	date = 0;
 	weeks = 6;
 	if (print_view_type == E_PRINT_VIEW_MONTH) {
@@ -2337,17 +2379,11 @@ print_month_summary (GtkPrintContext *context,
 		multi_week_view = e_week_view_get_multi_week_view (week_view);
 		e_week_view_get_first_day_shown (week_view, &first_day_shown);
 
-		if (multi_week_view && !(weeks_shown >= 4 &&
-		    g_date_valid (&first_day_shown))) {
+		if (multi_week_view) {
 			weeks = weeks_shown;
 			date = whence;
 		}
 	}
-
-	/* Remember which month we want. */
-	tt = i_cal_time_new_from_timet_with_zone (whence, FALSE, zone);
-	month = i_cal_time_get_month (tt) - 1;
-	g_clear_object (&tt);
 
 	/* Find the start of the month, and then the start of the week on
 	 * or before that day. */
@@ -2375,8 +2411,8 @@ print_month_summary (GtkPrintContext *context,
 
 	columns = compress_weekend ? 6 : 7;
 	cell_width = (right - left) / columns;
-	y1 = top;
-	y2 = top + font_size * 1.5;
+	y1 = top + font_size * 1.5;
+	y2 = y1 + font_size * 1.5;
 
 	for (col = 0; col < columns; col++) {
 		if (tm.tm_wday == 6 && compress_weekend)
@@ -2461,7 +2497,7 @@ print_todo_details (GtkPrintContext *context,
 		if (!comp)
 			continue;
 
-		summary = e_cal_component_get_summary (comp);
+		summary = e_cal_component_dup_summary_for_locale (comp, NULL);
 		if (!summary || !e_cal_component_text_get_value (summary)) {
 			e_cal_component_text_free (summary);
 			g_object_unref (comp);
@@ -2554,7 +2590,7 @@ print_day_view (GtkPrintContext *context,
 		/* Print the filled border around the header. */
 		print_border (
 			context, 0.0, width,
-			0.0, HEADER_HEIGHT + 4, 1.0, 0.9);
+			0.0, HEADER_HEIGHT + 4, 1.0, DARKER_BORDER);
 
 		/* Print the 2 mini calendar-months. */
 		l = width - SMALL_MONTH_PAD -
@@ -2622,9 +2658,9 @@ print_work_week_background (GtkPrintContext *context,
 	use_24_hour = e_cal_model_get_use_24_hour_format (model);
 
 	/* Fill the left time column in light-gray. */
-	print_border (context, left, left + width, top, bottom, -1.0, 0.9);
+	print_border (context, left, left + width, top, bottom, -1.0, DARKER_BORDER);
 	/* Fill the right time column in light-gray */
-	print_border (context, right - width, right, top, bottom, -1.0, 0.9);
+	print_border (context, right - width, right, top, bottom, -1.0, DARKER_BORDER);
 
 	/* Draw the border around the entire view. */
 	cr = gtk_print_context_get_cairo_context (context);
@@ -2853,15 +2889,19 @@ print_work_week_day_details (GtkPrintContext *context,
 			DAY_VIEW_ROW_HEIGHT, event, &pdi, model);
 	}
 
+	cr = gtk_print_context_get_cairo_context (context);
+
 	if (rows_in_top_display < pdi.long_events->len) {
 		/* too many events */
-		cairo_t *cr = gtk_print_context_get_cairo_context (context);
 		gint x, y;
 
 		if (!pixbuf) {
-			const gchar **xpm = (const gchar **) jump_xpm;
+			GError *error = NULL;
 
-			pixbuf = gdk_pixbuf_new_from_xpm_data (xpm);
+			pixbuf = gdk_pixbuf_new_from_resource ("/org.gnome.Evolution/jump.svg", &error);
+			if (!pixbuf)
+				g_warning ("%s: Failed to load 'jump.svg': %s", G_STRFUNC, error ? error->message : "Unknown error");
+			g_clear_error (&error);
 		}
 
 		/* Right align - 10 comes from print_day_long_event  too */
@@ -2883,7 +2923,6 @@ print_work_week_day_details (GtkPrintContext *context,
 		rows_in_top_display++;
 
 	/* Draw the border around the long events. */
-	cr = gtk_print_context_get_cairo_context (context);
 
 	cairo_set_source_rgb (cr, 0, 0, 0);
 	print_border (
@@ -3046,7 +3085,7 @@ print_work_week_view (GtkPrintContext *context,
 		HEADER_HEIGHT + DAY_VIEW_ROW_HEIGHT + LONG_EVENT_OFFSET,
 		height);
 
-	print_border (context, 0.0, width, 0.0, HEADER_HEIGHT, 1.0, 0.9);
+	print_border (context, 0.0, width, 0.0, HEADER_HEIGHT, 1.0, DARKER_BORDER);
 
 	/* Print the 2 mini calendar-months. */
 	l = width - SMALL_MONTH_PAD - (small_month_width + weeknum_inc) * 2 -
@@ -3166,7 +3205,7 @@ print_week_view (GtkPrintContext *context,
 	/* Print the border around the header area. */
 	print_border (
 		context, 0.0, width,
-		0.0, HEADER_HEIGHT + 2.0 + 20, 1.0, 0.9);
+		0.0, HEADER_HEIGHT + 2.0 + 20, 1.0, DARKER_BORDER);
 
 	/* Print the 2 mini calendar-months. */
 	l = width - SMALL_MONTH_PAD - (small_month_width + week_numbers_inc) * 2
@@ -3228,8 +3267,15 @@ print_month_view (GtkPrintContext *context,
 	/* Print the main month view. */
 	print_month_summary (context, model, cal_view, print_view_type, date, 0.0, width, HEADER_HEIGHT, height);
 
+	/* round the date to match the expected month */
+	date = time_day_begin_with_zone (date, zone);
+	if (date != time_month_begin_with_zone (date, zone)) {
+		date = time_month_begin_with_zone (date, zone);
+		date = time_add_month_with_zone (date, 1, zone);
+	}
+
 	/* Print the border around the header. */
-	print_border (context, 0.0, width, 0.0, HEADER_HEIGHT + 10, 1.0, 0.9);
+	print_border (context, 0.0, width, 0.0, HEADER_HEIGHT + 10, 1.0, DARKER_BORDER);
 
 	l = width - SMALL_MONTH_PAD - small_month_width - week_numbers_inc;
 
@@ -3479,55 +3525,31 @@ print_calendar (ECalendarView *cal_view,
                 time_t start)
 {
 	GtkPrintOperation *operation;
-	PrintCalItem pcali;
+	PrintCalItem *pci;
 
 	g_return_if_fail (cal_view != NULL);
 	g_return_if_fail (E_IS_CALENDAR_VIEW (cal_view));
 
 	if (print_view_type == E_PRINT_VIEW_MONTH) {
-		EWeekView *week_view;
-		GDate date;
-		gboolean multi_week_view;
-		gint weeks_shown;
+		EWeekView *week_view = E_WEEK_VIEW (cal_view);
 
-		week_view = E_WEEK_VIEW (cal_view);
-		weeks_shown = e_week_view_get_weeks_shown (week_view);
-		multi_week_view = e_week_view_get_multi_week_view (week_view);
-		e_week_view_get_first_day_shown (week_view, &date);
-
-		if (multi_week_view &&
-		    weeks_shown >= 4 &&
-		    g_date_valid (&date)) {
-			ICalTime *start_tt;
-
-			g_date_add_days (&date, 7);
-
-			start_tt = i_cal_time_new_null_time ();
-			i_cal_time_set_is_date (start_tt, TRUE);
-			i_cal_time_set_date (start_tt,
-				g_date_get_year (&date),
-				g_date_get_month (&date),
-				g_date_get_day (&date));
-
-			start = i_cal_time_as_timet (start_tt);
-
-			g_clear_object (&start_tt);
-		} else if (multi_week_view) {
+		if (e_week_view_get_multi_week_view (week_view))
 			start = week_view->day_starts[0];
-		}
 	}
 
-	pcali.cal_view = cal_view;
-	pcali.tasks_table = tasks_table;
-	pcali.print_view_type = print_view_type;
-	pcali.start = start;
+	pci = g_slice_new0 (PrintCalItem);
+	pci->cal_view = g_object_ref (cal_view);
+	pci->tasks_table = g_object_ref (tasks_table);
+	pci->print_view_type = print_view_type;
+	pci->start = start;
 
 	operation = e_print_operation_new ();
 	gtk_print_operation_set_n_pages (operation, 1);
 
-	g_signal_connect (
+	g_signal_connect_data (
 		operation, "draw_page",
-		G_CALLBACK (print_calendar_draw_page), &pcali);
+		G_CALLBACK (print_calendar_draw_page), pci,
+		print_cal_item_free, 0);
 
 	gtk_print_operation_run (operation, action, NULL, NULL);
 
@@ -3547,7 +3569,7 @@ print_comp_draw_real (GtkPrintOperation *operation,
 	ECalComponent *comp;
 	ECalComponentVType vtype;
 	ECalComponentText *text;
-	GSList *desc, *contact_list, *elem;
+	GSList *contact_list, *elem;
 	const gchar *title;
 	gchar *categories, *location;
 	gchar *categories_string, *location_string, *summary_string;
@@ -3600,7 +3622,7 @@ print_comp_draw_real (GtkPrintOperation *operation,
 	if (page_nr == 0) {
 		print_border (
 			context, 0.0, width, 0.0, header_size,
-			1.0, 0.9);
+			1.0, DARKER_BORDER);
 		print_text (
 			context, font, title, PANGO_ALIGN_CENTER, 0.0, width,
 			0.1, header_size - 0.1);
@@ -3612,7 +3634,7 @@ print_comp_draw_real (GtkPrintOperation *operation,
 
 	/* Summary */
 	font = get_font_for_size (18, PANGO_WEIGHT_BOLD);
-	text = e_cal_component_get_summary (comp);
+	text = e_cal_component_dup_summary_for_locale (comp, NULL);
 	summary_string = g_strdup_printf (_("Summary: %s"), (text && e_cal_component_text_get_value (text)) ? e_cal_component_text_get_value (text) : "");
 	top = bound_text (
 		context, font, summary_string, -1, 0.0, top, width,
@@ -3660,11 +3682,42 @@ print_comp_draw_real (GtkPrintOperation *operation,
 
 	/* For a VTODO we print the Status, Priority, % Complete and URL. */
 	if (vtype == E_CAL_COMPONENT_TODO) {
+		ICalComponent *icomp;
+		ICalProperty *prop;
 		ICalPropertyStatus status;
 		const gchar *status_string = NULL;
 		gint percent;
 		gint priority;
 		gchar *url;
+
+		icomp = e_cal_component_get_icalcomponent (comp);
+
+		/* Estimated duration */
+		prop = i_cal_component_get_first_property (icomp, I_CAL_ESTIMATEDDURATION_PROPERTY);
+		if (prop) {
+			ICalDuration *duration;
+
+			duration = i_cal_property_get_estimatedduration (prop);
+
+			if (duration) {
+				gint seconds;
+
+				seconds = i_cal_duration_as_int (duration);
+				if (seconds > 0) {
+					gchar *tmp = e_cal_util_seconds_to_string (seconds);
+					gchar *estimated_duration = g_strdup_printf (_("Estimated duration: %s"), tmp);
+					top = bound_text (
+						context, font, estimated_duration, -1,
+						0.0, top, width, height, FALSE, NULL, &page_start, &pages);
+					top += get_font_size (font) - 6;
+					g_free (estimated_duration);
+					g_free (tmp);
+				}
+			}
+
+			g_clear_object (&duration);
+			g_object_unref (prop);
+		}
 
 		/* Status */
 		status = e_cal_component_get_status (comp);
@@ -3766,30 +3819,57 @@ print_comp_draw_real (GtkPrintOperation *operation,
 	top += 16;
 
 	/* Description */
-	desc = e_cal_component_get_descriptions (comp);
-	for (elem = desc; elem; elem = g_slist_next (elem)) {
-		ECalComponentText *ptext = elem->data;
-		const gchar *line, *next_line;
+	if (e_cal_component_get_vtype (comp) == E_CAL_COMPONENT_JOURNAL) {
+		GSList *desc;
 
-		for (line = e_cal_component_text_get_value (ptext); line != NULL; line = next_line) {
-			next_line = strchr (line, '\n');
+		desc = e_cal_component_get_descriptions (comp);
+		for (elem = desc; elem; elem = g_slist_next (elem)) {
+			ECalComponentText *ptext = elem->data;
+			const gchar *line, *next_line;
 
-			top = bound_text (
-				context, font, line,
-				next_line ? next_line - line : -1,
-				0.0, top + 3, width, height, TRUE, NULL,
-				&page_start, &pages);
+			for (line = e_cal_component_text_get_value (ptext); line != NULL; line = next_line) {
+				next_line = strchr (line, '\n');
 
-			if (next_line) {
-				next_line++;
-				if (!*next_line)
-					next_line = NULL;
+				top = bound_text (
+					context, font, line,
+					next_line ? next_line - line : -1,
+					0.0, top + 3, width, height, TRUE, NULL,
+					&page_start, &pages);
+
+				if (next_line) {
+					next_line++;
+					if (!*next_line)
+						next_line = NULL;
+				}
 			}
 		}
 
+		g_slist_free_full (desc, e_cal_component_text_free);
+	} else {
+		text = e_cal_component_dup_description_for_locale (comp, NULL);
+
+		if (text) {
+			const gchar *line, *next_line;
+
+			for (line = e_cal_component_text_get_value (text); line != NULL; line = next_line) {
+				next_line = strchr (line, '\n');
+
+				top = bound_text (
+					context, font, line,
+					next_line ? next_line - line : -1,
+					0.0, top + 3, width, height, TRUE, NULL,
+					&page_start, &pages);
+
+				if (next_line) {
+					next_line++;
+					if (!*next_line)
+						next_line = NULL;
+				}
+			}
+		}
+		e_cal_component_text_free (text);
 	}
 
-	g_slist_free_full (desc, e_cal_component_text_free);
 	pango_font_description_free (font);
 
 	return pages;
@@ -3824,25 +3904,28 @@ print_comp (ECalComponent *comp,
             GtkPrintOperationAction action)
 {
 	GtkPrintOperation *operation;
-	PrintCompItem pci;
+	PrintCompItem *pci;
 
 	g_return_if_fail (E_IS_CAL_COMPONENT (comp));
 
-	pci.comp = comp;
-	pci.client = cal_client;
-	pci.zone = zone;
-	pci.use_24_hour_format = use_24_hour_format;
+	pci = g_slice_new0 (PrintCompItem);
+	pci->comp = g_object_ref (comp);
+	pci->client = cal_client ? g_object_ref (cal_client) : NULL;
+	pci->zone = zone ? g_object_ref (zone) : NULL;
+	pci->use_24_hour_format = use_24_hour_format;
 
 	operation = e_print_operation_new ();
 	gtk_print_operation_set_n_pages (operation, 1);
 
+	g_object_set_data_full (G_OBJECT (operation), "e-print-context-data", pci, print_comp_item_free);
+
 	g_signal_connect (
 		operation, "begin-print",
-		G_CALLBACK (print_comp_begin_print), &pci);
+		G_CALLBACK (print_comp_begin_print), pci);
 
 	g_signal_connect (
 		operation, "draw-page",
-		G_CALLBACK (print_comp_draw_page), &pci);
+		G_CALLBACK (print_comp_draw_page), pci);
 
 	gtk_print_operation_run (operation, action, NULL, NULL);
 
@@ -3872,9 +3955,9 @@ print_title (GtkPrintContext *context,
 
 	cairo_move_to (cr, 0.0, 0.0);
 	pango_cairo_show_layout (cr, layout);
-	cairo_translate (cr, 0.0, 18);
-	cairo_save (cr);
 	cairo_restore (cr);
+
+	cairo_translate (cr, 0.0, 18);
 
 	g_object_unref (layout);
 
@@ -3882,9 +3965,22 @@ print_title (GtkPrintContext *context,
 }
 
 struct print_opts {
-  EPrintable *printable;
-  const gchar *print_header;
+	EPrintable *printable;
+	gchar *print_header;
 };
+
+static void
+print_opts_free (gpointer ptr,
+		 GClosure *closure)
+{
+	struct print_opts *opts = ptr;
+
+	if (opts) {
+		g_clear_object (&opts->printable);
+		g_free (opts->print_header);
+		g_slice_free (struct print_opts, opts);
+	}
+}
 
 static void
 print_table_draw_page (GtkPrintOperation *operation,
@@ -3894,12 +3990,16 @@ print_table_draw_page (GtkPrintOperation *operation,
 {
 	GtkPageSetup *setup;
 	gdouble width;
+	cairo_t *cr;
 
+	cr = gtk_print_context_get_cairo_context (context);
 	setup = gtk_print_context_get_page_setup (context);
 
 	width = gtk_page_setup_get_page_width (setup, GTK_UNIT_POINTS);
 
 	do {
+		cairo_save (cr);
+
 		/* TODO Allow the user to customize the title. */
 		print_title (context, opts->print_header, width);
 
@@ -3907,9 +4007,8 @@ print_table_draw_page (GtkPrintOperation *operation,
 			e_printable_print_page (
 				opts->printable, context, width, 24, TRUE);
 
+		cairo_restore (cr);
 	} while (e_printable_data_left (opts->printable));
-
-	g_free (opts);
 }
 
 void
@@ -3929,13 +4028,14 @@ print_table (ETable *table,
 	operation = e_print_operation_new ();
 	gtk_print_operation_set_n_pages (operation, 1);
 
-	opts = g_malloc (sizeof (struct print_opts));
-	opts->printable = printable;
-	opts->print_header = print_header;
+	opts = g_slice_new0 (struct print_opts);
+	opts->printable = g_object_ref (printable);
+	opts->print_header = g_strdup (print_header);
 
-	g_signal_connect (
+	g_signal_connect_data (
 		operation, "draw_page",
-		G_CALLBACK (print_table_draw_page), opts);
+		G_CALLBACK (print_table_draw_page), opts,
+		print_opts_free, 0);
 
 	gtk_print_operation_run (operation, action, NULL, NULL);
 

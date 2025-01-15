@@ -34,10 +34,6 @@
 
 #define w(x)
 
-#define E_MAIL_PRINTER_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_PRINTER, EMailPrinterPrivate))
-
 typedef struct _AsyncContext AsyncContext;
 
 struct _EMailPrinterPrivate {
@@ -71,10 +67,7 @@ enum {
 	LAST_COLUMN
 };
 
-G_DEFINE_TYPE (
-	EMailPrinter,
-	e_mail_printer,
-	G_TYPE_OBJECT);
+G_DEFINE_TYPE_WITH_PRIVATE (EMailPrinter, e_mail_printer, G_TYPE_OBJECT)
 
 static void
 async_context_free (AsyncContext *async_context)
@@ -209,6 +202,7 @@ mail_printer_print_timeout_cb (GTask *task)
 	gpointer source_object;
 	const gchar *export_filename;
 	GtkPrintSettings *print_settings = NULL;
+	GtkPageSetup *page_setup = NULL;
 	WebKitPrintOperation *print_operation = NULL;
 	WebKitPrintOperationResponse response;
 	/* FIXME WK2
@@ -224,15 +218,36 @@ mail_printer_print_timeout_cb (GTask *task)
 
 	g_return_val_if_fail (E_IS_MAIL_PRINTER (source_object), G_SOURCE_REMOVE);
 
-	print_settings = gtk_print_settings_new ();
+	e_print_load_settings (&print_settings, &page_setup);
+
 	export_filename = e_mail_printer_get_export_filename (E_MAIL_PRINTER (source_object));
-	gtk_print_settings_set (
-		print_settings,
-		GTK_PRINT_SETTINGS_OUTPUT_BASENAME,
-		export_filename);
+
+	if (!gtk_print_settings_get (print_settings, GTK_PRINT_SETTINGS_OUTPUT_DIR)) {
+		const gchar *uri;
+
+		uri = gtk_print_settings_get (print_settings, GTK_PRINT_SETTINGS_OUTPUT_URI);
+		if (uri && g_str_has_prefix (uri, "file://")) {
+			GFile *file, *parent;
+
+			file = g_file_new_for_uri (uri);
+			parent = g_file_get_parent (file);
+
+			if (parent && g_file_peek_path (parent))
+				gtk_print_settings_set (print_settings, GTK_PRINT_SETTINGS_OUTPUT_DIR, g_file_peek_path (parent));
+
+			g_clear_object (&parent);
+			g_clear_object (&file);
+		}
+	}
+
+	gtk_print_settings_set (print_settings, GTK_PRINT_SETTINGS_OUTPUT_URI, NULL);
+	gtk_print_settings_set (print_settings, GTK_PRINT_SETTINGS_OUTPUT_BASENAME, export_filename);
 
 	print_operation = webkit_print_operation_new (async_context->web_view);
 	webkit_print_operation_set_print_settings (print_operation, print_settings);
+	webkit_print_operation_set_page_setup (print_operation, page_setup);
+	g_clear_object (&print_settings);
+	g_clear_object (&page_setup);
 
 	g_signal_connect_data (
 		print_operation, "failed",
@@ -277,14 +292,17 @@ mail_printer_print_timeout_cb (GTask *task)
 	g_signal_handler_disconnect (
 		print_operation, draw_page_handler_id); */
 
-	g_clear_object (&print_operation);
-	g_clear_object (&print_settings);
-
-	if (response == WEBKIT_PRINT_OPERATION_RESPONSE_CANCEL) {
+	if (response == WEBKIT_PRINT_OPERATION_RESPONSE_PRINT) {
+		print_settings = webkit_print_operation_get_print_settings (print_operation);
+		page_setup = webkit_print_operation_get_page_setup (print_operation);
+		e_print_save_settings (print_settings, page_setup);
+	} else if (response == WEBKIT_PRINT_OPERATION_RESPONSE_CANCEL) {
 		async_context->print_result = GTK_PRINT_OPERATION_RESULT_CANCEL;
 		g_task_return_boolean (task, TRUE);
 		g_object_unref (task);
 	}
+
+	g_clear_object (&print_operation);
 
 	return G_SOURCE_REMOVE;
 }
@@ -425,14 +443,12 @@ mail_printer_get_property (GObject *object,
 static void
 mail_printer_dispose (GObject *object)
 {
-	EMailPrinterPrivate *priv;
+	EMailPrinter *self = E_MAIL_PRINTER (object);
 
-	priv = E_MAIL_PRINTER_GET_PRIVATE (object);
-
-	g_clear_object (&priv->formatter);
-	g_clear_object (&priv->part_list);
-	g_clear_object (&priv->remote_content);
-	g_free (priv->export_filename);
+	g_clear_object (&self->priv->formatter);
+	g_clear_object (&self->priv->part_list);
+	g_clear_object (&self->priv->remote_content);
+	g_clear_pointer (&self->priv->export_filename, g_free);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_mail_printer_parent_class)->dispose (object);
@@ -442,8 +458,6 @@ static void
 e_mail_printer_class_init (EMailPrinterClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EMailPrinterPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_printer_set_property;
@@ -476,7 +490,7 @@ e_mail_printer_class_init (EMailPrinterClass *class)
 static void
 e_mail_printer_init (EMailPrinter *printer)
 {
-	printer->priv = E_MAIL_PRINTER_GET_PRIVATE (printer);
+	printer->priv = e_mail_printer_get_instance_private (printer);
 
 	printer->priv->formatter = e_mail_formatter_print_new ();
 	printer->priv->mode = E_MAIL_FORMATTER_MODE_PRINTING;

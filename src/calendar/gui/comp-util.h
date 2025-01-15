@@ -29,6 +29,7 @@
 
 #include <e-util/e-util.h>
 #include <calendar/gui/e-cal-data-model.h>
+#include <calendar/gui/e-cal-model.h>
 
 struct _EShell;
 
@@ -175,5 +176,66 @@ void		cal_comp_util_maybe_ensure_allday_timezone_properties
 void		cal_comp_util_format_itt	(ICalTime *itt,
 						 gchar *buffer,
 						 gint buffer_size);
+ICalTime *	cal_comp_util_date_time_to_zone	(ECalComponentDateTime *dt,
+						 ECalClient *client,
+						 ICalTimezone *default_zone);
+gchar *		cal_comp_util_dup_attendees_status_info
+						(ECalComponent *comp,
+						 ECalClient *cal_client,
+						 ESourceRegistry *registry);
+
+typedef enum _ECalCompUtilDescribeFlags {
+	E_CAL_COMP_UTIL_DESCRIBE_FLAG_NONE		= 0,
+	E_CAL_COMP_UTIL_DESCRIBE_FLAG_RTL		= 1 << 0,
+	E_CAL_COMP_UTIL_DESCRIBE_FLAG_USE_MARKUP	= 1 << 1,
+	E_CAL_COMP_UTIL_DESCRIBE_FLAG_ONLY_TIME		= 1 << 2,
+	E_CAL_COMP_UTIL_DESCRIBE_FLAG_24HOUR_FORMAT	= 1 << 3
+} ECalCompUtilDescribeFlags;
+
+/**
+ * ECalCompUtilDescribeFlags:
+ * @E_CAL_COMP_UTIL_DESCRIBE_FLAG_NONE: no special flag set
+ * @E_CAL_COMP_UTIL_DESCRIBE_FLAG_RTL: set to order text in right-to-left direction
+ * @E_CAL_COMP_UTIL_DESCRIBE_FLAG_USE_MARKUP: use markup in the output texts
+ * @E_CAL_COMP_UTIL_DESCRIBE_FLAG_ONLY_TIME: show only time, instead of date and time, for times
+ * @E_CAL_COMP_UTIL_DESCRIBE_FLAG_24HOUR_FORMAT: use 24-hour format for ONLY_TIME values
+ *
+ * Flags to use for cal_comp_util_describe().
+ *
+ * Since: 3.46
+ **/
+
+gchar *		cal_comp_util_describe		(ECalComponent *comp,
+						 ECalClient *client,
+						 ICalTimezone *default_zone,
+						 ECalCompUtilDescribeFlags flags);
+gchar *		cal_comp_util_dup_tooltip	(ECalComponent *comp,
+						 ECalClient *client,
+						 ESourceRegistry *registry,
+						 ICalTimezone *default_zone);
+gboolean	cal_comp_util_move_component_by_days
+						(GtkWindow *parent,
+						 ECalModel *model,
+						 ECalClient *client,
+						 ECalComponent *in_comp,
+						 gint days,
+						 gboolean is_move);
+void		cal_comp_util_add_reminder	(ECalComponent *comp,
+						 gint reminder_interval,
+						 EDurationType reminder_units);
+gchar *		cal_comp_util_dup_attach_filename
+						(ICalProperty *attach_prop,
+						 gboolean with_fallback);
+
+typedef enum {
+	E_COMP_TO_HTML_FLAG_NONE		= 0,
+	E_COMP_TO_HTML_FLAG_ALLOW_ICONS		= 1 << 0
+} ECompToHTMLFlags;
+
+void		cal_comp_util_write_to_html	(GString *html_buffer,
+						 ECalClient *client,
+						 ECalComponent *comp,
+						 ICalTimezone *zone,
+						 ECompToHTMLFlags flags);
 
 #endif

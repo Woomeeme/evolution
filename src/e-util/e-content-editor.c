@@ -174,17 +174,20 @@ e_content_editor_default_init (EContentEditorInterface *iface)
 			G_PARAM_STATIC_STRINGS));
 
 	/**
-	 * EContentEditor:html-mode
+	 * EContentEditor:mode
 	 *
-	 * Determines whether HTML or plain text mode is enabled.
+	 * Determines the mode of the content editor, as one of the #EContentEditorMode.
+	 *
+	 * Since: 3.44
 	 **/
 	g_object_interface_install_property (
 		iface,
-		g_param_spec_boolean (
-			"html-mode",
-			"HTML Mode",
-			"Edit HTML or plain text",
-			TRUE,
+		g_param_spec_enum (
+			"mode",
+			"Mode",
+			"Editor mode",
+			E_TYPE_CONTENT_EDITOR_MODE,
+			E_CONTENT_EDITOR_MODE_PLAIN_TEXT,
 			G_PARAM_READWRITE |
 			G_PARAM_STATIC_STRINGS));
 
@@ -639,6 +642,82 @@ e_content_editor_default_init (EContentEditorInterface *iface)
 		G_TYPE_STRING);
 }
 
+/**
+ * e_content_editor_supports_mode:
+ * @editor: an #EContentEditor
+ * @mode: an #EContentEditorMode to check
+ *
+ * Returns: whether the @editor supports @mode
+ *
+ * Since: 3.44
+ **/
+gboolean
+e_content_editor_supports_mode (EContentEditor *editor,
+				EContentEditorMode mode)
+{
+	EContentEditorInterface *iface;
+
+	g_return_val_if_fail (E_IS_CONTENT_EDITOR (editor), FALSE);
+
+	iface = E_CONTENT_EDITOR_GET_IFACE (editor);
+	g_return_val_if_fail (iface != NULL, FALSE);
+
+	return iface->supports_mode != NULL &&
+		iface->supports_mode (editor, mode);
+}
+
+/**
+ * e_content_editor_grab_focus:
+ * @editor: an #EContentEditor
+ *
+ * A method to grab focus on the @editor. This is an optional method,
+ * the default implementation calls gtk_widget_grab_focus().
+ *
+ * Since: 3.44
+ **/
+void
+e_content_editor_grab_focus (EContentEditor *editor)
+{
+	EContentEditorInterface *iface;
+
+	g_return_if_fail (E_IS_CONTENT_EDITOR (editor));
+
+	iface = E_CONTENT_EDITOR_GET_IFACE (editor);
+	g_return_if_fail (iface != NULL);
+
+	if (iface->grab_focus)
+		iface->grab_focus (editor);
+	else
+		gtk_widget_grab_focus (GTK_WIDGET (editor));
+}
+
+/**
+ * e_content_editor_is_focus:
+ * @editor: an #EContentEditor
+ *
+ * Returns, whether the @editor is focused. This is an optional method,
+ * the default implementation calls gtk_widget_is_focus().
+ *
+ * Returns: whether the @editor is focused
+ *
+ * Since: 3.44
+ **/
+gboolean
+e_content_editor_is_focus (EContentEditor *editor)
+{
+	EContentEditorInterface *iface;
+
+	g_return_val_if_fail (E_IS_CONTENT_EDITOR (editor), FALSE);
+
+	iface = E_CONTENT_EDITOR_GET_IFACE (editor);
+	g_return_val_if_fail (iface != NULL, FALSE);
+
+	if (iface->is_focus)
+		return iface->is_focus (editor);
+	else
+		return gtk_widget_is_focus (GTK_WIDGET (editor));
+}
+
 ESpellChecker *
 e_content_editor_ref_spell_checker (EContentEditor *editor)
 {
@@ -807,27 +886,6 @@ e_content_editor_set_changed (EContentEditor *editor,
 	g_return_if_fail (E_IS_CONTENT_EDITOR (editor));
 
 	g_object_set (G_OBJECT (editor), "changed", changed, NULL);
-}
-
-gboolean
-e_content_editor_get_html_mode (EContentEditor *editor)
-{
-	gboolean value = FALSE;
-
-	g_return_val_if_fail (E_IS_CONTENT_EDITOR (editor), FALSE);
-
-	g_object_get (G_OBJECT (editor), "html-mode", &value, NULL);
-
-	return value;
-}
-
-void
-e_content_editor_set_html_mode (EContentEditor *editor,
-				gboolean html_mode)
-{
-	g_return_if_fail (E_IS_CONTENT_EDITOR (editor));
-
-	g_object_set (G_OBJECT (editor), "html-mode", html_mode, NULL);
 }
 
 /**
@@ -1454,7 +1512,7 @@ e_content_editor_get_visually_wrap_long_lines (EContentEditor *editor)
 }
 
 /**
- * e_content_editor_setup_editor:
+ * e_content_editor_initialize:
  * @content_editor: an #EContentEditor
  * @callback: an #EContentEditorInitializedCallback function
  * @user_data: data to pass to @callback
@@ -1585,7 +1643,7 @@ e_content_editor_get_content_finish (EContentEditor *editor,
 
 	iface = E_CONTENT_EDITOR_GET_IFACE (editor);
 	g_return_val_if_fail (iface != NULL, NULL);
-	g_return_val_if_fail (iface->get_content != NULL, NULL);
+	g_return_val_if_fail (iface->get_content_finish != NULL, NULL);
 
 	return iface->get_content_finish (editor, result, error);
 }
@@ -2399,7 +2457,7 @@ e_content_editor_take_last_error (EContentEditor *editor,
 gchar *
 e_content_editor_insert_signature (EContentEditor *editor,
                                    const gchar *content,
-                                   gboolean is_html,
+                                   EContentEditorMode editor_mode,
 				   gboolean can_reposition_caret,
                                    const gchar *signature_id,
                                    gboolean *set_signature_from_message,
@@ -2417,7 +2475,7 @@ e_content_editor_insert_signature (EContentEditor *editor,
 	return iface->insert_signature (
 		editor,
 		content,
-		is_html,
+		editor_mode,
 		can_reposition_caret,
 		signature_id,
 		set_signature_from_message,
@@ -3009,8 +3067,9 @@ e_content_editor_image_set_height_follow (EContentEditor *editor,
 
 void
 e_content_editor_link_get_properties (EContentEditor *editor,
-				      gchar **href,
-				      gchar **text)
+				      gchar **out_href,
+				      gchar **out_text,
+				      gchar **out_name)
 {
 	EContentEditorInterface *iface;
 
@@ -3020,13 +3079,14 @@ e_content_editor_link_get_properties (EContentEditor *editor,
 	g_return_if_fail (iface != NULL);
 	g_return_if_fail (iface->link_get_properties != NULL);
 
-	iface->link_get_properties (editor, href, text);
+	iface->link_get_properties (editor, out_href, out_text, out_name);
 }
 
 void
 e_content_editor_link_set_properties (EContentEditor *editor,
 				      const gchar *href,
-				      const gchar *text)
+				      const gchar *text,
+				      const gchar *name)
 {
 	EContentEditorInterface *iface;
 
@@ -3036,7 +3096,7 @@ e_content_editor_link_set_properties (EContentEditor *editor,
 	g_return_if_fail (iface != NULL);
 	g_return_if_fail (iface->link_set_properties != NULL);
 
-	iface->link_set_properties (editor, href, text);
+	iface->link_set_properties (editor, href, text, name);
 }
 
 void
@@ -3797,6 +3857,42 @@ e_content_editor_spell_check_prev_word (EContentEditor *editor,
 	return iface->spell_check_prev_word (editor, word);
 }
 
+const gchar *
+e_content_editor_get_hover_uri (EContentEditor *editor)
+{
+	EContentEditorInterface *iface;
+
+	g_return_val_if_fail (E_IS_CONTENT_EDITOR (editor), NULL);
+
+	iface = E_CONTENT_EDITOR_GET_IFACE (editor);
+	g_return_val_if_fail (iface != NULL, NULL);
+	if (!iface->get_hover_uri)
+		return NULL;
+
+	return iface->get_hover_uri (editor);
+}
+
+void
+e_content_editor_get_caret_client_rect (EContentEditor *editor,
+					GdkRectangle *out_rect)
+{
+	EContentEditorInterface *iface;
+
+	g_return_if_fail (E_IS_CONTENT_EDITOR (editor));
+	g_return_if_fail (out_rect != NULL);
+
+	out_rect->x = 0;
+	out_rect->y = 0;
+	out_rect->width = -1;
+	out_rect->height = -1;
+
+	iface = E_CONTENT_EDITOR_GET_IFACE (editor);
+	g_return_if_fail (iface != NULL);
+
+	if (iface->get_caret_client_rect)
+		iface->get_caret_client_rect (editor, out_rect);
+}
+
 void
 e_content_editor_emit_load_finished (EContentEditor *editor)
 {
@@ -3914,4 +4010,40 @@ e_content_editor_delete_image (EContentEditor *editor)
 	g_return_if_fail (iface->delete_image != NULL);
 
 	iface->delete_image (editor);
+}
+
+/**
+ * e_content_editor_util_three_state_to_bool:
+ * @value: an #EThreeState value
+ * @mail_key: (nullable): a key into 'org.gnome.evolution.mail'
+ *
+ * Converts the three-state @value into boolean, using the @mail_key
+ * boolean key from 'org.gnome.evolution.mail' in case the @value
+ * in %E_THREE_STATE_INCONSISTENT as a fallback, when non-%NULL.
+ *
+ * Returns: @value converted to boolean, optionally depending on @mail_key setting
+ *
+ * Since: 3.44
+ **/
+gboolean
+e_content_editor_util_three_state_to_bool (EThreeState value,
+					   const gchar *mail_key)
+{
+	gboolean res = FALSE;
+
+	if (value == E_THREE_STATE_ON)
+		return TRUE;
+
+	if (value == E_THREE_STATE_OFF)
+		return FALSE;
+
+	if (mail_key && *mail_key) {
+		GSettings *settings;
+
+		settings = e_util_ref_settings ("org.gnome.evolution.mail");
+		res = g_settings_get_boolean (settings, mail_key);
+		g_clear_object (&settings);
+	}
+
+	return res;
 }

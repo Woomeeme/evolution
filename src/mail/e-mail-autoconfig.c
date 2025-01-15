@@ -71,16 +71,12 @@
 
 #include "e-mail-autoconfig.h"
 
-#define E_MAIL_AUTOCONFIG_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_AUTOCONFIG, EMailAutoconfigPrivate))
-
 #define AUTOCONFIG_BASE_URI "https://autoconfig.thunderbird.net/v1.1/"
 
 #define FAKE_EVOLUTION_USER_STRING "EVOLUTIONUSER"
 
 #define ERROR_IS_NOT_FOUND(error) \
-	(g_error_matches ((error), SOUP_HTTP_ERROR, SOUP_STATUS_NOT_FOUND))
+	(g_error_matches ((error), E_SOUP_SESSION_ERROR, SOUP_STATUS_NOT_FOUND))
 
 typedef struct _EMailAutoconfigResult EMailAutoconfigResult;
 typedef struct _ParserClosure ParserClosure;
@@ -103,11 +99,15 @@ struct _EMailAutoconfigPrivate {
 	EMailAutoconfigResult imap_result;
 	EMailAutoconfigResult pop3_result;
 	EMailAutoconfigResult smtp_result;
+	EMailAutoconfigResult custom_result;
+	GHashTable *custom_types; /* gchar *type ~> ENamedParameters *params */
 };
 
 struct _ParserClosure {
 	EMailAutoconfig *autoconfig;
 	EMailAutoconfigResult *result;
+	gchar *current_type;
+	ENamedParameters *custom_params;
 };
 
 enum {
@@ -117,19 +117,34 @@ enum {
 	PROP_USE_DOMAIN
 };
 
+enum {
+	PROCESS_CUSTOM_TYPES,
+	LAST_SIGNAL
+};
+
+static guint signals[LAST_SIGNAL];
+
 /* Forward Declarations */
 static void	e_mail_autoconfig_initable_init	(GInitableIface *iface);
 
 /* By default, the GAsyncInitable interface calls GInitable.init()
  * from a separate thread, so we only have to override GInitable. */
-G_DEFINE_TYPE_WITH_CODE (
-	EMailAutoconfig,
-	e_mail_autoconfig,
-	G_TYPE_OBJECT,
-	G_IMPLEMENT_INTERFACE (
-		G_TYPE_INITABLE, e_mail_autoconfig_initable_init)
-	G_IMPLEMENT_INTERFACE (
-		G_TYPE_ASYNC_INITABLE, NULL))
+G_DEFINE_TYPE_WITH_CODE (EMailAutoconfig, e_mail_autoconfig, G_TYPE_OBJECT,
+	G_ADD_PRIVATE (EMailAutoconfig)
+	G_IMPLEMENT_INTERFACE (G_TYPE_INITABLE, e_mail_autoconfig_initable_init)
+	G_IMPLEMENT_INTERFACE (G_TYPE_ASYNC_INITABLE, NULL)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
+
+static void
+e_mail_config_result_clear (EMailAutoconfigResult *result)
+{
+	if (!result)
+		return;
+
+	g_clear_pointer (&result->user, g_free);
+	g_clear_pointer (&result->host, g_free);
+	g_clear_pointer (&result->auth_mechanism, g_free);
+}
 
 static void
 mail_autoconfig_parse_start_element (GMarkupParseContext *context,
@@ -167,6 +182,16 @@ mail_autoconfig_parse_start_element (GMarkupParseContext *context,
 			closure->result = &priv->pop3_result;
 		if (g_strcmp0 (type, "smtp") == 0)
 			closure->result = &priv->smtp_result;
+
+		if (type != NULL && closure->result == NULL) {
+			g_return_if_fail (closure->current_type == NULL);
+			g_return_if_fail (closure->custom_params == NULL);
+
+			closure->current_type = g_strdup (type);
+			closure->custom_params = e_named_parameters_new ();
+
+			e_named_parameters_set (closure->custom_params, "kind", element_name);
+		}
 	}
 }
 
@@ -183,8 +208,22 @@ mail_autoconfig_parse_end_element (GMarkupParseContext *context,
 	is_incoming_server = g_str_equal (element_name, "incomingServer");
 	is_outgoing_server = g_str_equal (element_name, "outgoingServer");
 
-	if (is_incoming_server || is_outgoing_server)
+	if (is_incoming_server || is_outgoing_server) {
+		if (closure->custom_params && e_named_parameters_count (closure->custom_params) > 1) {
+			if (!closure->autoconfig->priv->custom_types)
+				closure->autoconfig->priv->custom_types =
+					g_hash_table_new_full (g_str_hash, g_str_equal, g_free, (GDestroyNotify) e_named_parameters_free);
+
+			g_hash_table_insert (closure->autoconfig->priv->custom_types, closure->current_type, closure->custom_params);
+
+			closure->current_type = NULL;
+			closure->custom_params = NULL;
+		}
+
+		g_clear_pointer (&closure->current_type, g_free);
+		g_clear_pointer (&closure->custom_params, e_named_parameters_free);
 		closure->result = NULL;
+	}
 }
 
 /* Returns NULL when not being there */
@@ -239,7 +278,7 @@ mail_autoconfig_parse_text (GMarkupParseContext *context,
 
 	priv = closure->autoconfig->priv;
 
-	if (closure->result == NULL)
+	if (closure->result == NULL && closure->custom_params == NULL)
 		return;
 
 	to_free = mail_autoconfig_replace_case_insensitive (in_text, FAKE_EVOLUTION_USER_STRING, priv->email_local_part);
@@ -300,35 +339,58 @@ mail_autoconfig_parse_text (GMarkupParseContext *context,
 	element_name = g_markup_parse_context_get_element (context);
 
 	if (g_str_equal (element_name, "hostname")) {
-		closure->result->host = g_strdup (string->str);
-		closure->result->set = TRUE;
+		if (closure->custom_params) {
+			e_named_parameters_set (closure->custom_params, "host", string->str);
+		} else {
+			closure->result->host = g_strdup (string->str);
+			closure->result->set = TRUE;
+		}
 
 	} else if (g_str_equal (element_name, "username")) {
-		closure->result->user = g_strdup (string->str);
-		closure->result->set = TRUE;
+		if (closure->custom_params) {
+			e_named_parameters_set (closure->custom_params, "user", string->str);
+		} else {
+			closure->result->user = g_strdup (string->str);
+			closure->result->set = TRUE;
+		}
 
 	} else if (g_str_equal (element_name, "port")) {
-		glong port = strtol (string->str, NULL, 10);
-		if (port == CLAMP (port, 1, G_MAXUINT16)) {
-			closure->result->port = (guint16) port;
-			closure->result->set = TRUE;
+		if (closure->custom_params) {
+			e_named_parameters_set (closure->custom_params, "port", string->str);
+		} else {
+			glong port = strtol (string->str, NULL, 10);
+			if (port == CLAMP (port, 1, G_MAXUINT16)) {
+				closure->result->port = (guint16) port;
+				closure->result->set = TRUE;
+			}
 		}
 
 	} else if (g_str_equal (element_name, "socketType")) {
+		CamelNetworkSecurityMethod security_method = CAMEL_NETWORK_SECURITY_METHOD_NONE;
+		gboolean set = FALSE;
+
 		if (g_str_equal (string->str, "plain")) {
-			closure->result->security_method =
-				CAMEL_NETWORK_SECURITY_METHOD_NONE;
-			closure->result->set = TRUE;
+			security_method = CAMEL_NETWORK_SECURITY_METHOD_NONE;
+			set = TRUE;
 		} else if (g_str_equal (string->str, "SSL")) {
-			closure->result->security_method =
-				CAMEL_NETWORK_SECURITY_METHOD_SSL_ON_ALTERNATE_PORT;
-			closure->result->set = TRUE;
+			security_method = CAMEL_NETWORK_SECURITY_METHOD_SSL_ON_ALTERNATE_PORT;
+			set = TRUE;
 		} else if (g_str_equal (string->str, "STARTTLS")) {
-			closure->result->security_method =
-				CAMEL_NETWORK_SECURITY_METHOD_STARTTLS_ON_STANDARD_PORT;
-			closure->result->set = TRUE;
+			security_method = CAMEL_NETWORK_SECURITY_METHOD_STARTTLS_ON_STANDARD_PORT;
+			set = TRUE;
 		}
 
+		if (set) {
+			if (closure->custom_params) {
+				const gchar *enum_str = e_enum_to_string (CAMEL_TYPE_NETWORK_SECURITY_METHOD, security_method);
+				g_warn_if_fail (enum_str != NULL);
+				if (enum_str)
+					e_named_parameters_set (closure->custom_params, "security-method", enum_str);
+			} else {
+				closure->result->set = set;
+				closure->result->security_method = security_method;
+			}
+		}
 	} else if (g_str_equal (element_name, "authentication")) {
 		gboolean use_plain_auth = FALSE;
 
@@ -358,20 +420,30 @@ mail_autoconfig_parse_text (GMarkupParseContext *context,
 			if (closure->result == &priv->smtp_result)
 				auth_mechanism = g_strdup ("LOGIN");
 
-			closure->result->auth_mechanism = auth_mechanism;
-			closure->result->set = TRUE;
-		}
-
-		/* "password-encrypted" apparently maps to CRAM-MD5,
-		 * or at least that's how Thunderbird interprets it. */
-
-		if (g_str_equal (string->str, "password-encrypted")) {
-			closure->result->auth_mechanism = g_strdup ("CRAM-MD5");
-			closure->result->set = TRUE;
+			if (closure->custom_params) {
+				e_named_parameters_set (closure->custom_params, "auth-mechanism", auth_mechanism);
+				g_free (auth_mechanism);
+			} else {
+				closure->result->auth_mechanism = auth_mechanism;
+				closure->result->set = TRUE;
+			}
+		} else if (g_str_equal (string->str, "password-encrypted")) {
+			/* "password-encrypted" apparently maps to CRAM-MD5,
+			 * or at least that's how Thunderbird interprets it. */
+			if (closure->custom_params) {
+				e_named_parameters_set (closure->custom_params, "auth-mechanism", "CRAM-MD5");
+			} else {
+				closure->result->auth_mechanism = g_strdup ("CRAM-MD5");
+				closure->result->set = TRUE;
+			}
+		} else if (closure->custom_params) {
+			e_named_parameters_set (closure->custom_params, "auth-mechanism", string->str);
 		}
 
 		/* XXX Other <authentication> values not handled,
 		 *     but they are corner cases for the most part. */
+	} else if (closure->custom_params) {
+		e_named_parameters_set (closure->custom_params, element_name, string->str);
 	}
 
 	g_string_free (string, TRUE);
@@ -390,22 +462,30 @@ mail_autoconfig_resolve_name_server (const gchar *domain,
                                      GError **error)
 {
 	GResolver *resolver;
-	GList *records;
+	GList *records, *link;
 	gchar *name_server = NULL;
+	guint16 best_pref = G_MAXUINT16;
 
 	resolver = g_resolver_get_default ();
+	records = g_resolver_lookup_records (resolver, domain, G_RESOLVER_RECORD_MX, cancellable, error);
 
-	records = g_resolver_lookup_records (
-		resolver, domain, G_RESOLVER_RECORD_NS, cancellable, error);
+	for (link = records; link; link = g_list_next (link)) {
+		GVariant *var = link->data;
+		gchar *val = NULL;
+		guint16 pref = G_MAXUINT16;
 
-	/* This list is sorted per RFC 2782, so use the first item. */
-	if (records != NULL) {
-		GVariant *variant = records->data;
-		g_variant_get_child (variant, 0, "s", &name_server);
+		g_variant_get (var, "(qs)", &pref, &val);
+
+		if (!name_server || best_pref > pref) {
+			g_clear_pointer (&name_server, g_free);
+			name_server = val;
+			best_pref = pref;
+		} else {
+			g_free (val);
+		}
 	}
 
 	g_list_free_full (records, (GDestroyNotify) g_variant_unref);
-
 	g_object_unref (resolver);
 
 	return name_server;
@@ -426,8 +506,9 @@ mail_autoconfig_lookup_uri_sync (EMailAutoconfig *autoconfig,
 				 GError **error)
 {
 	SoupMessage *soup_message;
+	GBytes *data;
 	gboolean success;
-	guint status;
+	GError *local_error = NULL;
 
 	soup_message = soup_message_new (SOUP_METHOD_GET, uri);
 
@@ -438,19 +519,21 @@ mail_autoconfig_lookup_uri_sync (EMailAutoconfig *autoconfig,
 	}
 
 	soup_message_headers_append (
-		soup_message->request_headers,
+		soup_message_get_request_headers (soup_message),
 		"User-Agent", "Evolution/" VERSION VERSION_SUBSTRING " " VERSION_COMMENT);
 
-	status = soup_session_send_message (soup_session, soup_message);
+	data = soup_session_send_and_read (soup_session, soup_message, cancellable, &local_error);
 
-	success = SOUP_STATUS_IS_SUCCESSFUL (status);
+	success = SOUP_STATUS_IS_SUCCESSFUL (soup_message_get_status (soup_message));
 
-	if (success) {
+	if (success && data) {
 		GMarkupParseContext *context;
 		ParserClosure closure;
 
 		closure.autoconfig = autoconfig;
 		closure.result = NULL;
+		closure.current_type = NULL;
+		closure.custom_params = NULL;
 
 		context = g_markup_parse_context_new (
 			&mail_autoconfig_parser, 0,
@@ -458,22 +541,31 @@ mail_autoconfig_lookup_uri_sync (EMailAutoconfig *autoconfig,
 
 		success = g_markup_parse_context_parse (
 			context,
-			soup_message->response_body->data,
-			soup_message->response_body->length,
+			g_bytes_get_data (data, NULL),
+			g_bytes_get_size (data),
 			error);
 
 		if (success)
 			success = g_markup_parse_context_end_parse (context, error);
 
+		g_clear_pointer (&closure.custom_params, e_named_parameters_free);
+		g_clear_pointer (&closure.current_type, g_free);
+
 		g_markup_parse_context_free (context);
+	} else if (local_error) {
+		g_propagate_error (error, local_error);
+		local_error = NULL;
 	} else {
 		g_set_error_literal (
-			error, SOUP_HTTP_ERROR,
-			soup_message->status_code,
-			soup_message->reason_phrase);
+			error, E_SOUP_SESSION_ERROR,
+			soup_message_get_status (soup_message),
+			soup_message_get_reason_phrase (soup_message));
 	}
 
+	if (data)
+		g_bytes_unref (data);
 	g_object_unref (soup_message);
+	g_clear_error (&local_error);
 
 	return success;
 }
@@ -496,8 +588,8 @@ mail_autoconfig_lookup (EMailAutoconfig *autoconfig,
 	proxy_source = e_source_registry_ref_builtin_proxy (registry);
 
 	soup_session = soup_session_new_with_options (
-		SOUP_SESSION_PROXY_RESOLVER, G_PROXY_RESOLVER (proxy_source),
-		SOUP_SESSION_TIMEOUT, 15,
+		"proxy-resolver", G_PROXY_RESOLVER (proxy_source),
+		"timeout", 15,
 		NULL);
 
 	g_object_unref (proxy_source);
@@ -671,9 +763,7 @@ mail_config_lookup_result_finalize (GObject *object)
 {
 	EMailConfigLookupResult *mail_result = E_MAIL_CONFIG_LOOKUP_RESULT (object);
 
-	g_free (mail_result->result.user);
-	g_free (mail_result->result.host);
-	g_free (mail_result->result.auth_mechanism);
+	e_mail_config_result_clear (&mail_result->result);
 	g_free (mail_result->extension_name);
 
 	/* Chain up to parent's method. */
@@ -901,13 +991,20 @@ mail_autoconfig_get_property (GObject *object,
 }
 
 static void
+mail_autoconfig_constructed (GObject *object)
+{
+	/* Chain up to parent's method. */
+	G_OBJECT_CLASS (e_mail_autoconfig_parent_class)->constructed (object);
+
+	e_extensible_load_extensions (E_EXTENSIBLE (object));
+}
+
+static void
 mail_autoconfig_dispose (GObject *object)
 {
-	EMailAutoconfigPrivate *priv;
+	EMailAutoconfig *self = E_MAIL_AUTOCONFIG (object);
 
-	priv = E_MAIL_AUTOCONFIG_GET_PRIVATE (object);
-
-	g_clear_object (&priv->registry);
+	g_clear_object (&self->priv->registry);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_mail_autoconfig_parent_class)->dispose (object);
@@ -916,24 +1013,16 @@ mail_autoconfig_dispose (GObject *object)
 static void
 mail_autoconfig_finalize (GObject *object)
 {
-	EMailAutoconfigPrivate *priv;
+	EMailAutoconfig *self = E_MAIL_AUTOCONFIG (object);
 
-	priv = E_MAIL_AUTOCONFIG_GET_PRIVATE (object);
+	g_free (self->priv->email_address);
+	g_free (self->priv->email_local_part);
+	g_free (self->priv->email_domain_part);
+	g_free (self->priv->use_domain);
 
-	g_free (priv->email_address);
-	g_free (priv->email_local_part);
-	g_free (priv->email_domain_part);
-	g_free (priv->use_domain);
-
-	g_free (priv->imap_result.user);
-	g_free (priv->imap_result.host);
-	g_free (priv->imap_result.auth_mechanism);
-	g_free (priv->pop3_result.user);
-	g_free (priv->pop3_result.host);
-	g_free (priv->pop3_result.auth_mechanism);
-	g_free (priv->smtp_result.user);
-	g_free (priv->smtp_result.host);
-	g_free (priv->smtp_result.auth_mechanism);
+	e_mail_config_result_clear (&self->priv->imap_result);
+	e_mail_config_result_clear (&self->priv->pop3_result);
+	e_mail_config_result_clear (&self->priv->smtp_result);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_mail_autoconfig_parent_class)->finalize (object);
@@ -1053,11 +1142,10 @@ e_mail_autoconfig_class_init (EMailAutoconfigClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (EMailAutoconfigPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_autoconfig_set_property;
 	object_class->get_property = mail_autoconfig_get_property;
+	object_class->constructed = mail_autoconfig_constructed;
 	object_class->dispose = mail_autoconfig_dispose;
 	object_class->finalize = mail_autoconfig_finalize;
 
@@ -1096,6 +1184,15 @@ e_mail_autoconfig_class_init (EMailAutoconfigClass *class)
 			G_PARAM_READWRITE |
 			G_PARAM_CONSTRUCT_ONLY |
 			G_PARAM_STATIC_STRINGS));
+
+	signals[PROCESS_CUSTOM_TYPES] = g_signal_new (
+		"process-custom-types",
+		G_TYPE_FROM_CLASS (class),
+		G_SIGNAL_RUN_LAST,
+		0, NULL, NULL, NULL,
+		G_TYPE_NONE, 2,
+		E_TYPE_CONFIG_LOOKUP,
+		G_TYPE_HASH_TABLE);
 }
 
 static void
@@ -1107,7 +1204,7 @@ e_mail_autoconfig_initable_init (GInitableIface *iface)
 static void
 e_mail_autoconfig_init (EMailAutoconfig *autoconfig)
 {
-	autoconfig->priv = E_MAIL_AUTOCONFIG_GET_PRIVATE (autoconfig);
+	autoconfig->priv = e_mail_autoconfig_get_instance_private (autoconfig);
 }
 
 EMailAutoconfig *
@@ -1334,4 +1431,9 @@ e_mail_autoconfig_copy_results_to_config_lookup (EMailAutoconfig *mail_autoconfi
 		"smtp",
 		_("SMTP server"),
 		E_SOURCE_EXTENSION_MAIL_TRANSPORT);
+
+	if (mail_autoconfig->priv->custom_types) {
+		g_signal_emit (mail_autoconfig, signals[PROCESS_CUSTOM_TYPES], 0,
+			config_lookup, mail_autoconfig->priv->custom_types);
+	}
 }

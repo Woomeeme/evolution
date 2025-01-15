@@ -51,6 +51,8 @@ struct _ECompEditorPrivate {
 	ICalComponent *component;
 	guint32 flags;
 
+	EMenuBar *menu_bar;
+
 	EFocusTracker *focus_tracker;
 	GtkUIManager *ui_manager;
 
@@ -75,6 +77,7 @@ struct _ECompEditorPrivate {
 	GtkWidget *restore_focus;
 
 	gulong target_backend_property_change_id;
+	gint last_duration;
 };
 
 enum {
@@ -95,6 +98,9 @@ enum {
 	TIMES_CHANGED,
 	OBJECT_CREATED,
 	EDITOR_CLOSED,
+	SANITIZE_WIDGETS,
+	FILL_WIDGETS,
+	FILL_COMPONENT,
 	LAST_SIGNAL
 };
 
@@ -105,6 +111,7 @@ static GSList *opened_editors = NULL;
 static void e_comp_editor_alert_sink_iface_init (EAlertSinkInterface *iface);
 
 G_DEFINE_ABSTRACT_TYPE_WITH_CODE (ECompEditor, e_comp_editor, GTK_TYPE_WINDOW,
+	G_ADD_PRIVATE (ECompEditor)
 	G_IMPLEMENT_INTERFACE (E_TYPE_ALERT_SINK, e_comp_editor_alert_sink_iface_init)
 	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
@@ -168,15 +175,15 @@ ece_set_attendees_for_delegation (ECalComponent *comp,
 	     prop;
 	     g_object_unref (prop), prop = again ? i_cal_component_get_first_property (icomp, I_CAL_ATTENDEE_PROPERTY) :
 	     i_cal_component_get_next_property (icomp, I_CAL_ATTENDEE_PROPERTY)) {
-		const gchar *attendee = i_cal_property_get_attendee (prop);
+		const gchar *attendee = e_cal_util_get_property_email (prop);
 		const gchar *delfrom = NULL;
 
 		again = FALSE;
 		param = i_cal_property_get_first_parameter (prop, I_CAL_DELEGATEDFROM_PARAMETER);
 		if (param)
 			delfrom = i_cal_parameter_get_delegatedfrom (param);
-		if (!(g_str_equal (itip_strip_mailto (attendee), address) ||
-		     ((delfrom && *delfrom) && g_str_equal (itip_strip_mailto (delfrom), address)))) {
+		if (!(e_cal_util_email_addresses_equal (attendee, address) ||
+		     ((delfrom && *delfrom) && e_cal_util_email_addresses_equal (delfrom, address)))) {
 			i_cal_component_remove_property (icomp, prop);
 			again = TRUE;
 		}
@@ -329,7 +336,7 @@ save_data_free (SaveData *sd)
 				g_clear_object (&sd->comp_editor->priv->source_client);
 				sd->comp_editor->priv->source_client = g_object_ref (sd->target_client);
 
-				sd->comp_editor->priv->flags = sd->comp_editor->priv->flags & (~E_COMP_EDITOR_FLAG_IS_NEW);
+				e_comp_editor_set_flags (sd->comp_editor, e_comp_editor_get_flags (sd->comp_editor) & (~E_COMP_EDITOR_FLAG_IS_NEW));
 
 				e_comp_editor_sensitize_widgets (sd->comp_editor);
 				e_comp_editor_set_changed (sd->comp_editor, FALSE);
@@ -717,6 +724,8 @@ ece_save_component_attachments_sync (ECalClient *cal_client,
 			g_free (uri);
 		}
 
+		g_clear_object (&attach);
+
 		success = success & !g_cancellable_set_error_if_cancelled (cancellable, error);
 	}
 
@@ -802,6 +811,10 @@ ece_save_component_thread (EAlertSinkThreadJobData *job_data,
 	SaveData *sd = user_data;
 	const gchar *create_alert_ident, *modify_alert_ident, *remove_alert_ident, *get_alert_ident;
 	gchar *orig_uid, *new_uid = NULL;
+	gboolean has_recurrences;
+	gboolean is_on_server;
+	gboolean different_clients;
+	gboolean already_moved = FALSE;
 
 	g_return_if_fail (sd != NULL);
 	g_return_if_fail (E_IS_CAL_CLIENT (sd->target_client));
@@ -844,17 +857,28 @@ ece_save_component_thread (EAlertSinkThreadJobData *job_data,
 	}
 
 	orig_uid = g_strdup (i_cal_component_get_uid (sd->component));
+	has_recurrences = e_cal_util_component_has_recurrences (sd->component);
+	is_on_server = cal_comp_is_icalcomp_on_server_sync (sd->component, sd->target_client, cancellable, error);
+	different_clients = sd->source_client &&
+		!e_source_equal (e_client_get_source (E_CLIENT (sd->target_client)),
+				 e_client_get_source (E_CLIENT (sd->source_client)));
 
-	if (cal_comp_is_icalcomp_on_server_sync (sd->component, sd->target_client, cancellable, error)) {
+	if (!is_on_server && has_recurrences && different_clients &&
+	    cal_comp_is_icalcomp_on_server_sync (sd->component, sd->source_client, cancellable, error)) {
+		/* First move the component to the target client, thus it contains all the detached instances
+		   and the main component, then modify it there. */
+		sd->success = cal_comp_transfer_item_to_sync (sd->source_client, sd->target_client, sd->component, FALSE, cancellable, error);
+		is_on_server = sd->success;
+		already_moved = sd->success;
+	}
+
+	if (sd->success && is_on_server) {
 		ECalComponent *comp;
-		gboolean has_recurrences;
 
 		e_alert_sink_thread_job_set_alert_ident (job_data, modify_alert_ident);
 
 		comp = e_cal_component_new_from_icalcomponent (i_cal_component_clone (sd->component));
 		g_return_if_fail (comp != NULL);
-
-		has_recurrences = e_cal_util_component_has_recurrences (sd->component);
 
 		if (has_recurrences && sd->recur_mod == E_CAL_OBJ_MOD_ALL)
 			sd->success = comp_util_sanitize_recurrence_master_sync (comp, sd->target_client, cancellable, error);
@@ -872,7 +896,7 @@ ece_save_component_thread (EAlertSinkThreadJobData *job_data,
 			sd->target_client, e_cal_component_get_icalcomponent (comp), sd->recur_mod, E_CAL_OPERATION_FLAG_NONE, cancellable, error);
 
 		g_clear_object (&comp);
-	} else {
+	} else if (sd->success) {
 		e_alert_sink_thread_job_set_alert_ident (job_data, create_alert_ident);
 
 		sd->success = e_cal_client_create_object_sync (sd->target_client, sd->component, E_CAL_OPERATION_FLAG_NONE, &new_uid, cancellable, error);
@@ -881,9 +905,7 @@ ece_save_component_thread (EAlertSinkThreadJobData *job_data,
 			sd->object_created = TRUE;
 	}
 
-	if (sd->success && sd->source_client &&
-	    !e_source_equal (e_client_get_source (E_CLIENT (sd->target_client)),
-			     e_client_get_source (E_CLIENT (sd->source_client))) &&
+	if (sd->success && different_clients && !already_moved &&
 	    cal_comp_is_icalcomp_on_server_sync (sd->component, sd->source_client, cancellable, NULL)) {
 		ECalObjModType recur_mod = E_CAL_OBJ_MOD_THIS;
 
@@ -1117,7 +1139,7 @@ comp_editor_open_target_client_thread (EAlertSinkThreadJobData *job_data,
 	client_cache = e_shell_get_client_cache (e_comp_editor_get_shell (otc->comp_editor));
 
 	otc->client = e_client_cache_get_client_sync (client_cache, otc->source, otc->extension_name,
-		30, cancellable, error);
+		(guint32) -1, cancellable, error);
 
 	if (otc->client) {
 		/* Cache some properties which require remote calls */
@@ -1502,7 +1524,7 @@ ece_organizer_email_address_is_user (ECompEditor *comp_editor,
 	g_return_val_if_fail (E_IS_COMP_EDITOR (comp_editor), FALSE);
 	g_return_val_if_fail (E_IS_CAL_CLIENT (client), FALSE);
 
-	email_address = itip_strip_mailto (email_address);
+	email_address = e_cal_util_strip_mailto (email_address);
 
 	if (!email_address || !*email_address)
 		return FALSE;
@@ -1540,7 +1562,7 @@ ece_organizer_is_user (ECompEditor *comp_editor,
 		return FALSE;
 	}
 
-	organizer = itip_strip_mailto (i_cal_property_get_organizer (prop));
+	organizer = e_cal_util_get_property_email (prop);
 	if (!organizer || !*organizer) {
 		g_clear_object (&prop);
 		return FALSE;
@@ -1590,11 +1612,33 @@ ece_sentby_is_user (ECompEditor *comp_editor,
 }
 
 static void
-ece_emit_times_changed_cb (ECompEditor *comp_editor)
+ece_emit_times_changed_cb (ECompEditor *comp_editor,
+			   ECompEditorPropertyPart *part)
 {
+	GtkWidget *edit_widget;
+
 	g_return_if_fail (E_IS_COMP_EDITOR (comp_editor));
 
+	/* ignore the notification when the user is changing the date/time */
+	edit_widget = e_comp_editor_property_part_get_edit_widget (part);
+	if (E_IS_DATE_EDIT (edit_widget) && e_date_edit_has_focus (E_DATE_EDIT (edit_widget)))
+		return;
+
 	g_signal_emit (comp_editor, signals[TIMES_CHANGED], 0, NULL);
+
+	if (comp_editor->priv->dtstart_part && comp_editor->priv->dtend_part) {
+		ICalTime *dtstart, *dtend;
+
+		dtstart = e_comp_editor_property_part_datetime_get_value (E_COMP_EDITOR_PROPERTY_PART_DATETIME (comp_editor->priv->dtstart_part));
+		dtend = e_comp_editor_property_part_datetime_get_value (E_COMP_EDITOR_PROPERTY_PART_DATETIME (comp_editor->priv->dtend_part));
+
+		if (dtstart && i_cal_time_is_valid_time (dtstart) &&
+		    dtend && i_cal_time_is_valid_time (dtend))
+			comp_editor->priv->last_duration = i_cal_time_as_timet (dtend) - i_cal_time_as_timet (dtstart);
+
+		g_clear_object (&dtstart);
+		g_clear_object (&dtend);
+	}
 }
 
 static void
@@ -1717,6 +1761,20 @@ ece_fill_component (ECompEditor *comp_editor,
 	}
 
 	return TRUE;
+}
+
+static gboolean
+comp_editor_signal_accumulator_false_returned (GSignalInvocationHint *ihint,
+					       GValue *return_accu,
+					       const GValue *handler_return,
+					       gpointer dummy)
+{
+	gboolean returned;
+
+	returned = g_value_get_boolean (handler_return);
+	g_value_set_boolean (return_accu, returned);
+
+	return returned;
 }
 
 static void
@@ -1890,6 +1948,40 @@ e_comp_editor_set_shell (ECompEditor *comp_editor,
 
 	g_clear_object (&comp_editor->priv->shell);
 	comp_editor->priv->shell = g_object_ref (shell);
+}
+
+static GtkWidget *
+comp_editor_construct_header_bar (ECompEditor *comp_editor,
+				  GtkWidget *menu_button)
+{
+	GtkWidget *widget;
+	GtkWidget *button;
+	GtkAction *action;
+	GtkHeaderBar *header_bar;
+
+	widget = gtk_header_bar_new ();
+	gtk_widget_show (widget);
+	header_bar = GTK_HEADER_BAR (widget);
+	gtk_header_bar_set_show_close_button (header_bar, TRUE);
+
+	if (menu_button)
+		gtk_header_bar_pack_end (header_bar, menu_button);
+
+	action = e_comp_editor_get_action (comp_editor, "save-and-close");
+
+	button = e_header_bar_button_new (_("Save and Close"), action);
+	e_header_bar_button_css_add_class (E_HEADER_BAR_BUTTON (button), "suggested-action");
+	e_header_bar_button_set_show_icon_only (E_HEADER_BAR_BUTTON (button), FALSE);
+	gtk_widget_show (button);
+	gtk_header_bar_pack_start (header_bar, button);
+
+	action = e_comp_editor_get_action (comp_editor, "save");
+
+	button = e_header_bar_button_new (NULL, action);
+	gtk_widget_show (button);
+	gtk_header_bar_pack_start (header_bar, button);
+
+	return widget;
 }
 
 static void
@@ -2073,6 +2165,7 @@ e_comp_editor_constructed (GObject *object)
 		"      <menuitem action='select-all'/>"
 		"    </menu>"
 		"    <menu action='view-menu'>"
+		"      <menuitem action='show-toolbar'/>"
 		"      <placeholder name='parts'/>"
 		"      <separator />"
 		"      <placeholder name='columns'/>"
@@ -2087,7 +2180,7 @@ e_comp_editor_constructed (GObject *object)
 		"    </menu>"
 		"  </menubar>"
 		"  <toolbar name='main-toolbar'>"
-		"    <toolitem action='save-and-close'/>\n"
+		"    <toolitem action='save-and-close'/>"
 		"    <toolitem action='save'/>"
 		"    <toolitem action='print'/>"
 		"    <separator/>"
@@ -2247,8 +2340,18 @@ e_comp_editor_constructed (GObject *object)
 		  G_CALLBACK (action_save_and_close_cb) }
 	};
 
+	GtkToggleActionEntry toggle_entries[] = {
+		{ "show-toolbar",
+		  NULL,
+		  N_("Show _toolbar"),
+		  NULL,
+		  NULL,
+		  NULL },
+	};
+
 	ECompEditor *comp_editor = E_COMP_EDITOR (object);
 	GtkWidget *widget;
+	GtkWidget *menu_button = NULL;
 	GtkBox *vbox;
 	GtkAction *action;
 	GtkActionGroup *action_group;
@@ -2323,6 +2426,22 @@ e_comp_editor_constructed (GObject *object)
 			G_BINDING_SYNC_CREATE);
 	}
 
+	action_group = gtk_action_group_new ("toggle");
+	gtk_action_group_add_toggle_actions (
+		action_group, toggle_entries,
+		G_N_ELEMENTS (toggle_entries), comp_editor);
+	gtk_ui_manager_insert_action_group (
+		comp_editor->priv->ui_manager, action_group, 0);
+	g_object_unref (action_group);
+
+	action = gtk_action_group_get_action (action_group, "show-toolbar");
+	if (action) {
+		g_settings_bind (
+		       comp_editor->priv->calendar_settings, "editor-show-toolbar",
+		       action, "active",
+		       G_SETTINGS_BIND_DEFAULT);
+	}
+
 	gtk_ui_manager_add_ui_from_string (comp_editor->priv->ui_manager, ui, -1, &error);
 	if (error != NULL) {
 		g_warning ("%s: %s", G_STRFUNC, error->message);
@@ -2342,17 +2461,40 @@ e_comp_editor_constructed (GObject *object)
 
 	gtk_container_add (GTK_CONTAINER (comp_editor), widget);
 
+	/* Construct the main menu and headerbar. */
 	widget = e_comp_editor_get_managed_widget (comp_editor, "/main-menu");
+	comp_editor->priv->menu_bar = e_menu_bar_new (GTK_MENU_BAR (widget), GTK_WINDOW (comp_editor), &menu_button);
 	gtk_box_pack_start (GTK_BOX (vbox), widget, FALSE, FALSE, 0);
-	gtk_widget_set_visible (widget, TRUE);
+
+	if (e_util_get_use_header_bar ()) {
+		widget = comp_editor_construct_header_bar (comp_editor, menu_button);
+		gtk_window_set_titlebar (GTK_WINDOW (comp_editor), widget);
+
+		/* Destroy items from the toolbar, which are in the header bar */
+		widget = e_comp_editor_get_managed_widget (comp_editor, "/main-toolbar/save-and-close");
+		gtk_widget_destroy (widget);
+
+		widget = e_comp_editor_get_managed_widget (comp_editor, "/main-toolbar/save");
+		gtk_widget_destroy (widget);
+	} else if (menu_button) {
+		g_object_ref_sink (menu_button);
+		gtk_widget_destroy (menu_button);
+	}
 
 	widget = e_comp_editor_get_managed_widget (comp_editor, "/main-toolbar");
 	gtk_box_pack_start (GTK_BOX (vbox), widget, FALSE, FALSE, 0);
 	gtk_widget_show (widget);
 
+	e_util_setup_toolbar_icon_size (GTK_TOOLBAR (widget), GTK_ICON_SIZE_BUTTON);
+
 	gtk_style_context_add_class (
 		gtk_widget_get_style_context (widget),
 		GTK_STYLE_CLASS_PRIMARY_TOOLBAR);
+
+	g_settings_bind (
+		comp_editor->priv->calendar_settings, "editor-show-toolbar",
+		widget, "visible",
+		G_SETTINGS_BIND_GET);
 
 	widget = e_alert_bar_new ();
 	g_object_set (G_OBJECT (widget),
@@ -2475,6 +2617,7 @@ e_comp_editor_dispose (GObject *object)
 	g_clear_object (&comp_editor->priv->target_client);
 	g_clear_object (&comp_editor->priv->calendar_settings);
 	g_clear_object (&comp_editor->priv->validation_alert);
+	g_clear_object (&comp_editor->priv->menu_bar);
 
 	comp_editor->priv->activity_bar = NULL;
 
@@ -2486,7 +2629,8 @@ e_comp_editor_dispose (GObject *object)
 static void
 e_comp_editor_init (ECompEditor *comp_editor)
 {
-	comp_editor->priv = G_TYPE_INSTANCE_GET_PRIVATE (comp_editor, E_TYPE_COMP_EDITOR, ECompEditorPrivate);
+	comp_editor->priv = e_comp_editor_get_instance_private (comp_editor);
+	comp_editor->priv->last_duration = -1;
 }
 
 static void
@@ -2500,8 +2644,6 @@ e_comp_editor_class_init (ECompEditorClass *klass)
 {
 	GtkWidgetClass *widget_class;
 	GObjectClass *object_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorPrivate));
 
 	klass->sensitize_widgets = ece_sensitize_widgets;
 	klass->fill_widgets = ece_fill_widgets;
@@ -2657,6 +2799,35 @@ e_comp_editor_class_init (ECompEditorClass *klass)
 		NULL, NULL,
 		g_cclosure_marshal_VOID__BOOLEAN,
 		G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
+
+	signals[SANITIZE_WIDGETS] = g_signal_new (
+		"sanitize-widgets",
+		G_TYPE_FROM_CLASS (klass),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		0,
+		NULL, NULL,
+		g_cclosure_marshal_VOID__BOOLEAN,
+		G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
+
+	signals[FILL_WIDGETS] = g_signal_new (
+		"fill-widgets",
+		G_TYPE_FROM_CLASS (klass),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		0,
+		NULL, NULL,
+		g_cclosure_marshal_VOID__OBJECT,
+		G_TYPE_NONE, 1,
+		I_CAL_TYPE_COMPONENT);
+
+	signals[FILL_COMPONENT] = g_signal_new (
+		"fill-component",
+		G_TYPE_FROM_CLASS (klass),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		0,
+		comp_editor_signal_accumulator_false_returned, NULL,
+		NULL,
+		G_TYPE_BOOLEAN, 1,
+		I_CAL_TYPE_COMPONENT);
 }
 
 void
@@ -2701,6 +2872,8 @@ e_comp_editor_sensitize_widgets (ECompEditor *comp_editor)
 
 	comp_editor_class->sensitize_widgets (comp_editor, force_insensitive);
 
+	g_signal_emit (comp_editor, signals[SANITIZE_WIDGETS], 0, force_insensitive, NULL);
+
 	if (force_insensitive)
 		comp_editor->priv->restore_focus = current_focus;
 	else
@@ -2723,6 +2896,8 @@ e_comp_editor_fill_widgets (ECompEditor *comp_editor,
 	e_comp_editor_set_updating (comp_editor, TRUE);
 
 	comp_editor_class->fill_widgets (comp_editor, component);
+
+	g_signal_emit (comp_editor, signals[FILL_WIDGETS], 0, component, NULL);
 
 	e_comp_editor_set_updating (comp_editor, FALSE);
 }
@@ -2762,6 +2937,10 @@ e_comp_editor_fill_component (ECompEditor *comp_editor,
 	}
 
 	is_valid = comp_editor_class->fill_component (comp_editor, component);
+
+	/* Need to check whether there's any signal handler, otherwise glib sets the 'is_valid' to FALSE */
+	if (is_valid && g_signal_has_handler_pending (comp_editor, signals[FILL_COMPONENT], 0, FALSE))
+		g_signal_emit (comp_editor, signals[FILL_COMPONENT], 0, component, &is_valid);
 
 	if (focused_widget) {
 		if (GTK_IS_ENTRY (focused_widget))
@@ -3274,6 +3453,28 @@ e_comp_editor_get_page (ECompEditor *comp_editor,
 	return NULL;
 }
 
+/* The returned pointer is owned by the @comp_editor; returns the first found part,
+   in order of the addition. */
+ECompEditorPropertyPart *
+e_comp_editor_get_property_part (ECompEditor *comp_editor,
+				 ICalPropertyKind prop_kind)
+{
+	GSList *link;
+
+	g_return_val_if_fail (E_IS_COMP_EDITOR (comp_editor), NULL);
+
+	for (link = comp_editor->priv->pages; link; link = g_slist_next (link)) {
+		ECompEditorPage *page = link->data;
+		ECompEditorPropertyPart *part;
+
+		part = e_comp_editor_page_get_property_part (page, prop_kind);
+		if (part)
+			return part;
+	}
+
+	return NULL;
+}
+
 /* Free the returned GSList with g_slist_free(), the memebers are owned by the comp_editor */
 GSList *
 e_comp_editor_get_pages (ECompEditor *comp_editor)
@@ -3349,198 +3550,34 @@ e_comp_editor_add_error (ECompEditor *comp_editor,
 	return e_comp_editor_add_alert (comp_editor, "calendar:comp-editor-error", primary_text, secondary_text);
 }
 
-
-static gboolean
-ece_check_start_before_end (ECompEditor *comp_editor,
-			    ICalTime **pstart_tt,
-			    ICalTime **pend_tt,
-			    gboolean adjust_end_time)
-{
-	ICalTime *start_tt, *end_tt, *end_tt_copy;
-	ICalTimezone *start_zone, *end_zone;
-	gint duration = -1;
-	gint cmp;
-
-	start_tt = *pstart_tt;
-	end_tt = *pend_tt;
-
-	if ((e_comp_editor_get_flags (comp_editor) & E_COMP_EDITOR_FLAG_IS_NEW) == 0) {
-		ICalComponent *icomp;
-
-		icomp = e_comp_editor_get_component (comp_editor);
-		if (icomp &&
-		    e_cal_util_component_has_property (icomp, I_CAL_DTSTART_PROPERTY) &&
-		    (e_cal_util_component_has_property (icomp, I_CAL_DTEND_PROPERTY) ||
-		     e_cal_util_component_has_property (icomp, I_CAL_DUE_PROPERTY))) {
-			ICalTime *orig_start, *orig_end;
-
-			orig_start = i_cal_component_get_dtstart (icomp);
-			orig_end = i_cal_component_get_dtend (icomp);
-
-			if (orig_start && i_cal_time_is_valid_time (orig_start) &&
-			    orig_end && i_cal_time_is_valid_time (orig_end)) {
-				duration = i_cal_time_as_timet (orig_end) - i_cal_time_as_timet (orig_start);
-			}
-
-			g_clear_object (&orig_start);
-			g_clear_object (&orig_end);
-		}
-	}
-
-	start_zone = i_cal_time_get_timezone (start_tt);
-	end_zone = i_cal_time_get_timezone (end_tt);
-
-	/* Convert the end time to the same timezone as the start time. */
-	end_tt_copy = i_cal_time_clone (end_tt);
-
-	if (start_zone && end_zone && start_zone != end_zone)
-		i_cal_time_convert_timezone (end_tt_copy, end_zone, start_zone);
-
-	/* Now check if the start time is after the end time. If it is,
-	 * we need to modify one of the times. */
-	cmp = i_cal_time_compare (start_tt, end_tt_copy);
-	if (cmp > 0) {
-		if (adjust_end_time) {
-			/* Try to switch only the date */
-			i_cal_time_set_date (end_tt,
-				i_cal_time_get_year (start_tt),
-				i_cal_time_get_month (start_tt),
-				i_cal_time_get_day (start_tt));
-
-			g_clear_object (&end_tt_copy);
-			end_tt_copy = i_cal_time_clone (end_tt);
-			if (start_zone && end_zone && start_zone != end_zone)
-				i_cal_time_convert_timezone (end_tt_copy, end_zone, start_zone);
-
-			if (duration > 0)
-				i_cal_time_adjust (end_tt_copy, 0, 0, 0, -duration);
-
-			if (i_cal_time_compare (start_tt, end_tt_copy) >= 0) {
-				g_clear_object (&end_tt);
-				end_tt = i_cal_time_clone (start_tt);
-
-				if (duration >= 0) {
-					i_cal_time_adjust (end_tt, 0, 0, 0, duration);
-				} else {
-					/* Modify the end time, to be the start + 1 hour/day. */
-					i_cal_time_adjust (end_tt, 0, i_cal_time_is_date (start_tt) ? 24 : 1, 0, 0);
-				}
-
-				if (start_zone && end_zone && start_zone != end_zone)
-					i_cal_time_convert_timezone (end_tt, start_zone, end_zone);
-			}
-		} else {
-			/* Try to switch only the date */
-			i_cal_time_set_date (start_tt,
-				i_cal_time_get_year (end_tt),
-				i_cal_time_get_month (end_tt),
-				i_cal_time_get_day (end_tt));
-
-			if (i_cal_time_compare (start_tt, end_tt_copy) >= 0) {
-				g_clear_object (&start_tt);
-				start_tt = i_cal_time_clone (end_tt);
-
-				if (duration >= 0) {
-					i_cal_time_adjust (start_tt, 0, 0, 0, -duration);
-				} else {
-					/* Modify the start time, to be the end - 1 hour/day. */
-					i_cal_time_adjust (start_tt, 0, i_cal_time_is_date (start_tt) ? -24 : -1, 0, 0);
-				}
-
-				if (start_zone && end_zone && start_zone != end_zone)
-					i_cal_time_convert_timezone (start_tt, end_zone, start_zone);
-			}
-		}
-
-		*pstart_tt = start_tt;
-		*pend_tt = end_tt;
-
-		g_clear_object (&end_tt_copy);
-
-		return TRUE;
-	}
-
-	g_clear_object (&end_tt_copy);
-
-	return FALSE;
-}
-
 void
 e_comp_editor_ensure_start_before_end (ECompEditor *comp_editor,
 				       ECompEditorPropertyPart *start_datetime,
 				       ECompEditorPropertyPart *end_datetime,
 				       gboolean change_end_datetime)
 {
-	ECompEditorPropertyPartDatetime *start_dtm, *end_dtm;
-	ICalTime *start_tt, *end_tt;
-	gboolean set_dtstart = FALSE, set_dtend = FALSE;
-
 	g_return_if_fail (E_IS_COMP_EDITOR (comp_editor));
 	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DATETIME (start_datetime));
 	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DATETIME (end_datetime));
 
-	start_dtm = E_COMP_EDITOR_PROPERTY_PART_DATETIME (start_datetime);
-	end_dtm = E_COMP_EDITOR_PROPERTY_PART_DATETIME (end_datetime);
+	e_comp_editor_set_updating (comp_editor, TRUE);
+	e_comp_editor_property_part_util_ensure_start_before_end (e_comp_editor_get_component (comp_editor),
+		start_datetime, end_datetime, change_end_datetime, &comp_editor->priv->last_duration);
+	e_comp_editor_set_updating (comp_editor, FALSE);
+}
 
-	start_tt = e_comp_editor_property_part_datetime_get_value (start_dtm);
-	end_tt = e_comp_editor_property_part_datetime_get_value (end_dtm);
+void
+e_comp_editor_ensure_same_value_type (ECompEditor *comp_editor,
+				      ECompEditorPropertyPart *src_datetime,
+				      ECompEditorPropertyPart *des_datetime)
+{
+	g_return_if_fail (E_IS_COMP_EDITOR (comp_editor));
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DATETIME (src_datetime));
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DATETIME (des_datetime));
 
-	if (!start_tt || !end_tt ||
-	    i_cal_time_is_null_time (start_tt) ||
-	    i_cal_time_is_null_time (end_tt) ||
-	    !i_cal_time_is_valid_time (start_tt) ||
-	    !i_cal_time_is_valid_time (end_tt)) {
-		g_clear_object (&start_tt);
-		g_clear_object (&end_tt);
-		return;
-	}
-
-	if (i_cal_time_is_date (start_tt) || i_cal_time_is_date (end_tt)) {
-		/* All Day Events are simple. We just compare the dates and if
-		 * start > end we copy one of them to the other. */
-		gint cmp;
-
-		i_cal_time_set_is_date (start_tt, TRUE);
-		i_cal_time_set_is_date (end_tt, TRUE);
-
-		cmp = i_cal_time_compare_date_only (start_tt, end_tt);
-
-		if (cmp > 0) {
-			if (change_end_datetime) {
-				g_clear_object (&end_tt);
-				end_tt = start_tt;
-				start_tt = NULL;
-				set_dtend = TRUE;
-			} else {
-				g_clear_object (&start_tt);
-				start_tt = end_tt;
-				end_tt = NULL;
-				set_dtstart = TRUE;
-			}
-		}
-	} else {
-		if (ece_check_start_before_end (comp_editor, &start_tt, &end_tt, change_end_datetime)) {
-			if (change_end_datetime)
-				set_dtend = TRUE;
-			else
-				set_dtstart = TRUE;
-		}
-	}
-
-	if (set_dtstart || set_dtend) {
-		e_comp_editor_set_updating (comp_editor, TRUE);
-
-		if (set_dtstart)
-			e_comp_editor_property_part_datetime_set_value (start_dtm, start_tt);
-
-		if (set_dtend)
-			e_comp_editor_property_part_datetime_set_value (end_dtm, end_tt);
-
-		e_comp_editor_set_updating (comp_editor, FALSE);
-	}
-
-	g_clear_object (&start_tt);
-	g_clear_object (&end_tt);
+	e_comp_editor_set_updating (comp_editor, TRUE);
+	e_comp_editor_property_part_util_ensure_same_value_type (src_datetime, des_datetime);
+	e_comp_editor_set_updating (comp_editor, FALSE);
 }
 
 static gboolean

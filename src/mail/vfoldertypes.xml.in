@@ -620,6 +620,29 @@
   </input>
  </part>
 
+ <part name="follow-up-due-by">
+  <_title>Follow Up Due By</_title>
+  <input type="optionlist" name="date-spec-type">
+   <option value="before">
+    <_title>is before</_title>
+    <code>(and (not (= (user-tag "follow-up") "")) (not (= (user-tag "due-by") "")) (&lt; (compare-date (make-time (user-tag "due-by")) ${versus}) 0))</code>
+   </option>
+   <option value="after">
+    <_title>is after</_title>
+    <code>(and (not (= (user-tag "follow-up") "")) (not (= (user-tag "due-by") "")) (&gt; (compare-date (make-time (user-tag "due-by")) ${versus}) 0))</code>
+   </option>
+   <option value="is">
+    <_title>is</_title>
+    <code>(and (not (= (user-tag "follow-up") "")) (not (= (user-tag "due-by") "")) (= (compare-date (make-time (user-tag "due-by")) ${versus}) 0))</code>
+   </option>
+   <option value="is-not">
+    <_title>is not</_title>
+    <code>(and (not (= (user-tag "follow-up") "")) (not (= (user-tag "due-by") "")) (not (= (compare-date (make-time (user-tag "due-by")) ${versus}) 0)))</code>
+   </option>
+  </input>
+  <input type="datespec" name="versus"/>
+ </part>
+
  <part name="attachments">
   <_title>Attachments</_title>
   <input type="optionlist" name="match-type">
@@ -630,6 +653,14 @@
    <option value="not exist">
     <_title>Do Not Exist</_title>
     <code>(not (system-flag "Attachments"))</code>
+   </option>
+   <option value="contain-icalendar">
+    <_title>Contain iCalendar Data</_title>
+    <code>(user-flag "$has_cal")</code>
+   </option>
+   <option value="not-contain-icalendar">
+    <_title>Do Not Contain iCalendar Data</_title>
+    <code>(not (user-flag "$has_cal"))</code>
    </option>
   </input>
  </part>
@@ -699,6 +730,23 @@
    </option>
   </input>
   <input type="folder-curi" name="folder"/>
+ </part>
+
+ <part name="addressbook">
+  <_title>Address book</_title>
+  <input type="optionlist" name="book">
+     <dynamic func="e_mail_addressbook_get_filter_options"/>
+  </input>
+  <input type="optionlist" name="compare-type">
+   <option value="contains-sender">
+    <_title>contains Sender</_title>
+    <code>(addressbook-contains ${book} "From")</code>
+   </option>
+   <option value="not-contains-sender">
+    <_title>does not contain Sender</_title>
+    <code>(not (addressbook-contains ${book} "From"))</code>
+   </option>
+  </input>
  </part>
 
  <part name="all">

@@ -142,8 +142,10 @@ srv_config_lookup_domain_sync (EConfigLookup *config_lookup,
 				description = g_strdup_printf ("%s:%d", hostname, g_srv_target_get_port (target));
 
 				lookup_result = e_config_lookup_result_simple_new (known_services[ii].kind,
-					known_services[ii].priority_base - PRIORITY_OFFSET,
-					FALSE,
+					known_services[ii].priority_base + PRIORITY_OFFSET,
+					/* consider mail configs complete */
+					known_services[ii].kind == E_CONFIG_LOOKUP_RESULT_MAIL_RECEIVE ||
+					known_services[ii].kind == E_CONFIG_LOOKUP_RESULT_MAIL_SEND,
 					known_services[ii].evo_protocol,
 					_(known_services[ii].display_name),
 					description,
@@ -260,7 +262,7 @@ srv_config_lookup_domain_sync (EConfigLookup *config_lookup,
 					if (g_str_equal (known_services[ii].gio_protocol, "ldaps"))
 						security = E_SOURCE_LDAP_SECURITY_LDAPS;
 					else
-						security = E_SOURCE_LDAP_SECURITY_NONE;
+						security = E_SOURCE_LDAP_SECURITY_STARTTLS;
 
 					e_config_lookup_result_simple_add_enum (lookup_result,
 						E_SOURCE_EXTENSION_LDAP_BACKEND, "security",

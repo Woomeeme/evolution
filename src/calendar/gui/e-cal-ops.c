@@ -86,6 +86,7 @@ typedef struct {
 	ECalClient *client;
 	ICalComponent *icomp;
 	ECalObjModType mod;
+	ECalOperationFlags op_flags;
 	gchar *uid;
 	gchar *rid;
 	gboolean check_detached_instance;
@@ -163,7 +164,7 @@ cal_ops_create_component_thread (EAlertSinkThreadJobData *job_data,
  * @user_data_free: a function to free @user_data; ignored when @callback is #NULL
  *
  * Creates a new @icomp in the @client. The @callback, if not #NULL,
- * is called with a new uid of the @icomp on sucessful component save.
+ * is called with a new uid of the @icomp on successful component save.
  * The @callback is called in the main thread.
  *
  * Since: 3.16
@@ -380,7 +381,7 @@ cal_ops_remove_component_thread (EAlertSinkThreadJobData *job_data,
 		g_clear_object (&icomp);
 	}
 
-	bod->success = e_cal_client_remove_object_sync (bod->client, bod->uid, bod->rid, bod->mod, E_CAL_OPERATION_FLAG_NONE, cancellable, error);
+	bod->success = e_cal_client_remove_object_sync (bod->client, bod->uid, bod->rid, bod->mod, bod->op_flags, cancellable, error);
 }
 
 /**
@@ -391,6 +392,7 @@ cal_ops_remove_component_thread (EAlertSinkThreadJobData *job_data,
  * @rid: (allow none): a recurrence ID of the component; can be #NULL
  * @mod: a mode to use for the component removal
  * @check_detached_instance: whether to test whether a detached instance is to be removed
+ * @op_flags: operation flags, bit-or of #ECalOperationFlags
  *
  * Removes component identified by @uid and @rid from the @client using mode @mod.
  * The @check_detached_instance influences behaviour when removing only one instance.
@@ -407,7 +409,8 @@ e_cal_ops_remove_component (ECalModel *model,
 			    const gchar *uid,
 			    const gchar *rid,
 			    ECalObjModType mod,
-			    gboolean check_detached_instance)
+			    gboolean check_detached_instance,
+			    ECalOperationFlags op_flags)
 {
 	ECalDataModel *data_model;
 	ESource *source;
@@ -449,6 +452,7 @@ e_cal_ops_remove_component (ECalModel *model,
 	bod->rid = g_strdup (rid);
 	bod->mod = mod;
 	bod->check_detached_instance = check_detached_instance;
+	bod->op_flags = op_flags;
 
 	display_name = e_util_get_source_full_name (e_cal_model_get_registry (model), source);
 	cancellable = e_cal_data_model_submit_thread_job (data_model, description, alert_ident,
@@ -635,7 +639,7 @@ cal_ops_update_components_thread (EAlertSinkThreadJobData *job_data,
 	e_alert_sink_thread_job_set_alert_arg_0 (job_data, display_name);
 	g_free (display_name);
 
-	client = e_client_cache_get_client_sync (client_cache, source, pcd->extension_name, 30, cancellable, &local_error);
+	client = e_client_cache_get_client_sync (client_cache, source, pcd->extension_name, E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, cancellable, &local_error);
 	g_clear_object (&source);
 
 	if (!client) {
@@ -1040,7 +1044,6 @@ cal_ops_purge_components_thread (EAlertSinkThreadJobData *job_data,
 		}
 
 		g_free (display_name);
-		pushed_message = TRUE;
 		nobjects = g_slist_length (objects);
 
 		for (olink = objects, ii = 0; olink; olink = g_slist_next (olink), ii++) {
@@ -1090,7 +1093,6 @@ cal_ops_purge_components_thread (EAlertSinkThreadJobData *job_data,
 
 		camel_operation_progress (cancellable, 0);
 		camel_operation_pop_message (cancellable);
-		pushed_message = FALSE;
 
 		if (!success)
 			break;
@@ -1270,7 +1272,7 @@ cal_ops_open_client_sync (EAlertSinkThreadJobData *job_data,
 			_("Source with UID “%s” not found"), client_uid);
 		e_alert_sink_thread_job_set_alert_arg_0 (job_data, client_uid);
 	} else {
-		client = e_client_cache_get_client_sync (client_cache, source, extension_name, 30, cancellable, error);
+		client = e_client_cache_get_client_sync (client_cache, source, extension_name, E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, cancellable, error);
 		if (client)
 			cal_client = E_CAL_CLIENT (client);
 	}
@@ -1605,7 +1607,7 @@ cal_ops_new_component_editor_thread (EAlertSinkThreadJobData *job_data,
 
 		client_cache = e_shell_get_client_cache (ncd->shell);
 
-		client = e_client_cache_get_client_sync (client_cache, ncd->default_source, ncd->extension_name, 30, cancellable, &local_error);
+		client = e_client_cache_get_client_sync (client_cache, ncd->default_source, ncd->extension_name, E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, cancellable, &local_error);
 		if (client)
 			ncd->client = E_CAL_CLIENT (client);
 	}
@@ -1685,6 +1687,20 @@ e_cal_ops_new_component_ex (EShellWindow *shell_window,
 
 	if (for_client_uid)
 		for_client_source = e_source_registry_ref_source (registry, for_client_uid);
+
+	if (!all_day && source_type == E_CAL_CLIENT_SOURCE_TYPE_EVENTS) {
+		GSettings *settings = e_util_ref_settings ("org.gnome.evolution.calendar");
+		gint shorten_by = g_settings_get_int (settings, "shorten-time");
+		gboolean shorten_end = g_settings_get_boolean (settings, "shorten-time-end");
+		g_clear_object (&settings);
+
+		if (shorten_by > 0 && (dtend - dtstart) / 60 > shorten_by) {
+			if (shorten_end)
+				dtend -= shorten_by * 60;
+			else
+				dtstart += shorten_by * 60;
+		}
+	}
 
 	ncd = new_component_data_new ();
 	ncd->is_new_component = TRUE;
@@ -1984,7 +2000,7 @@ transfer_components_thread (EAlertSinkThreadJobData *job_data,
 
 	client_cache = e_shell_get_client_cache (tcd->shell);
 
-	to_client = e_util_open_client_sync (job_data, client_cache, extension_name, tcd->destination, 30, cancellable, error);
+	to_client = e_util_open_client_sync (job_data, client_cache, extension_name, tcd->destination, E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, cancellable, error);
 	if (!to_client)
 		goto out;
 
@@ -2002,11 +2018,9 @@ transfer_components_thread (EAlertSinkThreadJobData *job_data,
 		ESource *source = key;
 		GSList *icomps = value;
 
-		from_client = e_util_open_client_sync (job_data, client_cache, extension_name, source, 30, cancellable, error);
-		if (!from_client) {
-			success = FALSE;
+		from_client = e_util_open_client_sync (job_data, client_cache, extension_name, source, E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, cancellable, error);
+		if (!from_client)
 			goto out;
-		}
 
 		from_cal_client = E_CAL_CLIENT (from_client);
 

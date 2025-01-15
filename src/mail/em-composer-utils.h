@@ -52,15 +52,17 @@ void		em_utils_edit_message		(EMsgComposer *composer,
 						 CamelFolder *folder,
 						 CamelMimeMessage *message,
 						 const gchar *message_uid,
-						 gboolean keep_signature);
+						 gboolean keep_signature,
+						 gboolean replace_original_message);
 void		em_utils_forward_message	(EMsgComposer *composer,
 						 CamelMimeMessage *message,
 						 EMailForwardStyle style,
 						 CamelFolder *folder,
-						 const gchar *uid);
+						 const gchar *uid,
+						 gboolean skip_insecure_parts);
 void		em_utils_forward_attachment	(EMsgComposer *composer,
 						 CamelMimePart *part,
-						 const gchar *subject,
+						 const gchar *orig_subject,
 						 CamelFolder *folder,
 						 GPtrArray *uids);
 void		em_utils_redirect_message	(EMsgComposer *composer,
@@ -82,7 +84,7 @@ void		em_utils_reply_to_message	(EMsgComposer *composer,
 						 EMailReplyStyle style,
 						 EMailPartList *source,
 						 CamelInternetAddress *address,
-						 guint32 reply_flags); /* bit-or of EMailReplyFlags */
+						 EMailReplyFlags reply_flags);
 void		em_utils_reply_alternative	(GtkWindow *parent,
 						 EShell *shell,
 						 EAlertSink *alert_sink,
@@ -92,7 +94,15 @@ void		em_utils_reply_alternative	(GtkWindow *parent,
 						 EMailReplyStyle default_style,
 						 EMailPartList *source,
 						 EMailPartValidityFlags validity_pgp_sum,
-						 EMailPartValidityFlags validity_smime_sum);
+						 EMailPartValidityFlags validity_smime_sum,
+						 gboolean skip_insecure_parts);
+void		em_utils_get_reply_recipients	(ESourceRegistry *registry,
+						 CamelMimeMessage *message,
+						 EMailReplyType reply_type,
+						 CamelInternetAddress *address,
+						 CamelInternetAddress *inout_to,
+						 CamelInternetAddress *inout_cc,
+						 CamelNNTPAddress *inout_postto);
 EDestination **	em_utils_camel_address_to_destination
 						(CamelInternetAddress *iaddr);
 void		em_configure_new_composer	(EMsgComposer *composer,

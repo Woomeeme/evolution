@@ -50,11 +50,25 @@ typedef enum {
  * @E_MAIL_REPLY_FLAG_FORCE_STYLE: Force use of the passed-in reply style; if not set,
  *    then also checks reply style setting for the used mail account.
  * @E_MAIL_REPLY_FLAG_FORMAT_PLAIN: Force compose in Plain Text format; cannot be used together
- *    with @E_MAIL_REPLY_FLAG_FORMAT_HTML. If none of these is set, then uses
- *    global setting.
+ *    with @E_MAIL_REPLY_FLAG_FORMAT_HTML, @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN,
+ *    @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_PLAIN nor @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_HTML.
+ *    If none of these is set, then uses global setting.
  * @E_MAIL_REPLY_FLAG_FORMAT_HTML: Force compose in HTML format; cannot be used together
- *    with @E_MAIL_REPLY_FLAG_FORMAT_PLAIN. If none of these is set, then uses
- *    global setting.
+ *    with @E_MAIL_REPLY_FLAG_FORMAT_PLAIN, @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN,
+ *    @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_PLAIN nor @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_HTML.
+ *    If none of these is set, then uses global setting.
+ * @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN: Force compose in Markdown format; cannot be used together
+ *    with @E_MAIL_REPLY_FLAG_FORMAT_PLAIN, @E_MAIL_REPLY_FLAG_FORMAT_HTML,
+ *    @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_PLAIN nor @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_HTML.
+ *    If none of these is set, then uses global setting. (Since: 3.44)
+ * @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_PLAIN: Force compose in Markdown as Plain Text format; cannot be used together
+ *    with @E_MAIL_REPLY_FLAG_FORMAT_PLAIN, @E_MAIL_REPLY_FLAG_FORMAT_HTML,
+ *    @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN nor @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_HTML.
+ *    If none of these is set, then uses global setting. (Since: 3.44)
+ * @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_HTML: Force compose in Markdown as HTML format; cannot be used together
+ *    with @E_MAIL_REPLY_FLAG_FORMAT_PLAIN, @E_MAIL_REPLY_FLAG_FORMAT_HTML,
+ *    @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN nor @E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_PLAIN.
+ *    If none of these is set, then uses global setting. (Since: 3.44)
  * @E_MAIL_REPLY_FLAG_TOP_POSTING: Force top posting; cannot be used together
  *    with @E_MAIL_REPLY_FLAG_BOTTOM_POSTING. If none is set, then uses global settings.
  * @E_MAIL_REPLY_FLAG_BOTTOM_POSTING: Force bottom posting; cannot be used together
@@ -65,6 +79,7 @@ typedef enum {
  *    with @E_MAIL_REPLY_FLAG_TOP_SIGNATURE. If none is set, then uses global settings.
  * @E_MAIL_REPLY_FLAG_FORCE_SENDER_REPLY: Force sender reply, to not switch it to reply-all, when
  *    the From address of the message is the user.
+ * @E_MAIL_REPLY_FLAG_SKIP_INSECURE_PARTS: Skip insecure parts, that's those without validity. Since: 3.50
  *
  * Flags influencing behavior of em_utils_reply_to_message().
  *
@@ -79,7 +94,11 @@ typedef enum { /*< flags >*/
 	E_MAIL_REPLY_FLAG_BOTTOM_POSTING	= 1 << 4,
 	E_MAIL_REPLY_FLAG_TOP_SIGNATURE		= 1 << 5,
 	E_MAIL_REPLY_FLAG_BOTTOM_SIGNATURE	= 1 << 6,
-	E_MAIL_REPLY_FLAG_FORCE_SENDER_REPLY	= 1 << 7
+	E_MAIL_REPLY_FLAG_FORCE_SENDER_REPLY	= 1 << 7,
+	E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN	= 1 << 8,
+	E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_PLAIN	= 1 << 9,
+	E_MAIL_REPLY_FLAG_FORMAT_MARKDOWN_HTML	= 1 << 10,
+	E_MAIL_REPLY_FLAG_SKIP_INSECURE_PARTS	= 1 << 11
 } EMailReplyFlags;
 
 G_END_DECLS

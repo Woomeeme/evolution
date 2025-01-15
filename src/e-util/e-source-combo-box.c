@@ -22,14 +22,11 @@
 
 #include "e-source-combo-box.h"
 
-#define E_SOURCE_COMBO_BOX_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_SOURCE_COMBO_BOX, ESourceComboBoxPrivate))
-
 struct _ESourceComboBoxPrivate {
 	ESourceRegistry *registry;
 	gchar *extension_name;
 	GHashTable *hide_sources;
+	GtkCellRenderer *name_renderer;
 
 	gulong source_added_handler_id;
 	gulong source_removed_handler_id;
@@ -37,24 +34,28 @@ struct _ESourceComboBoxPrivate {
 	gulong source_disabled_handler_id;
 
 	gboolean show_colors;
+	gint max_natural_width;
+	gboolean show_full_name;
 };
 
 enum {
 	PROP_0,
 	PROP_EXTENSION_NAME,
 	PROP_REGISTRY,
-	PROP_SHOW_COLORS
+	PROP_SHOW_COLORS,
+	PROP_MAX_NATURAL_WIDTH
 };
 
 enum {
 	COLUMN_COLOR,		/* GDK_TYPE_RGBA */
 	COLUMN_NAME,		/* G_TYPE_STRING */
+	COLUMN_FULL_NAME,	/* G_TYPE_STRING */
 	COLUMN_SENSITIVE,	/* G_TYPE_BOOLEAN */
 	COLUMN_UID,		/* G_TYPE_STRING */
 	NUM_COLUMNS
 };
 
-G_DEFINE_TYPE (ESourceComboBox, e_source_combo_box, GTK_TYPE_COMBO_BOX)
+G_DEFINE_TYPE_WITH_PRIVATE (ESourceComboBox, e_source_combo_box, GTK_TYPE_COMBO_BOX)
 
 static gboolean
 source_combo_box_traverse (GNode *node,
@@ -69,6 +70,7 @@ source_combo_box_traverse (GNode *node,
 	const gchar *ext_name;
 	const gchar *display_name;
 	const gchar *uid;
+	gchar *full_name;
 	gboolean sensitive = FALSE;
 	gboolean use_color = FALSE;
 	guint depth;
@@ -103,6 +105,7 @@ source_combo_box_traverse (GNode *node,
 	}
 
 	display_name = e_source_get_display_name (source);
+	full_name = e_util_get_source_full_name (combo_box->priv->registry, source);
 
 	model = gtk_combo_box_get_model (GTK_COMBO_BOX (combo_box));
 	gtk_list_store_append (GTK_LIST_STORE (model), &iter);
@@ -127,11 +130,13 @@ source_combo_box_traverse (GNode *node,
 		GTK_LIST_STORE (model), &iter,
 		COLUMN_COLOR, use_color ? &rgba : NULL,
 		COLUMN_NAME, indented->str,
+		COLUMN_FULL_NAME, full_name && *full_name ? full_name : display_name,
 		COLUMN_SENSITIVE, sensitive,
 		COLUMN_UID, uid,
 		-1);
 
 	g_string_free (indented, TRUE);
+	g_free (full_name);
 
 	return FALSE;
 }
@@ -252,6 +257,21 @@ source_combo_box_source_disabled_cb (ESourceRegistry *registry,
 }
 
 static void
+source_combo_box_get_preferred_width (GtkWidget *widget,
+				      gint *minimum_width,
+				      gint *natural_width)
+{
+	ESourceComboBox *combo_box = E_SOURCE_COMBO_BOX (widget);
+
+	GTK_WIDGET_CLASS (e_source_combo_box_parent_class)->get_preferred_width (widget, minimum_width, natural_width);
+
+	/* 50 = 25 for color + 25 for dropdown */
+	if (combo_box->priv->max_natural_width > 0 &&
+	    *natural_width > combo_box->priv->max_natural_width + (50 * gtk_widget_get_scale_factor (widget)))
+		*natural_width = combo_box->priv->max_natural_width;
+}
+
+static void
 source_combo_box_set_property (GObject *object,
                                guint property_id,
                                const GValue *value,
@@ -274,6 +294,12 @@ source_combo_box_set_property (GObject *object,
 			e_source_combo_box_set_show_colors (
 				E_SOURCE_COMBO_BOX (object),
 				g_value_get_boolean (value));
+			return;
+
+		case PROP_MAX_NATURAL_WIDTH:
+			e_source_combo_box_set_max_natural_width (
+				E_SOURCE_COMBO_BOX (object),
+				g_value_get_int (value));
 			return;
 	}
 
@@ -307,6 +333,13 @@ source_combo_box_get_property (GObject *object,
 				e_source_combo_box_get_show_colors (
 				E_SOURCE_COMBO_BOX (object)));
 			return;
+
+		case PROP_MAX_NATURAL_WIDTH:
+			g_value_set_int (
+				value,
+				e_source_combo_box_get_max_natural_width (
+				E_SOURCE_COMBO_BOX (object)));
+			return;
 	}
 
 	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -315,25 +348,24 @@ source_combo_box_get_property (GObject *object,
 static void
 source_combo_box_dispose (GObject *object)
 {
-	ESourceComboBoxPrivate *priv;
+	ESourceComboBox *self = E_SOURCE_COMBO_BOX (object);
 
-	priv = E_SOURCE_COMBO_BOX_GET_PRIVATE (object);
+	self->priv->name_renderer = NULL;
 
-	if (priv->registry != NULL) {
+	if (self->priv->registry) {
 		g_signal_handler_disconnect (
-			priv->registry,
-			priv->source_added_handler_id);
+			self->priv->registry,
+			self->priv->source_added_handler_id);
 		g_signal_handler_disconnect (
-			priv->registry,
-			priv->source_removed_handler_id);
+			self->priv->registry,
+			self->priv->source_removed_handler_id);
 		g_signal_handler_disconnect (
-			priv->registry,
-			priv->source_enabled_handler_id);
+			self->priv->registry,
+			self->priv->source_enabled_handler_id);
 		g_signal_handler_disconnect (
-			priv->registry,
-			priv->source_disabled_handler_id);
-		g_object_unref (priv->registry);
-		priv->registry = NULL;
+			self->priv->registry,
+			self->priv->source_disabled_handler_id);
+		g_clear_object (&self->priv->registry);
 	}
 
 	/* Chain up to parent's "dispose" method. */
@@ -343,12 +375,10 @@ source_combo_box_dispose (GObject *object)
 static void
 source_combo_box_finalize (GObject *object)
 {
-	ESourceComboBoxPrivate *priv;
+	ESourceComboBox *self = E_SOURCE_COMBO_BOX (object);
 
-	priv = E_SOURCE_COMBO_BOX_GET_PRIVATE (object);
-
-	g_free (priv->extension_name);
-	g_hash_table_destroy (priv->hide_sources);
+	g_free (self->priv->extension_name);
+	g_hash_table_destroy (self->priv->hide_sources);
 
 	/* Chain up to parent's "finalize" method. */
 	G_OBJECT_CLASS (e_source_combo_box_parent_class)->finalize (object);
@@ -371,6 +401,7 @@ source_combo_box_constructed (GObject *object)
 		NUM_COLUMNS,
 		GDK_TYPE_RGBA,		/* COLUMN_COLOR */
 		G_TYPE_STRING,		/* COLUMN_NAME */
+		G_TYPE_STRING,		/* COLUMN_FULL_NAME */
 		G_TYPE_BOOLEAN,		/* COLUMN_SENSITIVE */
 		G_TYPE_STRING);		/* COLUMN_UID */
 	gtk_combo_box_set_model (
@@ -399,8 +430,14 @@ source_combo_box_constructed (GObject *object)
 	gtk_cell_layout_pack_start (layout, renderer, TRUE);
 	gtk_cell_layout_set_attributes (
 		layout, renderer,
-		"text", COLUMN_NAME,
+		"text", combo_box->priv->show_full_name ? COLUMN_FULL_NAME : COLUMN_NAME,
 		"sensitive", COLUMN_SENSITIVE,
+		NULL);
+
+	combo_box->priv->name_renderer = renderer;
+
+	g_object_set (combo_box->priv->name_renderer,
+		"ellipsize", combo_box->priv->max_natural_width > 0 ? PANGO_ELLIPSIZE_END : PANGO_ELLIPSIZE_NONE,
 		NULL);
 
 	source_combo_box_build_model (combo_box);
@@ -410,8 +447,9 @@ static void
 e_source_combo_box_class_init (ESourceComboBoxClass *class)
 {
 	GObjectClass *object_class = G_OBJECT_CLASS (class);
+	GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (class);
 
-	g_type_class_add_private (class, sizeof (ESourceComboBoxPrivate));
+	widget_class->get_preferred_width = source_combo_box_get_preferred_width;
 
 	object_class->set_property = source_combo_box_set_property;
 	object_class->get_property = source_combo_box_get_property;
@@ -457,12 +495,25 @@ e_source_combo_box_class_init (ESourceComboBoxClass *class)
 			G_PARAM_READWRITE |
 			G_PARAM_CONSTRUCT |
 			G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property (
+		object_class,
+		PROP_MAX_NATURAL_WIDTH,
+		g_param_spec_int (
+			"max-natural-width",
+			"Max Natural Width",
+			NULL,
+			G_MININT, G_MAXINT, -1,
+			G_PARAM_READWRITE |
+			G_PARAM_CONSTRUCT |
+			G_PARAM_STATIC_STRINGS |
+			G_PARAM_EXPLICIT_NOTIFY));
 }
 
 static void
 e_source_combo_box_init (ESourceComboBox *combo_box)
 {
-	combo_box->priv = E_SOURCE_COMBO_BOX_GET_PRIVATE (combo_box);
+	combo_box->priv = e_source_combo_box_get_instance_private (combo_box);
 	combo_box->priv->hide_sources = g_hash_table_new_full (camel_strcase_hash, camel_strcase_equal, g_free, NULL);
 }
 
@@ -754,7 +805,7 @@ e_source_combo_box_set_active (ESourceComboBox *combo_box,
  **/
 void
 e_source_combo_box_hide_sources (ESourceComboBox *combo_box,
-				  ...)
+				 ...)
 {
 	const gchar *backend_name;
 	va_list va;
@@ -772,4 +823,109 @@ e_source_combo_box_hide_sources (ESourceComboBox *combo_box,
 	va_end (va);
 
 	source_combo_box_build_model (combo_box);
+}
+
+/**
+ * e_source_combo_box_get_max_natural_width:
+ * @combo_box: an #ESourceComboBox
+ *
+ * Returns max natural width for the combo box. The default is -1, which means
+ * to use what the gtk+ calculates. Positive values clamp the natural width and
+ * enable ellipsizing for the #ESource name.
+ *
+ * Returns: max natural width for the combo box
+ *
+ * Since: 3.46
+ **/
+gint
+e_source_combo_box_get_max_natural_width (ESourceComboBox *combo_box)
+{
+	g_return_val_if_fail (E_IS_SOURCE_COMBO_BOX (combo_box), -1);
+
+	return combo_box->priv->max_natural_width;
+}
+
+/**
+ * e_source_combo_box_set_max_natural_width:
+ * @combo_box: an #ESourceComboBox
+ * @value: a value to set
+ *
+ * Sets max natural width for the combo box. Use -1 to use what
+ * the gtk+ calculates. Positive values clamp the natural width
+ * and enable ellipsizing for the #ESource name.
+ *
+ * Since: 3.46
+ **/
+void
+e_source_combo_box_set_max_natural_width (ESourceComboBox *combo_box,
+					  gint value)
+{
+	GtkWidget *widget;
+
+	g_return_if_fail (E_IS_SOURCE_COMBO_BOX (combo_box));
+
+	if (value == combo_box->priv->max_natural_width ||
+	    (value <= 0 && combo_box->priv->max_natural_width <= 0))
+		return;
+
+	combo_box->priv->max_natural_width = value;
+
+	if (combo_box->priv->name_renderer) {
+		g_object_set (combo_box->priv->name_renderer,
+			"ellipsize", combo_box->priv->max_natural_width > 0 ? PANGO_ELLIPSIZE_END : PANGO_ELLIPSIZE_NONE,
+			NULL);
+	}
+
+	widget = GTK_WIDGET (combo_box);
+
+	if (gtk_widget_get_realized (widget))
+		gtk_widget_queue_resize (widget);
+
+	g_object_notify (G_OBJECT (combo_box), "max-natural-width");
+}
+
+/**
+ * e_source_combo_box_get_show_full_name:
+ * @combo_box: an #ESourceComboBox
+ *
+ * Returns whether should show full name of the sources.
+ *
+ * Returns: whether should show full name of the sources
+ *
+ * Since: 3.50
+ **/
+gboolean
+e_source_combo_box_get_show_full_name (ESourceComboBox *combo_box)
+{
+	g_return_val_if_fail (E_IS_SOURCE_COMBO_BOX (combo_box), FALSE);
+
+	return combo_box->priv->show_full_name;
+}
+
+/**
+ * e_source_combo_box_set_show_full_name:
+ * @combo_box: an #ESourceComboBox
+ * @show_full_name: value to set
+ *
+ * Sets whether should show full name of the sources.
+ *
+ * Since: 3.50
+ **/
+void
+e_source_combo_box_set_show_full_name (ESourceComboBox *combo_box,
+				       gboolean show_full_name)
+{
+	g_return_if_fail (E_IS_SOURCE_COMBO_BOX (combo_box));
+
+	if ((combo_box->priv->show_full_name ? 1 : 0) == (show_full_name ? 1 : 0))
+		return;
+
+	combo_box->priv->show_full_name = show_full_name;
+
+	if (combo_box->priv->name_renderer) {
+		gtk_cell_layout_set_attributes (
+			GTK_CELL_LAYOUT (combo_box), combo_box->priv->name_renderer,
+			"text", combo_box->priv->show_full_name ? COLUMN_FULL_NAME : COLUMN_NAME,
+			NULL);
+	}
 }

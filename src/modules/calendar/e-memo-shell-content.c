@@ -28,10 +28,6 @@
 #include "e-cal-base-shell-sidebar.h"
 #include "e-memo-shell-content.h"
 
-#define E_MEMO_SHELL_CONTENT_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MEMO_SHELL_CONTENT, EMemoShellContentPrivate))
-
 struct _EMemoShellContentPrivate {
 	GtkWidget *paned;
 	GtkWidget *memo_table;
@@ -51,6 +47,7 @@ enum {
 };
 
 G_DEFINE_DYNAMIC_TYPE_EXTENDED (EMemoShellContent, e_memo_shell_content, E_TYPE_CAL_BASE_SHELL_CONTENT, 0,
+	G_ADD_PRIVATE_DYNAMIC (EMemoShellContent)
 	G_IMPLEMENT_INTERFACE_DYNAMIC (GTK_TYPE_ORIENTABLE, NULL))
 
 static void
@@ -437,6 +434,8 @@ static void
 memo_shell_content_constructed (GObject *object)
 {
 	EMemoShellContent *memo_shell_content;
+	EAttachmentBar *attachment_bar;
+	EAttachmentStore *attachment_store;
 	EShellView *shell_view;
 	EShellContent *shell_content;
 	EShellTaskbar *shell_taskbar;
@@ -491,8 +490,24 @@ memo_shell_content_constructed (GObject *object)
 
 	container = memo_shell_content->priv->paned;
 
+	attachment_store = E_ATTACHMENT_STORE (e_attachment_store_new ());
+	widget = e_attachment_bar_new (attachment_store);
+	gtk_widget_set_visible (widget, TRUE);
+	attachment_bar = E_ATTACHMENT_BAR (widget);
+	gtk_paned_pack2 (GTK_PANED (container), widget, FALSE, FALSE);
+
+	e_binding_bind_property_full (
+		attachment_store, "num-attachments",
+		attachment_bar, "attachments-visible",
+		G_BINDING_SYNC_CREATE,
+		e_attachment_store_transform_num_attachments_to_visible_boolean,
+		NULL, NULL, NULL);
+
+	container = e_attachment_bar_get_content_area (attachment_bar);
+
 	widget = e_cal_component_preview_new ();
 	gtk_widget_show (widget);
+	e_cal_component_preview_set_attachment_store (E_CAL_COMPONENT_PREVIEW (widget), attachment_store);
 
 	g_signal_connect_swapped (
 		widget, "status-message",
@@ -500,13 +515,13 @@ memo_shell_content_constructed (GObject *object)
 		shell_taskbar);
 
 	widget = e_preview_pane_new (E_WEB_VIEW (widget));
-	gtk_paned_pack2 (GTK_PANED (container), widget, FALSE, FALSE);
+	gtk_box_pack_start (GTK_BOX (container), widget, TRUE, TRUE, 0);
 	memo_shell_content->priv->preview_pane = g_object_ref (widget);
 	gtk_widget_show (widget);
 
 	e_binding_bind_property (
 		object, "preview-visible",
-		widget, "visible",
+		attachment_bar, "visible",
 		G_BINDING_SYNC_CREATE);
 
 	target_list = gtk_target_list_new (NULL, 0);
@@ -568,8 +583,6 @@ e_memo_shell_content_class_init (EMemoShellContentClass *class)
 	EShellContentClass *shell_content_class;
 	ECalBaseShellContentClass *cal_base_shell_content_class;
 
-	g_type_class_add_private (class, sizeof (EMemoShellContentPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = memo_shell_content_set_property;
 	object_class->get_property = memo_shell_content_get_property;
@@ -607,7 +620,7 @@ e_memo_shell_content_class_finalize (EMemoShellContentClass *class)
 static void
 e_memo_shell_content_init (EMemoShellContent *memo_shell_content)
 {
-	memo_shell_content->priv = E_MEMO_SHELL_CONTENT_GET_PRIVATE (memo_shell_content);
+	memo_shell_content->priv = e_memo_shell_content_get_instance_private (memo_shell_content);
 
 	/* Postpone widget construction until we have a shell view. */
 }

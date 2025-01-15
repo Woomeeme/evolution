@@ -637,12 +637,12 @@ in the folder will be available in offline mode.</_secondary>
 
   <error id="webkit-web-process-crashed" type="error">
     <_primary>Something has gone wrong when displaying the message</_primary>
-    <_secondary>A WebKitWebProcess crashed when displaying the message. You can try again by moving to another message and back. If the issue persists, please file a bug report in GNOME Gitlab.</_secondary>
+    <_secondary>A WebKitWebProcess crashed when displaying the message. You can try again by moving to another message and back. If the issue persists, please file a bug report in GNOME GitLab.</_secondary>
   </error>
 
   <error id="webkit-web-process-crashed-signature" type="error">
     <_primary>Something has gone wrong when displaying the signature</_primary>
-    <_secondary>A WebKitWebProcess crashed when displaying the signature. You can try again by moving to another signature and back. If the issue persists, please file a bug report in GNOME Gitlab.</_secondary>
+    <_secondary>A WebKitWebProcess crashed when displaying the signature. You can try again by moving to another signature and back. If the issue persists, please file a bug report in GNOME GitLab.</_secondary>
   </error>
 
   <error id="ask-empty-junk" type="warning" default="GTK_RESPONSE_CANCEL">
@@ -655,5 +655,67 @@ in the folder will be available in offline mode.</_secondary>
   <error id="failed-empty-junk" type="error" default="GTK_RESPONSE_YES">
     <_primary>Failed to empty Junk folder “{0}”</_primary>
     <secondary>{1}</secondary>
+  </error>
+
+  <error id="no-archive-folder" type="error">
+    <_primary>Cannot archive messages</_primary>
+    <_secondary>No Archive folder is configured. Please configure one for the account in order to be able to archive messages.</_secondary>
+  </error>
+
+  <error id="message-list-regen-failed" type="error">
+    <_primary>Failed to generate message list</_primary>
+    <secondary>{0}</secondary>
+  </error>
+
+  <error id="ask-mark-as-junk" type="warning" default="GTK_RESPONSE_CANCEL">
+    <primary>{0}</primary>
+    <secondary>{1}</secondary>
+    <button stock="gtk-cancel" response="GTK_RESPONSE_CANCEL"/>
+    <button _label="_Mark as Junk" response="GTK_RESPONSE_YES"/>
+  </error>
+
+  <error id="error-label-exists" type="error">
+    <!-- Translators: {0} is the name of the folder where the delete of the message note failed. -->
+    <_primary>Label named “{0}” already exists</_primary>
+    <_secondary>Choose a different name, please.</_secondary>
+  </error>
+
+  <error id="ask-composer-changed-attachment" type="warning" default="GTK_RESPONSE_CANCEL">
+    <primary>{0}</primary>
+    <secondary>{1}</secondary>
+    <button response="GTK_RESPONSE_CANCEL" _label="_Cancel"/>
+    <button response="GTK_RESPONSE_YES" _label="_Send"></button>
+  </error>
+
+  <error id="ask-import-pgp-key" type="question" default="GTK_RESPONSE_YES">
+    <_primary>Do you wish to import OpenPGP key?</_primary>
+    <button _label="_Cancel" response="GTK_RESPONSE_CANCEL"/>
+    <button _label="_Import" response="GTK_RESPONSE_YES"/>
+  </error>
+
+  <error id="error-import-pgp-key" type="error">
+    <_primary>Failed to import OpenPGP key</_primary>
+    <secondary>{0}</secondary>
+  </error>
+
+  <error id="message-list-sort-on-header-click" type="question" default="GTK_RESPONSE_YES">
+    <_primary>Change sort order of the message list?</_primary>
+    <_secondary>Click in the list headers usually changes sort order. Choose what to do.</_secondary>
+    <button _label="_Sort" response="GTK_RESPONSE_YES"/>
+    <button _label="_Don’t Sort" response="GTK_RESPONSE_NO"/>
+    <button _label="_Always Sort" response="GTK_RESPONSE_ACCEPT"/>
+    <button _label="N_ever Sort" response="GTK_RESPONSE_CANCEL"/>
+  </error>
+
+  <error id="ask-composer-send-autocrypt" type="warning" default="GTK_RESPONSE_YES">
+    <_primary>Send mail with Pretty Good Privacy (PGP) public key?</_primary>
+    <_secondary xml:space="preserve">The message contains your public PGP key, which the recipients can use to encrypt messages sent to you or to verify signatures made with this PGP key.
+
+This option is set for each mail account separately. You can find it in the Security tab of the mail account Properties.</_secondary>
+    <button response="GTK_RESPONSE_YES" _label="_Send with Key"></button>
+    <button response="GTK_RESPONSE_NO" _label="Send _without Key"></button>
+    <button response="GTK_RESPONSE_ACCEPT" _label="_Always"></button>
+    <button response="GTK_RESPONSE_REJECT" _label="_Never"></button>
+    <button response="GTK_RESPONSE_CANCEL" _label="_Cancel"/>
   </error>
 </error-list>

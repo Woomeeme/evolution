@@ -134,10 +134,7 @@ static void e_calendar_start_auto_move_year	(ECalendar *cal,
 static gboolean e_calendar_auto_move_year_handler (gpointer data);
 static void e_calendar_stop_auto_move		(ECalendar *cal);
 
-G_DEFINE_TYPE (
-	ECalendar,
-	e_calendar,
-	E_TYPE_CANVAS)
+G_DEFINE_TYPE_WITH_PRIVATE (ECalendar, e_calendar, E_TYPE_CANVAS)
 
 static void
 calitem_month_width_changed_cb (ECalendarItem *item,
@@ -233,8 +230,6 @@ e_calendar_class_init (ECalendarClass *class)
 	GObjectClass   *object_class;
 	GtkWidgetClass *widget_class;
 
-	g_type_class_add_private (class, sizeof (ECalendarPrivate));
-
 	object_class = (GObjectClass *) class;
 	object_class->dispose = e_calendar_dispose;
 
@@ -258,7 +253,7 @@ e_calendar_init (ECalendar *cal)
 	GtkWidget *button;
 	AtkObject *a11y;
 
-	cal->priv = G_TYPE_INSTANCE_GET_PRIVATE (cal, E_TYPE_CALENDAR, ECalendarPrivate);
+	cal->priv = e_calendar_get_instance_private (cal);
 
 	pango_context = gtk_widget_create_pango_context (GTK_WIDGET (cal));
 	g_warn_if_fail (pango_context != NULL);
@@ -540,6 +535,10 @@ e_calendar_reposition_timeout_cb (gpointer user_data)
 	gtk_widget_get_allocation (widget, &old_allocation);
 	new_x2 = old_allocation.width - 1;
 	new_y2 = old_allocation.height - 1;
+	if (new_x2 < cal->priv->calitem->min_month_width)
+		new_x2 = cal->priv->calitem->min_month_width;
+	if (new_y2 < cal->priv->calitem->min_month_height)
+		new_y2 = cal->priv->calitem->min_month_height;
 	if (old_x2 != new_x2 || old_y2 != new_y2)
 		gnome_canvas_set_scroll_region (
 			GNOME_CANVAS (cal),

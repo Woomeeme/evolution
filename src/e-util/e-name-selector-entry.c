@@ -29,10 +29,6 @@
 
 #include "e-name-selector-entry.h"
 
-#define E_NAME_SELECTOR_ENTRY_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_NAME_SELECTOR_ENTRY, ENameSelectorEntryPrivate))
-
 struct _ENameSelectorEntryPrivate {
 	EClientCache *client_cache;
 	gint minimum_query_length;
@@ -60,7 +56,6 @@ struct _ENameSelectorEntryPrivate {
 						 gboolean);
 
 	gboolean is_completing;
-	GSList *user_query_fields;
 
 	/* For asynchronous operations. */
 	GQueue cancellables;
@@ -85,12 +80,9 @@ enum {
 static guint signals[LAST_SIGNAL] = { 0 };
 #define ENS_DEBUG(x)
 
-G_DEFINE_TYPE_WITH_CODE (
-	ENameSelectorEntry,
-	e_name_selector_entry,
-	GTK_TYPE_ENTRY,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL))
+G_DEFINE_TYPE_WITH_CODE (ENameSelectorEntry, e_name_selector_entry, GTK_TYPE_ENTRY,
+	G_ADD_PRIVATE (ENameSelectorEntry)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 /* 1/3 of the second to wait until invoking autocomplete lookup */
 #define AUTOCOMPLETE_TIMEOUT 333
@@ -108,11 +100,25 @@ static void destination_row_inserted (ENameSelectorEntry *name_selector_entry, G
 static void destination_row_changed  (ENameSelectorEntry *name_selector_entry, GtkTreePath *path, GtkTreeIter *iter);
 static void destination_row_deleted  (ENameSelectorEntry *name_selector_entry, GtkTreePath *path);
 
-static void user_insert_text (ENameSelectorEntry *name_selector_entry, gchar *new_text, gint new_text_length, gint *position, gpointer user_data);
+static void user_insert_text (ENameSelectorEntry *name_selector_entry, const gchar *in_new_text, gint in_new_text_length, gint *position, gpointer user_data);
 static void user_delete_text (ENameSelectorEntry *name_selector_entry, gint start_pos, gint end_pos, gpointer user_data);
 
 static void setup_default_contact_store (ENameSelectorEntry *name_selector_entry);
 static void deep_free_list (GList *list);
+
+static void
+remove_completion_timeout_sources (ENameSelectorEntry *self)
+{
+	if (self->priv->type_ahead_complete_cb_id) {
+		g_source_remove (self->priv->type_ahead_complete_cb_id);
+		self->priv->type_ahead_complete_cb_id = 0;
+	}
+
+	if (self->priv->update_completions_cb_id) {
+		g_source_remove (self->priv->update_completions_cb_id);
+		self->priv->update_completions_cb_id = 0;
+	}
+}
 
 static void
 name_selector_entry_set_property (GObject *object,
@@ -178,29 +184,24 @@ name_selector_entry_get_property (GObject *object,
 static void
 name_selector_entry_dispose (GObject *object)
 {
-	ENameSelectorEntryPrivate *priv;
+	ENameSelectorEntry *self = E_NAME_SELECTOR_ENTRY (object);
 
-	priv = E_NAME_SELECTOR_ENTRY_GET_PRIVATE (object);
+	remove_completion_timeout_sources (self);
+	gtk_editable_set_position (GTK_EDITABLE (self), 0);
 
-	gtk_editable_set_position (GTK_EDITABLE (object), 0);
-
-	g_clear_object (&priv->client_cache);
-	g_clear_pointer (&priv->attr_list, pango_attr_list_unref);
-	g_clear_object (&priv->entry_completion);
-	g_clear_object (&priv->destination_store);
-	g_clear_object (&priv->email_generator);
-	g_clear_object (&priv->contact_store);
-	g_clear_pointer (&priv->known_contacts, g_hash_table_destroy);
-
-	g_slist_foreach (priv->user_query_fields, (GFunc) g_free, NULL);
-	g_slist_free (priv->user_query_fields);
-	priv->user_query_fields = NULL;
+	g_clear_object (&self->priv->client_cache);
+	g_clear_pointer (&self->priv->attr_list, pango_attr_list_unref);
+	g_clear_object (&self->priv->entry_completion);
+	g_clear_object (&self->priv->destination_store);
+	g_clear_object (&self->priv->email_generator);
+	g_clear_object (&self->priv->contact_store);
+	g_clear_pointer (&self->priv->known_contacts, g_hash_table_destroy);
 
 	/* Cancel any stuck book loading operations. */
-	while (!g_queue_is_empty (&priv->cancellables)) {
+	while (!g_queue_is_empty (&self->priv->cancellables)) {
 		GCancellable *cancellable;
 
-		cancellable = g_queue_pop_head (&priv->cancellables);
+		cancellable = g_queue_pop_head (&self->priv->cancellables);
 		g_cancellable_cancel (cancellable);
 		g_object_unref (cancellable);
 	}
@@ -221,15 +222,13 @@ name_selector_entry_constructed (GObject *object)
 static void
 name_selector_entry_realize (GtkWidget *widget)
 {
-	ENameSelectorEntryPrivate *priv;
-
-	priv = E_NAME_SELECTOR_ENTRY_GET_PRIVATE (widget);
+	ENameSelectorEntry *self = E_NAME_SELECTOR_ENTRY (widget);
 
 	/* Chain up to parent's realize() method. */
 	GTK_WIDGET_CLASS (e_name_selector_entry_parent_class)->realize (widget);
 
-	if (priv->contact_store == NULL)
-		setup_default_contact_store (E_NAME_SELECTOR_ENTRY (widget));
+	if (self->priv->contact_store == NULL)
+		setup_default_contact_store (self);
 }
 
 static void
@@ -295,8 +294,6 @@ e_name_selector_entry_class_init (ENameSelectorEntryClass *class)
 {
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
-
-	g_type_class_add_private (class, sizeof (ENameSelectorEntryPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = name_selector_entry_set_property;
@@ -734,13 +731,13 @@ name_style_query (const gchar *field,
 		comma_str = NULL;
 	}
 
-	g_string_append (out, " (beginswith ");
+	g_string_append (out, " (contains ");
 	e_sexp_encode_string (out, field);
 	e_sexp_encode_string (out, spaced_str);
 	g_string_append_c (out, ')');
 
 	if (comma_str) {
-		g_string_append (out, " (beginswith ");
+		g_string_append (out, " (contains ");
 
 		e_sexp_encode_string (out, field);
 		g_strstrip (comma_str);
@@ -766,64 +763,15 @@ escape_sexp_string (const gchar *string)
 	return g_string_free (gstring, FALSE);
 }
 
-/**
- * ens_util_populate_user_query_fields:
- *
- * Populates list of user query fields to string usable in query string.
- * Returned pointer is either newly allocated string, supposed to be freed with g_free,
- * or NULL if no fields defined.
- *
- * Since: 2.24
- **/
-gchar *
-ens_util_populate_user_query_fields (GSList *user_query_fields,
-                                     const gchar *cue_str,
-                                     const gchar *encoded_cue_str)
-{
-	GString *user_fields;
-	GSList *s;
-
-	g_return_val_if_fail (cue_str != NULL, NULL);
-	g_return_val_if_fail (encoded_cue_str != NULL, NULL);
-
-	user_fields = g_string_new ("");
-
-	for (s = user_query_fields; s; s = s->next) {
-		const gchar *field = s->data;
-
-		if (!field || !*field)
-			continue;
-
-		if (*field == '$') {
-			g_string_append_printf (user_fields, " (beginswith \"%s\" %s) ", field + 1, encoded_cue_str);
-		} else if (*field == '@') {
-			g_string_append_printf (user_fields, " (is \"%s\" %s) ", field + 1, encoded_cue_str);
-		} else {
-			gchar *tmp = name_style_query (field, cue_str);
-
-			g_string_append_c (user_fields, ' ');
-			g_string_append (user_fields, tmp);
-			g_string_append_c (user_fields, ' ');
-			g_free (tmp);
-		}
-	}
-
-	return g_string_free (user_fields, !user_fields->str || !*user_fields->str);
-}
-
 static void
 set_completion_query (ENameSelectorEntry *name_selector_entry,
                       const gchar *cue_str)
 {
-	ENameSelectorEntryPrivate *priv;
 	EBookQuery *book_query;
 	gchar      *query_str;
 	gchar      *encoded_cue_str;
 	gchar      *full_name_query_str;
 	gchar      *file_as_query_str;
-	gchar      *user_fields_str;
-
-	priv = E_NAME_SELECTOR_ENTRY_GET_PRIVATE (name_selector_entry);
 
 	if (!name_selector_entry->priv->contact_store)
 		return;
@@ -837,24 +785,17 @@ set_completion_query (ENameSelectorEntry *name_selector_entry,
 	encoded_cue_str = escape_sexp_string (cue_str);
 	full_name_query_str = name_style_query ("full_name", cue_str);
 	file_as_query_str = name_style_query ("file_as",   cue_str);
-	user_fields_str = ens_util_populate_user_query_fields (priv->user_query_fields, cue_str, encoded_cue_str);
 
 	query_str = g_strdup_printf (
 		"(or "
-		" (beginswith \"nickname\"  %s) "
-		" (beginswith \"email\"     %s) "
 		" (contains \"nickname\"  %s) "
 		" (contains \"email\"     %s) "
 		" %s "
 		" %s "
-		" %s "
 		")",
 		encoded_cue_str, encoded_cue_str,
-		encoded_cue_str, encoded_cue_str,
-		full_name_query_str, file_as_query_str,
-		user_fields_str ? user_fields_str : "");
+		full_name_query_str, file_as_query_str);
 
-	g_free (user_fields_str);
 	g_free (file_as_query_str);
 	g_free (full_name_query_str);
 	g_free (encoded_cue_str);
@@ -1165,18 +1106,20 @@ type_ahead_complete (ENameSelectorEntry *name_selector_entry)
 	const gchar   *text;
 	gchar         *cue_str;
 	gchar         *temp_str;
-	ENameSelectorEntryPrivate *priv;
-
-	priv = E_NAME_SELECTOR_ENTRY_GET_PRIVATE (name_selector_entry);
+	GtkEntryCompletion *completion;
 
 	cursor_pos = gtk_editable_get_position (GTK_EDITABLE (name_selector_entry));
 	if (cursor_pos < 0)
 		return;
 
+	completion = gtk_entry_get_completion (GTK_ENTRY (name_selector_entry));
+	if (completion)
+		gtk_entry_completion_complete (completion);
+
 	text = gtk_entry_get_text (GTK_ENTRY (name_selector_entry));
 	get_range_at_position (text, cursor_pos, &range_start, &range_end);
 	range_len = range_end - range_start;
-	if (range_len < priv->minimum_query_length)
+	if (range_len < name_selector_entry->priv->minimum_query_length)
 		return;
 
 	destination = find_destination_at_position (name_selector_entry, cursor_pos);
@@ -1221,7 +1164,7 @@ type_ahead_complete (ENameSelectorEntry *name_selector_entry)
 		gtk_editable_select_region (
 			GTK_EDITABLE (name_selector_entry),
 			range_end, range_start + textrep_len);
-		priv->is_completing = TRUE;
+		name_selector_entry->priv->is_completing = TRUE;
 	}
 	g_free (cue_str);
 
@@ -1248,16 +1191,12 @@ type_ahead_complete (ENameSelectorEntry *name_selector_entry)
 static void
 clear_completion_model (ENameSelectorEntry *name_selector_entry)
 {
-	ENameSelectorEntryPrivate *priv;
-
-	priv = E_NAME_SELECTOR_ENTRY_GET_PRIVATE (name_selector_entry);
-
 	if (!name_selector_entry->priv->contact_store)
 		return;
 
 	e_contact_store_set_query (name_selector_entry->priv->contact_store, NULL);
 	g_hash_table_remove_all (name_selector_entry->priv->known_contacts);
-	priv->is_completing = FALSE;
+	name_selector_entry->priv->is_completing = FALSE;
 }
 
 static void
@@ -1503,8 +1442,9 @@ post_insert_update (ENameSelectorEntry *name_selector_entry,
 /* Returns the number of characters inserted */
 static gint
 insert_unichar (ENameSelectorEntry *name_selector_entry,
-                gint *pos,
-                gunichar c)
+		gint *pos,
+		gunichar c,
+		gboolean *inout_is_first_char)
 {
 	const gchar *text;
 	gunichar     str_context[4];
@@ -1518,7 +1458,7 @@ insert_unichar (ENameSelectorEntry *name_selector_entry,
 	 * - Before or after another space.
 	 * - At start of string. */
 
-	if (c == ' ' && (str_context[1] == ' ' || str_context[1] == '\0' || str_context[2] == ' '))
+	if (c == ' ' && *inout_is_first_char && str_context[0] && (str_context[1] == ' ' || str_context[1] == '\0' || str_context[2] == ' '))
 		return 0;
 
 	/* Comma is not allowed:
@@ -1569,10 +1509,14 @@ insert_unichar (ENameSelectorEntry *name_selector_entry,
 			generate_attribute_list (name_selector_entry);
 		}
 
+		*inout_is_first_char = TRUE;
+
 		return 2;
 	}
 
 	/* Generic case. Allowed spaces also end up here. */
+
+	*inout_is_first_char = FALSE;
 
 	len = g_unichar_to_utf8 (c, buf);
 	buf[len] = '\0';
@@ -1586,22 +1530,141 @@ insert_unichar (ENameSelectorEntry *name_selector_entry,
 
 static void
 user_insert_text (ENameSelectorEntry *name_selector_entry,
-                  gchar *new_text,
-                  gint new_text_length,
+                  const gchar *in_new_text,
+                  gint in_new_text_length,
                   gint *position,
                   gpointer user_data)
 {
+	const gchar *text = in_new_text;
+	gchar *tmp_text = NULL;
+	gint text_length = in_new_text_length;
 	gint chars_inserted = 0;
 	gboolean fast_insert, has_focus;
 
 	g_signal_handlers_block_by_func (name_selector_entry, user_insert_text, name_selector_entry);
 	g_signal_handlers_block_by_func (name_selector_entry, user_delete_text, name_selector_entry);
 
+	/* these can be groups or Outlook-provided list of addresses with a ';' as
+	   a delimiter, instead of ',', copied from the message body */
+	if (g_utf8_strchr (text, text_length, ';') != NULL) {
+		GString *prefer_text = NULL;
+		GPtrArray *parts = g_ptr_array_new_with_free_func (g_free);
+		const gchar *from = text;
+		gboolean in_quote = FALSE;
+		guint ii;
+
+		if (text_length < 0)
+			text_length = strlen (text);
+
+		for (ii = 0; ii < text_length; ii++) {
+			if (text[ii] == '\"') {
+				in_quote = !in_quote;
+			} else if (!in_quote && text[ii] == ';') {
+				gchar *part = g_strstrip (g_strndup (from, text + ii - from));
+
+				if (*part)
+					g_ptr_array_add (parts, part);
+				else
+					g_free (part);
+
+				from = text + ii + 1;
+			}
+		}
+
+		if (from < text + text_length) {
+			gchar *part = g_strstrip (g_strndup (from, text + text_length - from));
+
+			if (*part)
+				g_ptr_array_add (parts, part);
+			else
+				g_free (part);
+		}
+
+		for (ii = 0; ii < parts->len; ii++) {
+			const gchar *addr = g_ptr_array_index (parts, ii);
+
+			if (!strchr (addr, ':') && !strchr (addr, '\"')) {
+				guint jj, has_addr_start = 0, has_addr_end = 0;
+				gboolean in_addr = FALSE, broken = FALSE;
+
+				for (jj = 0; addr[jj] && !broken; jj++) {
+					gchar chr = addr[jj];
+
+					if (chr == '<') {
+						has_addr_start++;
+						if (in_addr)
+							broken = TRUE;
+						else
+							in_addr = TRUE;
+					} else if (chr == '>') {
+						if (in_addr)
+							in_addr = FALSE;
+						else
+							broken = TRUE;
+						has_addr_end++;
+					}
+				}
+
+				broken = broken || in_addr || has_addr_start != 1 || has_addr_start != has_addr_end;
+
+				if (broken) {
+					if (!prefer_text) {
+						prefer_text = g_string_new (addr);
+					} else {
+						g_string_append (prefer_text, ", ");
+						g_string_append (prefer_text, addr);
+					}
+				} else {
+					gchar *addr_start = strchr (addr, '<'), *name_end = addr_start;
+
+					while (name_end > addr && g_ascii_isspace (name_end[-1]))
+						name_end--;
+
+					if (!prefer_text)
+						prefer_text = g_string_new ("");
+					else
+						g_string_append (prefer_text, ", ");
+
+					if (name_end > addr) {
+						gboolean quote = g_utf8_strchr (addr, name_end - addr, ',') != NULL;
+
+						if (quote)
+							g_string_append_c (prefer_text, '\"');
+
+						g_string_append_len (prefer_text, addr, name_end - addr);
+
+						if (quote)
+							g_string_append_c (prefer_text, '\"');
+
+						g_string_append_c (prefer_text, ' ');
+					}
+
+					g_string_append (prefer_text, addr_start);
+				}
+			} else {
+				if (!prefer_text) {
+					prefer_text = g_string_new (addr);
+				} else {
+					g_string_append (prefer_text, ", ");
+					g_string_append (prefer_text, addr);
+				}
+			}
+		}
+
+		g_ptr_array_free (parts, TRUE);
+
+		if (prefer_text) {
+			text_length = prefer_text->len;
+			tmp_text = g_string_free (prefer_text, FALSE);
+			text = tmp_text;
+		}
+	}
+
 	fast_insert =
-		(g_utf8_strchr (new_text, new_text_length, ' ') == NULL) &&
-		(g_utf8_strchr (new_text, new_text_length, ',') == NULL) &&
-		(g_utf8_strchr (new_text, new_text_length, '\t') == NULL) &&
-		(g_utf8_strchr (new_text, new_text_length, '\n') == NULL);
+		(g_utf8_strchr (text, text_length, ' ') == NULL) &&
+		(g_utf8_strchr (text, text_length, ',') == NULL) &&
+		(g_utf8_strchr (text, text_length, '\t') == NULL) &&
+		(g_utf8_strchr (text, text_length, '\n') == NULL);
 
 	has_focus = gtk_widget_has_focus (GTK_WIDGET (name_selector_entry));
 
@@ -1618,7 +1681,7 @@ user_insert_text (ENameSelectorEntry *name_selector_entry,
 
 		gtk_editable_insert_text (
 			GTK_EDITABLE (name_selector_entry),
-			new_text, new_text_length, position);
+			text, text_length, position);
 
 		chars_inserted = *position - old_position;
 		if (chars_inserted > 0)
@@ -1628,9 +1691,9 @@ user_insert_text (ENameSelectorEntry *name_selector_entry,
 	 * can be inserted, and insert a trailing space after comma. */
 	} else {
 		const gchar *cp;
-		gboolean last_was_comma = FALSE;
+		gboolean last_was_comma = FALSE, is_first_char = TRUE;
 
-		for (cp = new_text; *cp; cp = g_utf8_next_char (cp)) {
+		for (cp = text; *cp; cp = g_utf8_next_char (cp)) {
 			gunichar uc = g_utf8_get_char (cp);
 
 			if (uc == '\n' || uc == '\t') {
@@ -1644,8 +1707,8 @@ user_insert_text (ENameSelectorEntry *name_selector_entry,
 				last_was_comma = uc == ',';
 			}
 
-			insert_unichar (name_selector_entry, position, uc);
-			chars_inserted++;
+			if (insert_unichar (name_selector_entry, position, uc, &is_first_char))
+				chars_inserted++;
 		}
 	}
 
@@ -1665,6 +1728,8 @@ user_insert_text (ENameSelectorEntry *name_selector_entry,
 	g_signal_handlers_unblock_by_func (name_selector_entry, user_insert_text, name_selector_entry);
 
 	g_signal_stop_emission_by_name (name_selector_entry, "insert_text");
+
+	g_free (tmp_text);
 }
 
 static void
@@ -1828,7 +1893,6 @@ user_delete_text (ENameSelectorEntry *name_selector_entry,
 	if (str_b_context[1] == '"') {
 		const gchar *p;
 		gint j;
-		p = text + end_pos;
 		for (p = text + (end_pos - 1), j = end_pos - 1; *p && *p != '"' ; p = g_utf8_next_char (p), j++) {
 			gunichar c = g_utf8_get_char (p);
 			if (c == ',') {
@@ -1913,7 +1977,6 @@ entry_activate (ENameSelectorEntry *name_selector_entry)
 {
 	gint         cursor_pos;
 	gint         range_start, range_end;
-	ENameSelectorEntryPrivate *priv;
 	EDestination  *destination;
 	gint           range_len;
 	const gchar   *text;
@@ -1923,14 +1986,12 @@ entry_activate (ENameSelectorEntry *name_selector_entry)
 	if (cursor_pos < 0)
 		return;
 
-	priv = E_NAME_SELECTOR_ENTRY_GET_PRIVATE (name_selector_entry);
-
 	text = gtk_entry_get_text (GTK_ENTRY (name_selector_entry));
 	if (!get_range_at_position (text, cursor_pos, &range_start, &range_end))
 		return;
 
 	range_len = range_end - range_start;
-	if (range_len < priv->minimum_query_length)
+	if (range_len < name_selector_entry->priv->minimum_query_length)
 		return;
 
 	destination = find_destination_at_position (name_selector_entry, cursor_pos);
@@ -1952,7 +2013,7 @@ entry_activate (ENameSelectorEntry *name_selector_entry)
 	text = gtk_entry_get_text (GTK_ENTRY (name_selector_entry));
 	get_range_at_position (text, cursor_pos, &range_start, &range_end);
 
-	if (priv->is_completing) {
+	if (name_selector_entry->priv->is_completing) {
 		gchar *str_context = NULL;
 
 		str_context = gtk_editable_get_chars (GTK_EDITABLE (name_selector_entry), range_end, range_end + 1);
@@ -1978,12 +2039,12 @@ entry_activate (ENameSelectorEntry *name_selector_entry)
 	}
 
 	/* Set the position only if is completing or nothing is selected, because it also deselects any selection. */
-	if (priv->is_completing || !gtk_editable_get_selection_bounds (GTK_EDITABLE (name_selector_entry), NULL, NULL))
+	if (name_selector_entry->priv->is_completing || !gtk_editable_get_selection_bounds (GTK_EDITABLE (name_selector_entry), NULL, NULL))
 		gtk_editable_set_position (GTK_EDITABLE (name_selector_entry), range_end);
 
 	g_signal_emit (name_selector_entry, signals[UPDATED], 0, destination, NULL);
 
-	if (priv->is_completing)
+	if (name_selector_entry->priv->is_completing)
 		clear_completion_model (name_selector_entry);
 }
 
@@ -2127,16 +2188,7 @@ user_focus_out (ENameSelectorEntry *name_selector_entry,
 		entry_activate (name_selector_entry);
 	}
 
-	if (name_selector_entry->priv->type_ahead_complete_cb_id) {
-		g_source_remove (name_selector_entry->priv->type_ahead_complete_cb_id);
-		name_selector_entry->priv->type_ahead_complete_cb_id = 0;
-	}
-
-	if (name_selector_entry->priv->update_completions_cb_id) {
-		g_source_remove (name_selector_entry->priv->update_completions_cb_id);
-		name_selector_entry->priv->update_completions_cb_id = 0;
-	}
-
+	remove_completion_timeout_sources (name_selector_entry);
 	clear_completion_model (name_selector_entry);
 
 	if (!event_focus->in) {
@@ -2160,16 +2212,7 @@ user_key_press_event_cb (ENameSelectorEntry *name_selector_entry,
 	    gtk_editable_get_selection_bounds (GTK_EDITABLE (name_selector_entry), NULL, &end)) {
 		entry_activate (name_selector_entry);
 
-		if (name_selector_entry->priv->type_ahead_complete_cb_id) {
-			g_source_remove (name_selector_entry->priv->type_ahead_complete_cb_id);
-			name_selector_entry->priv->type_ahead_complete_cb_id = 0;
-		}
-
-		if (name_selector_entry->priv->update_completions_cb_id) {
-			g_source_remove (name_selector_entry->priv->update_completions_cb_id);
-			name_selector_entry->priv->update_completions_cb_id = 0;
-		}
-
+		remove_completion_timeout_sources (name_selector_entry);
 		clear_completion_model (name_selector_entry);
 
 		sanitize_entry (name_selector_entry);
@@ -2412,6 +2455,12 @@ setup_contact_store (ENameSelectorEntry *name_selector_entry)
 		g_signal_connect_swapped (
 			name_selector_entry->priv->contact_store, "row-inserted",
 			G_CALLBACK (ensure_type_ahead_complete_on_timeout), name_selector_entry);
+		g_signal_connect_swapped (
+			name_selector_entry->priv->contact_store, "row-changed",
+			G_CALLBACK (ensure_type_ahead_complete_on_timeout), name_selector_entry);
+		g_signal_connect_swapped (
+			name_selector_entry->priv->contact_store, "row-deleted",
+			G_CALLBACK (ensure_type_ahead_complete_on_timeout), name_selector_entry);
 	} else {
 		/* Remove the store from the entry completion */
 
@@ -2484,7 +2533,6 @@ setup_default_contact_store (ENameSelectorEntry *name_selector_entry)
 		ESource *source = E_SOURCE (iter->data);
 		ESourceAutocomplete *extension;
 		GCancellable *cancellable;
-		const gchar *extension_name;
 
 		extension_name = E_SOURCE_EXTENSION_AUTOCOMPLETE;
 		extension = e_source_get_extension (source, extension_name);
@@ -2655,10 +2703,8 @@ destination_row_deleted (ENameSelectorEntry *name_selector_entry,
 		gunichar c = g_utf8_get_char (p0);
 
 		if (c == ',') {
-			if (!deleted_comma) {
-				deleted_comma = TRUE;
+			if (!deleted_comma)
 				break;
-			}
 
 			range_start++;
 
@@ -3409,8 +3455,7 @@ e_name_selector_entry_init (ENameSelectorEntry *name_selector_entry)
 {
 	GtkCellRenderer *renderer;
 
-	name_selector_entry->priv =
-		E_NAME_SELECTOR_ENTRY_GET_PRIVATE (name_selector_entry);
+	name_selector_entry->priv = e_name_selector_entry_get_instance_private (name_selector_entry);
 
 	g_queue_init (&name_selector_entry->priv->cancellables);
 

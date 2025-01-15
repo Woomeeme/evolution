@@ -24,10 +24,6 @@
 
 #include "e-mail-folder-create-dialog.h"
 
-#define E_MAIL_FOLDER_CREATE_DIALOG_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_FOLDER_CREATE_DIALOG, EMailFolderCreateDialogPrivate))
-
 typedef struct _AsyncContext AsyncContext;
 
 struct _EMailFolderCreateDialogPrivate {
@@ -52,10 +48,7 @@ enum {
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE (
-	EMailFolderCreateDialog,
-	e_mail_folder_create_dialog,
-	EM_TYPE_FOLDER_SELECTOR)
+G_DEFINE_TYPE_WITH_PRIVATE (EMailFolderCreateDialog, e_mail_folder_create_dialog, EM_TYPE_FOLDER_SELECTOR)
 
 static void
 async_context_free (AsyncContext *async_context)
@@ -148,13 +141,16 @@ mail_folder_create_dialog_create_folder (EMailFolderCreateDialog *dialog)
 		EActivity *activity;
 		GCancellable *cancellable;
 		GdkCursor *gdk_cursor;
-		GdkWindow *gdk_window;
 
 		/* Make the cursor appear busy. */
-		gdk_cursor = gdk_cursor_new (GDK_WATCH);
-		gdk_window = gtk_widget_get_window (GTK_WIDGET (dialog));
-		gdk_window_set_cursor (gdk_window, gdk_cursor);
-		g_object_unref (gdk_cursor);
+		gdk_cursor = gdk_cursor_new_from_name (gtk_widget_get_display (GTK_WIDGET (dialog)), "wait");
+		if (gdk_cursor) {
+			GdkWindow *gdk_window;
+
+			gdk_window = gtk_widget_get_window (GTK_WIDGET (dialog));
+			gdk_window_set_cursor (gdk_window, gdk_cursor);
+			g_object_unref (gdk_cursor);
+		}
 
 		activity = em_folder_selector_new_activity (
 			EM_FOLDER_SELECTOR (dialog));
@@ -273,16 +269,13 @@ mail_folder_create_dialog_get_property (GObject *object,
 static void
 mail_folder_create_dialog_dispose (GObject *object)
 {
-	EMailFolderCreateDialogPrivate *priv;
+	EMailFolderCreateDialog *self = E_MAIL_FOLDER_CREATE_DIALOG (object);
 
-	priv = E_MAIL_FOLDER_CREATE_DIALOG_GET_PRIVATE (object);
-
-	g_clear_object (&priv->session);
-	g_clear_object (&priv->name_entry);
+	g_clear_object (&self->priv->session);
+	g_clear_object (&self->priv->name_entry);
 
 	/* Chain up to parent's dispose() method. */
-	G_OBJECT_CLASS (e_mail_folder_create_dialog_parent_class)->
-		dispose (object);
+	G_OBJECT_CLASS (e_mail_folder_create_dialog_parent_class)->dispose (object);
 }
 
 static void
@@ -417,9 +410,6 @@ e_mail_folder_create_dialog_class_init (EMailFolderCreateDialogClass *class)
 	GtkDialogClass *dialog_class;
 	EMFolderSelectorClass *selector_class;
 
-	g_type_class_add_private (
-		class, sizeof (EMailFolderCreateDialogPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_folder_create_dialog_set_property;
 	object_class->get_property = mail_folder_create_dialog_get_property;
@@ -459,7 +449,7 @@ e_mail_folder_create_dialog_class_init (EMailFolderCreateDialogClass *class)
 static void
 e_mail_folder_create_dialog_init (EMailFolderCreateDialog *dialog)
 {
-	dialog->priv = E_MAIL_FOLDER_CREATE_DIALOG_GET_PRIVATE (dialog);
+	dialog->priv = e_mail_folder_create_dialog_get_instance_private (dialog);
 }
 
 GtkWidget *
@@ -482,6 +472,7 @@ e_mail_folder_create_dialog_new (GtkWindow *parent,
 	dialog = g_object_new (
 		E_TYPE_MAIL_FOLDER_CREATE_DIALOG,
 		"transient-for", parent,
+		"use-header-bar", e_util_get_use_header_bar (),
 		"model", model,
 		"session", session, NULL);
 

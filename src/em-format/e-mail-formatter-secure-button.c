@@ -272,7 +272,8 @@ add_cert_table (GString *html,
 
 				ec = e_cert_new (CERT_DupCertificate (info->cert_data));
 
-				if (!secure_button_smime_cert_exists (info->email, ec)) {
+				if (validity->sign.status == CAMEL_CIPHER_VALIDITY_SIGN_NEED_PUBLIC_KEY ||
+				    !secure_button_smime_cert_exists (info->email, ec)) {
 					e_util_markup_append_escaped (html,
 						"&nbsp;<button type=\"button\" class=\"secure-button-import-certificate\" id=\"%s.%p\" value=\"%p:%p:%p\">%s</button>",
 						e_mail_part_get_id (part), info->cert_data, part, validity, info->cert_data, _("Import Certificate"));
@@ -309,14 +310,15 @@ add_details_part (GString *html,
 		icon_height = 16;
 	}
 
+	/* no need for -evo-color-scheme-light/-evo-color-scheme-dark, because the background color is defined in the code */
 	e_util_markup_append_escaped (html,
 		"<span class=\"secure-button-details\" id=\"%p:spn\" value=\"secure-button-details-%p-%s\" style=\"vertical-align:bottom;\">"
 		"<img id=\"secure-button-details-%p-%s-img\" style=\"vertical-align:middle;\" width=\"%dpx\" height=\"%dpx\""
-		" src=\"gtk-stock://pan-end-symbolic?size=%d\" othersrc=\"gtk-stock://pan-down-symbolic?size=%d\">&nbsp;"
+		" src=\"gtk-stock://x-evolution-pan-end?size=%d\" othersrc=\"gtk-stock://x-evolution-pan-down?size=%d\">&nbsp;"
 		"%s</span><br>"
 		"<div id=\"secure-button-details-%p-%s\" style=\"white-space:pre; margin-left:12px; font-size:smaller;\" hidden>%s</div>",
-		part, validity, ident, validity, ident,
-		icon_width, icon_height, GTK_ICON_SIZE_MENU, GTK_ICON_SIZE_MENU,
+		part, validity, ident,
+		validity, ident, icon_width, icon_height, GTK_ICON_SIZE_MENU, GTK_ICON_SIZE_MENU, /* image */
 		_("Details"),
 		validity, ident,
 		details);

@@ -95,11 +95,10 @@ static gboolean
 startup_wizard_have_mail_account (EStartupWizard *extension)
 {
 	EShell *shell;
-	ESource *source;
 	ESourceRegistry *registry;
 	GList *list, *link;
+	guint skip_sources = 0;
 	const gchar *extension_name;
-	const gchar *uid;
 	gboolean have_account;
 
 	shell = startup_wizard_get_shell (extension);
@@ -109,35 +108,18 @@ startup_wizard_have_mail_account (EStartupWizard *extension)
 
 	list = e_source_registry_list_sources (registry, extension_name);
 
-	/* Exclude the built-in 'On This Computer' source. */
-	uid = E_MAIL_SESSION_LOCAL_UID;
-	source = e_source_registry_ref_source (registry, uid);
-	link = g_list_find (list, source);
-	if (link != NULL) {
-		/* We have two references to the ESource,
-		 * one from e_source_registry_list_sources()
-		 * and one from e_source_registry_ref_source().
-		 * Drop them both. */
-		g_object_unref (source);
-		g_object_unref (source);
-		list = g_list_delete_link (list, link);
+	for (link = list; link; link = g_list_next (link)) {
+		ESource *source = link->data;
+		ESourceMailAccount *mail_account = e_source_get_extension (source, extension_name);
+
+		/* Exclude the built-in, 'On This Computer' and 'Search Folders' sources. */
+		if (e_source_mail_account_get_builtin (mail_account) ||
+		    g_strcmp0 (e_source_get_uid (source), E_MAIL_SESSION_LOCAL_UID) == 0 ||
+		    g_strcmp0 (e_source_get_uid (source), E_MAIL_SESSION_VFOLDER_UID) == 0)
+			skip_sources++;
 	}
 
-	/* Exclude the built-in 'Search Folders' source. */
-	uid = E_MAIL_SESSION_VFOLDER_UID;
-	source = e_source_registry_ref_source (registry, uid);
-	link = g_list_find (list, source);
-	if (link != NULL) {
-		/* We have two references to the ESource,
-		 * one from e_source_registry_list_sources()
-		 * and one from e_source_registry_ref_source().
-		 * Drop them both. */
-		g_object_unref (source);
-		g_object_unref (source);
-		list = g_list_delete_link (list, link);
-	}
-
-	have_account = (list != NULL);
+	have_account = g_list_length (list) > skip_sources;
 
 	g_list_free_full (list, (GDestroyNotify) g_object_unref);
 
@@ -288,8 +270,14 @@ startup_wizard_window_added_cb (EStartupWizard *extension,
 	}
 
 	if (E_IS_SHELL_WINDOW (window)) {
-		g_signal_connect (window, "notify::active-view",
-			G_CALLBACK (startup_wizard_notify_active_view_cb), extension);
+		EShellWindow *shell_window = E_SHELL_WINDOW (window);
+
+		if (g_strcmp0 ("mail", e_shell_window_get_active_view (shell_window)) == 0) {
+			startup_wizard_notify_active_view_cb (shell_window, NULL, extension);
+		} else {
+			g_signal_connect (window, "notify::active-view",
+				G_CALLBACK (startup_wizard_notify_active_view_cb), extension);
+		}
 	}
 }
 

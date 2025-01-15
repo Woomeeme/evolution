@@ -84,6 +84,16 @@ void		e_source_combo_box_set_active	(ESourceComboBox *combo_box,
 						 ESource *source);
 void		e_source_combo_box_hide_sources	(ESourceComboBox *combo_box,
 						 ...) G_GNUC_NULL_TERMINATED;
+gint		e_source_combo_box_get_max_natural_width
+						(ESourceComboBox *combo_box);
+void		e_source_combo_box_set_max_natural_width
+						(ESourceComboBox *combo_box,
+						 gint value);
+gboolean	e_source_combo_box_get_show_full_name
+						(ESourceComboBox *combo_box);
+void		e_source_combo_box_set_show_full_name
+						(ESourceComboBox *combo_box,
+						 gboolean show_full_name);
 
 G_END_DECLS
 

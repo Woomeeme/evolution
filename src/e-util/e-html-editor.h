@@ -26,9 +26,12 @@
 #define E_HTML_EDITOR_H
 
 #include <gtk/gtk.h>
+#include <e-util/e-action-combo-box.h>
 #include <e-util/e-activity.h>
 #include <e-util/e-activity-bar.h>
+#include <e-util/e-alert-bar.h>
 #include <e-util/e-content-editor.h>
+#include <e-util/e-focus-tracker.h>
 
 /* Standard GObject macros */
 #define E_TYPE_HTML_EDITOR \
@@ -67,7 +70,8 @@ struct _EHTMLEditorClass {
 
 	void		(*update_actions)	(EHTMLEditor *editor,
 						 EContentEditorNodeFlags flags,
-						 const gchar *caret_word);
+						 const gchar *caret_word,
+						 const gchar *hover_uri);
 
 	void		(*spell_languages_changed)
 						(EHTMLEditor *editor);
@@ -78,6 +82,10 @@ void		e_html_editor_new		(GAsyncReadyCallback callback,
 						 gpointer user_data);
 GtkWidget *	e_html_editor_new_finish	(GAsyncResult *result,
 						 GError **error);
+void		e_html_editor_connect_focus_tracker
+						(EHTMLEditor *editor,
+						 EFocusTracker *focus_tracker);
+GtkWidget *	e_html_editor_get_content_box	(EHTMLEditor *editor);
 EContentEditor *
 		e_html_editor_get_content_editor
 						(EHTMLEditor *editor);
@@ -85,6 +93,12 @@ void		e_html_editor_register_content_editor
 						(EHTMLEditor *editor,
 						 const gchar *name,
 						 EContentEditor *cnt_editor);
+EContentEditorMode
+		e_html_editor_get_mode		(EHTMLEditor *editor);
+void		e_html_editor_set_mode		(EHTMLEditor *editor,
+						 EContentEditorMode mode);
+void		e_html_editor_cancel_mode_change_content_update
+						(EHTMLEditor *editor);
 GtkBuilder *	e_html_editor_get_builder	(EHTMLEditor *editor);
 GtkUIManager *	e_html_editor_get_ui_manager	(EHTMLEditor *editor);
 GtkAction *	e_html_editor_get_action	(EHTMLEditor *editor,
@@ -120,11 +134,19 @@ void		e_html_editor_add_cid_part	(EHTMLEditor *editor,
 						 CamelMimePart *mime_part);
 void		e_html_editor_remove_cid_part	(EHTMLEditor *editor,
 						 const gchar *cid_uri);
+void		e_html_editor_remove_unused_cid_parts
+						(EHTMLEditor *editor,
+						 GSList *used_mime_parts, /*  CamelMimePart * */
+						 GSList **out_removed_mime_parts); /*  CamelMimePart * */
 void		e_html_editor_remove_all_cid_parts
 						(EHTMLEditor *editor);
 CamelMimePart * e_html_editor_ref_cid_part	(EHTMLEditor *editor,
 						 const gchar *cid_uri);
-
+void		e_html_editor_clear_alerts	(EHTMLEditor *editor);
+EAlertBar *	e_html_editor_get_alert_bar	(EHTMLEditor *editor);
+EActionComboBox *
+		e_html_editor_util_new_mode_combobox
+						(void);
 G_END_DECLS
 
 #endif /* E_HTML_EDITOR_H */

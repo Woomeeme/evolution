@@ -9,6 +9,11 @@ else("${WITH_WMCLASS_OVERRIDE}" STREQUAL "" OR "${WITH_WMCLASS_OVERRIDE}" STREQU
 	set(WMCLASS_OVERRIDE "StartupWMClass=${WITH_WMCLASS_OVERRIDE}\n")
 endif("${WITH_WMCLASS_OVERRIDE}" STREQUAL "" OR "${WITH_WMCLASS_OVERRIDE}" STREQUAL "OFF")
 
+set(DESKTOP_MIME_TYPES)
+if(HAVE_LDAP)
+	set(DESKTOP_MIME_TYPES "x-scheme-handler/ldap;x-scheme-handler/ldaps;")
+endif(HAVE_LDAP)
+
 configure_file(org.gnome.Evolution.desktop.in.in
 	org.gnome.Evolution.desktop.in
 	@ONLY
@@ -29,6 +34,15 @@ else("${VERSION_SUBSTRING}" STREQUAL "")
 endif("${VERSION_SUBSTRING}" STREQUAL "")
 
 string(TIMESTAMP APPDATA_RELEASE_BUILD_DATE "%Y-%m-%d")
+
+if(EXISTS "${CMAKE_BINARY_DIR}/appdata-releases.txt")
+	file(READ ${CMAKE_BINARY_DIR}/appdata-releases.txt APPDATA_RELEASES)
+endif(EXISTS "${CMAKE_BINARY_DIR}/appdata-releases.txt")
+
+if("${APPDATA_RELEASES}" STREQUAL "")
+	message(WARNING "Failed to extract release information from the NEWS file, falling back to generic information")
+	set(APPDATA_RELEASES "    <release version=\"${APPDATA_RELEASE_VERSION}\" date=\"${APPDATA_RELEASE_BUILD_DATE}\" type=\"${APPDATA_RELEASE_TYPE}\"/>\n")
+endif("${APPDATA_RELEASES}" STREQUAL "")
 
 configure_file(org.gnome.Evolution.appdata.xml.in.in
 	org.gnome.Evolution.appdata.xml.in

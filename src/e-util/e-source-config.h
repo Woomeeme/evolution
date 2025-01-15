@@ -115,6 +115,9 @@ gboolean	e_source_config_commit_finish	(ESourceConfig *config,
 void		e_source_config_add_refresh_interval
 						(ESourceConfig *config,
 						 ESource *scratch_source);
+void		e_source_config_add_refresh_on_metered_network
+						(ESourceConfig *config,
+						 ESource *scratch_source);
 void		e_source_config_add_secure_connection
 						(ESourceConfig *config,
 						 ESource *scratch_source);
@@ -122,6 +125,9 @@ void		e_source_config_add_secure_connection_for_webdav
 						(ESourceConfig *config,
 						 ESource *scratch_source);
 GtkWidget *	e_source_config_add_user_entry	(ESourceConfig *config,
+						 ESource *scratch_source);
+void		e_source_config_add_timeout_interval_for_webdav
+						(ESourceConfig *config,
 						 ESource *scratch_source);
 
 #endif /* E_SOURCE_CONFIG_H */

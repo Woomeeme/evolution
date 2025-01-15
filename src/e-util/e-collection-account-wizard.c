@@ -87,7 +87,7 @@ enum {
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE (ECollectionAccountWizard, e_collection_account_wizard, GTK_TYPE_NOTEBOOK)
+G_DEFINE_TYPE_WITH_PRIVATE (ECollectionAccountWizard, e_collection_account_wizard, GTK_TYPE_NOTEBOOK)
 
 typedef struct _WizardWindowData {
 	GtkWidget *window;
@@ -271,6 +271,11 @@ collection_account_wizard_create_window (GtkWindow *parent,
 
 	g_signal_connect (widget, "clicked",
 		G_CALLBACK (collection_wizard_window_back_button_clicked_cb), wwd);
+
+	e_binding_bind_property (
+		wwd->collection_wizard, "can-run",
+		widget, "sensitive",
+		G_BINDING_DEFAULT);
 
 	widget = e_dialog_button_new_with_icon ("go-next", _("_Next"));
 	g_object_set (G_OBJECT (widget),
@@ -659,6 +664,15 @@ collection_account_wizard_try_again_clicked_cb (GtkButton *button,
 }
 
 static void
+collection_account_wizard_update_entry_hint (GtkWidget *entry)
+{
+	const gchar *user = gtk_entry_get_text (GTK_ENTRY (entry));
+
+	e_util_set_entry_issue_hint (entry, (!user || !*user || camel_string_is_all_ascii (user)) ? NULL :
+		_("User name contains letters, which can prevent log in. Make sure the server accepts such written user name."));
+}
+
+static void
 collection_account_wizard_show_password_prompt (ECollectionAccountWizard *wizard,
 						EConfigLookupWorker *worker,
 						WorkerData *wd)
@@ -687,6 +701,9 @@ collection_account_wizard_show_password_prompt (ECollectionAccountWizard *wizard
 	gtk_label_set_mnemonic_widget (GTK_LABEL (label), widget);
 	gtk_grid_attach (grid, widget, 1, 0, 1, 1);
 	user_entry = widget;
+
+	g_signal_connect (user_entry, "changed",
+		G_CALLBACK (collection_account_wizard_update_entry_hint), NULL);
 
 	widget = gtk_label_new_with_mnemonic (_("_Password:"));
 	gtk_widget_set_halign (widget, GTK_ALIGN_END);
@@ -1158,10 +1175,10 @@ collection_account_wizard_host_is_google_server (const gchar *host)
 	if (!host || !*host)
 		return FALSE;
 
-	return camel_strstrcase (host, "gmail.com") ||
-	       camel_strstrcase (host, "googlemail.com") ||
-	       camel_strstrcase (host, "google.com") ||
-	       camel_strstrcase (host, "googleusercontent.com");
+	return e_util_host_is_in_domain (host, "gmail.com") ||
+	       e_util_host_is_in_domain (host, "googlemail.com") ||
+	       e_util_host_is_in_domain (host, "google.com") ||
+	       e_util_host_is_in_domain (host, "googleusercontent.com");
 }
 
 static void
@@ -1195,13 +1212,29 @@ collection_account_wizard_write_changes_thread (ESimpleAsyncResult *result,
 
 		if (!root_dn || !*root_dn) {
 			gchar **root_dse = NULL;
+			ESourceLDAPSecurity security;
+			gboolean success;
 
 			camel_operation_push_message (cancellable, "%s", _("Looking up LDAP server’s search base…"));
 
-			if (e_util_query_ldap_root_dse_sync (
+			security = e_source_ldap_get_security (ldap_extension);
+			success = e_util_query_ldap_root_dse_sync (
 				e_source_authentication_get_host (auth_extension),
 				e_source_authentication_get_port (auth_extension),
-				&root_dse, cancellable, NULL)) {
+				security,
+				&root_dse, cancellable, &local_error);
+
+			if (!success && security != E_SOURCE_LDAP_SECURITY_NONE &&
+			    g_error_matches (local_error, G_IO_ERROR, G_IO_ERROR_CONNECTION_REFUSED) &&
+			    !g_cancellable_is_cancelled (cancellable)) {
+				success = e_util_query_ldap_root_dse_sync (
+					e_source_authentication_get_host (auth_extension),
+					e_source_authentication_get_port (auth_extension),
+					E_SOURCE_LDAP_SECURITY_NONE,
+					&root_dse, cancellable, NULL);
+			}
+
+			if (success) {
 				if (root_dse && root_dse[0])
 					e_source_ldap_set_root_dn (ldap_extension, root_dse[0]);
 
@@ -1209,6 +1242,13 @@ collection_account_wizard_write_changes_thread (ESimpleAsyncResult *result,
 			}
 
 			camel_operation_pop_message (cancellable);
+
+			g_clear_error (&local_error);
+		}
+
+		if (g_cancellable_set_error_if_cancelled (cancellable, &local_error)) {
+			e_simple_async_result_set_user_data (result, local_error, (GDestroyNotify) g_error_free);
+			return;
 		}
 	}
 
@@ -1282,7 +1322,6 @@ collection_account_wizard_write_changes_thread (ESimpleAsyncResult *result,
 	/* It is always true, but have the variables local in this place only */
 	if (source) {
 		ESourceAuthentication *authentication_extension;
-		ESourceCollection *collection_extension;
 		const gchar *host;
 
 		authentication_extension = e_source_get_extension (source, E_SOURCE_EXTENSION_AUTHENTICATION);
@@ -1359,16 +1398,19 @@ collection_account_wizard_write_changes_done (GObject *source_object,
 
 	wizard = E_COLLECTION_ACCOUNT_WIZARD (source_object);
 
-	g_clear_object (&wizard->priv->finish_cancellable);
-	g_hash_table_remove_all (wizard->priv->store_passwords);
-
 	error = e_simple_async_result_get_user_data (E_SIMPLE_ASYNC_RESULT (result));
 	if (error) {
 		is_cancelled = g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
 
+		if (is_cancelled && !wizard->priv->finish_label)
+			return;
+
 		gtk_label_set_text (GTK_LABEL (wizard->priv->finish_label), error->message);
 		gtk_label_set_selectable (GTK_LABEL (wizard->priv->finish_label), TRUE);
 	}
+
+	g_clear_object (&wizard->priv->finish_cancellable);
+	g_hash_table_remove_all (wizard->priv->store_passwords);
 
 	e_spinner_stop (E_SPINNER (wizard->priv->finish_spinner));
 
@@ -1545,6 +1587,17 @@ collection_account_wizard_finish_cancel_clicked_cb (GtkButton *button,
 }
 
 static void
+collection_account_wizard_email_entry_changed (ECollectionAccountWizard *wizard,
+					       GtkWidget *entry)
+{
+
+	collection_account_wizard_notify_can_run (G_OBJECT (wizard));
+	collection_account_wizard_mark_changed (wizard);
+
+	collection_account_wizard_update_entry_hint (entry);
+}
+
+static void
 collection_account_wizard_set_registry (ECollectionAccountWizard *wizard,
 					ESourceRegistry *registry)
 {
@@ -1697,10 +1750,7 @@ collection_account_wizard_constructed (GObject *object)
 	gtk_grid_attach (grid, widget, 1, 0, 1, 1);
 
 	g_signal_connect_swapped (wizard->priv->email_entry, "changed",
-		G_CALLBACK (collection_account_wizard_notify_can_run), wizard);
-
-	g_signal_connect_swapped (wizard->priv->email_entry, "changed",
-		G_CALLBACK (collection_account_wizard_mark_changed), wizard);
+		G_CALLBACK (collection_account_wizard_email_entry_changed), wizard);
 
 	expander = gtk_expander_new_with_mnemonic (_("_Advanced Options"));
 	gtk_widget_show (expander);
@@ -2163,12 +2213,25 @@ collection_account_wizard_dispose (GObject *object)
 	ECollectionAccountWizard *wizard = E_COLLECTION_ACCOUNT_WIZARD (object);
 	gint ii;
 
+	g_cancellable_cancel (wizard->priv->finish_cancellable);
+
 	g_clear_object (&wizard->priv->registry);
 	g_clear_object (&wizard->priv->config_lookup);
 	g_clear_object (&wizard->priv->finish_cancellable);
 	g_clear_pointer (&wizard->priv->workers, g_hash_table_destroy);
 	g_clear_pointer (&wizard->priv->store_passwords, g_hash_table_destroy);
 	g_clear_pointer (&wizard->priv->running_result, e_simple_async_result_complete_idle_take);
+
+	wizard->priv->email_entry = NULL;
+	wizard->priv->advanced_expander = NULL;
+	wizard->priv->servers_entry = NULL;
+	wizard->priv->results_label = NULL;
+	wizard->priv->parts_tree_view = NULL;
+	wizard->priv->display_name_entry = NULL;
+	wizard->priv->finish_running_box = NULL;
+	wizard->priv->finish_spinner = NULL;
+	wizard->priv->finish_label = NULL;
+	wizard->priv->finish_cancel_button = NULL;
 
 	for (ii = 0; ii <= E_CONFIG_LOOKUP_RESULT_LAST_KIND; ii++) {
 		g_clear_object (&wizard->priv->sources[ii]);
@@ -2182,8 +2245,6 @@ static void
 e_collection_account_wizard_class_init (ECollectionAccountWizardClass *klass)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (klass, sizeof (ECollectionAccountWizardPrivate));
 
 	object_class = G_OBJECT_CLASS (klass);
 	object_class->set_property = collection_account_wizard_set_property;
@@ -2271,7 +2332,7 @@ e_collection_account_wizard_init (ECollectionAccountWizard *wizard)
 {
 	gint ii;
 
-	wizard->priv = G_TYPE_INSTANCE_GET_PRIVATE (wizard, E_TYPE_COLLECTION_ACCOUNT_WIZARD, ECollectionAccountWizardPrivate);
+	wizard->priv = e_collection_account_wizard_get_instance_private (wizard);
 	wizard->priv->workers = g_hash_table_new_full (g_direct_hash, g_direct_equal, g_object_unref, worker_data_free);
 	wizard->priv->store_passwords = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
 	wizard->priv->running_workers = 0;
@@ -2384,14 +2445,14 @@ e_collection_account_wizard_get_can_run (ECollectionAccountWizard *wizard)
 
 	if (current_page == 1) { /* Parts page */
 		GtkTreeModel *model;
-		GtkTreeIter iter;
+		GtkTreeIter titer;
 
 		model = gtk_tree_view_get_model (wizard->priv->parts_tree_view);
-		if (gtk_tree_model_get_iter_first (model, &iter)) {
+		if (gtk_tree_model_get_iter_first (model, &titer)) {
 			do {
 				gboolean enabled = FALSE, is_collection_group = FALSE;
 
-				gtk_tree_model_get (model, &iter,
+				gtk_tree_model_get (model, &titer,
 					PART_COLUMN_BOOL_ENABLED, &enabled,
 					PART_COLUMN_BOOL_IS_COLLECTION_GROUP, &is_collection_group,
 					-1);
@@ -2400,7 +2461,7 @@ e_collection_account_wizard_get_can_run (ECollectionAccountWizard *wizard)
 					/* Collection is not with radio, verify at least one child is selected */
 					GtkTreeIter child;
 
-					if (gtk_tree_model_iter_nth_child (model, &child, &iter, 0)) {
+					if (gtk_tree_model_iter_nth_child (model, &child, &titer, 0)) {
 						do {
 							enabled = FALSE;
 
@@ -2415,7 +2476,7 @@ e_collection_account_wizard_get_can_run (ECollectionAccountWizard *wizard)
 				} else if (enabled) {
 					return TRUE;
 				}
-			} while (gtk_tree_model_iter_next (model, &iter));
+			} while (gtk_tree_model_iter_next (model, &titer));
 		}
 
 		return FALSE;

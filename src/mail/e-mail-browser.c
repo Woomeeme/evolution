@@ -35,10 +35,6 @@
 #include "em-folder-tree-model.h"
 #include "message-list.h"
 
-#define E_MAIL_BROWSER_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_BROWSER, EMailBrowserPrivate))
-
 #define ACTION_GROUP_STANDARD		"action-group-standard"
 #define ACTION_GROUP_SEARCH_FOLDERS	"action-group-search-folders"
 #define ACTION_GROUP_LABELS		"action-group-labels"
@@ -51,7 +47,7 @@ struct _EMailBrowserPrivate {
 	EMailFormatterMode display_mode;
 	EAutomaticActionPolicy close_on_reply_policy;
 
-	GtkWidget *main_menu;
+	EMenuBar *menu_bar;
 	GtkWidget *main_toolbar;
 	GtkWidget *message_list;
 	GtkWidget *preview_pane;
@@ -108,14 +104,10 @@ static const gchar *ui =
 static void	e_mail_browser_reader_init
 					(EMailReaderInterface *iface);
 
-G_DEFINE_TYPE_WITH_CODE (
-	EMailBrowser,
-	e_mail_browser,
-	GTK_TYPE_WINDOW,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_MAIL_READER, e_mail_browser_reader_init)
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL))
+G_DEFINE_TYPE_WITH_CODE (EMailBrowser, e_mail_browser, GTK_TYPE_WINDOW,
+	G_ADD_PRIVATE (EMailBrowser)
+	G_IMPLEMENT_INTERFACE (E_TYPE_MAIL_READER, e_mail_browser_reader_init)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 static void
 action_close_cb (GtkAction *action,
@@ -515,6 +507,56 @@ mail_browser_set_display_mode (EMailBrowser *browser,
 	browser->priv->display_mode = display_mode;
 }
 
+static GtkWidget *
+mail_browser_construct_header_bar (EMailReader *reader,
+				   GtkWidget *menu_button)
+{
+	GtkWidget *widget;
+	GtkAction *action;
+	GtkHeaderBar *header_bar;
+	const gchar *action_name;
+
+	widget = e_header_bar_new ();
+	gtk_widget_show (widget);
+	header_bar = GTK_HEADER_BAR (widget);
+
+	if (menu_button)
+		e_header_bar_pack_end (E_HEADER_BAR (header_bar), menu_button, G_MAXUINT);
+
+	action_name = "mail-forward";
+	action = e_mail_reader_get_action (reader, action_name);
+	widget = e_header_bar_button_new (_("Forward"), action);
+	gtk_widget_set_name (widget, "e-mail-shell-view-forward");
+	e_header_bar_button_take_menu (
+		E_HEADER_BAR_BUTTON (widget),
+		e_mail_reader_create_forward_menu (reader));
+	gtk_widget_show (widget);
+
+	e_header_bar_pack_end (E_HEADER_BAR (header_bar), widget, 2);
+
+	action_name = "mail-reply-group";
+	action = e_mail_reader_get_action (reader, action_name);
+	widget = e_header_bar_button_new (_("Group Reply"), action);
+	gtk_widget_set_name (widget, "e-mail-shell-view-reply-group");
+	gtk_widget_show (widget);
+
+	e_header_bar_button_take_menu (
+		E_HEADER_BAR_BUTTON (widget),
+		e_mail_reader_create_reply_menu (reader));
+
+	e_header_bar_pack_end (E_HEADER_BAR (header_bar), widget, 1);
+
+	action_name = "mail-reply-sender";
+	action = e_mail_reader_get_action (reader, action_name);
+	widget = e_header_bar_button_new (_("Reply"), action);
+	gtk_widget_set_name (widget, "e-mail-shell-view-reply-sender");
+	gtk_widget_show (widget);
+
+	e_header_bar_pack_end (E_HEADER_BAR (header_bar), widget, 1);
+
+	return GTK_WIDGET (header_bar);
+}
+
 static void
 mail_browser_set_property (GObject *object,
                            guint property_id,
@@ -697,32 +739,30 @@ mail_browser_get_property (GObject *object,
 static void
 mail_browser_dispose (GObject *object)
 {
-	EMailBrowserPrivate *priv;
-
-	priv = E_MAIL_BROWSER_GET_PRIVATE (object);
+	EMailBrowser *self = E_MAIL_BROWSER (object);
 
 	e_mail_reader_dispose (E_MAIL_READER (object));
 
-	if (priv->close_on_reply_response_handler_id > 0) {
+	if (self->priv->close_on_reply_response_handler_id > 0) {
 		g_signal_handler_disconnect (
-			priv->close_on_reply_alert,
-			priv->close_on_reply_response_handler_id);
-		priv->close_on_reply_response_handler_id = 0;
+			self->priv->close_on_reply_alert,
+			self->priv->close_on_reply_response_handler_id);
+		self->priv->close_on_reply_response_handler_id = 0;
 	}
 
-	g_clear_object (&priv->backend);
-	g_clear_object (&priv->ui_manager);
-	g_clear_object (&priv->focus_tracker);
-	g_clear_object (&priv->main_menu);
-	g_clear_object (&priv->main_toolbar);
-	g_clear_object (&priv->preview_pane);
-	g_clear_object (&priv->statusbar);
-	g_clear_object (&priv->close_on_reply_alert);
+	g_clear_object (&self->priv->backend);
+	g_clear_object (&self->priv->ui_manager);
+	g_clear_object (&self->priv->focus_tracker);
+	g_clear_object (&self->priv->main_toolbar);
+	g_clear_object (&self->priv->menu_bar);
+	g_clear_object (&self->priv->preview_pane);
+	g_clear_object (&self->priv->statusbar);
+	g_clear_object (&self->priv->close_on_reply_alert);
 
-	if (priv->message_list != NULL) {
+	if (self->priv->message_list != NULL) {
 		/* This will cancel a regen operation. */
-		gtk_widget_destroy (priv->message_list);
-		g_clear_object (&priv->message_list);
+		gtk_widget_destroy (self->priv->message_list);
+		g_clear_object (&self->priv->message_list);
 	}
 
 	/* Chain up to parent's dispose() method. */
@@ -747,6 +787,7 @@ mail_browser_constructed (GObject *object)
 	GtkWidget *container;
 	GtkWidget *display;
 	GtkWidget *widget;
+	GtkWidget *menu_button = NULL;
 	const gchar *domain;
 	const gchar *id;
 	guint merge_id;
@@ -898,8 +939,19 @@ mail_browser_constructed (GObject *object)
 
 	widget = gtk_ui_manager_get_widget (ui_manager, "/main-menu");
 	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
-	browser->priv->main_menu = g_object_ref (widget);
-	gtk_widget_show (widget);
+	browser->priv->menu_bar = e_menu_bar_new (GTK_MENU_BAR (widget), GTK_WINDOW (browser), &menu_button);
+
+	if (e_util_get_use_header_bar ()) {
+		widget = mail_browser_construct_header_bar (reader, menu_button);
+		gtk_window_set_titlebar (GTK_WINDOW (object), widget);
+
+		widget = gtk_ui_manager_get_widget (ui_manager, "/main-toolbar/mail-toolbar-common/mail-reply-sender");
+		if (widget)
+			gtk_widget_destroy (widget);
+	} else if (menu_button) {
+		g_object_ref_sink (menu_button);
+		gtk_widget_destroy (menu_button);
+	}
 
 	widget = gtk_ui_manager_get_widget (ui_manager, "/main-toolbar");
 	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
@@ -910,19 +962,20 @@ mail_browser_constructed (GObject *object)
 		gtk_widget_get_style_context (widget),
 		GTK_STYLE_CLASS_PRIMARY_TOOLBAR);
 
-	gtk_box_pack_start (
-		GTK_BOX (container),
-		browser->priv->preview_pane,
-		TRUE, TRUE, 0);
+	e_util_setup_toolbar_icon_size (GTK_TOOLBAR (widget), GTK_ICON_SIZE_BUTTON);
 
 	attachment_store = e_mail_display_get_attachment_store (E_MAIL_DISPLAY (display));
 	widget = GTK_WIDGET (e_mail_display_get_attachment_view (E_MAIL_DISPLAY (display)));
-	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+	gtk_box_pack_start (GTK_BOX (container), widget, TRUE, TRUE, 0);
 	gtk_widget_show (widget);
+
+	container = e_attachment_bar_get_content_area (E_ATTACHMENT_BAR (widget));
+
+	gtk_box_pack_start (GTK_BOX (container), browser->priv->preview_pane, TRUE, TRUE, 0);
 
 	e_binding_bind_property_full (
 		attachment_store, "num-attachments",
-		widget, "visible",
+		widget, "attachments-visible",
 		G_BINDING_SYNC_CREATE,
 		e_attachment_store_transform_num_attachments_to_visible_boolean,
 		NULL, NULL, NULL);
@@ -940,6 +993,11 @@ mail_browser_constructed (GObject *object)
 	g_signal_connect (
 		browser, "key-press-event",
 		G_CALLBACK (mail_browser_key_press_event_cb), NULL);
+
+	/* WebKitGTK does not support print preview, thus hide the option from the menu;
+	   maybe it'll be supported in the future */
+	action = e_mail_reader_get_action (reader, "mail-print-preview");
+	gtk_action_set_visible (action, FALSE);
 
 	e_extensible_load_extensions (E_EXTENSIBLE (object));
 }
@@ -1005,11 +1063,9 @@ mail_browser_get_mail_display (EMailReader *reader)
 static GtkWidget *
 mail_browser_get_message_list (EMailReader *reader)
 {
-	EMailBrowserPrivate *priv;
+	EMailBrowser *self = E_MAIL_BROWSER (reader);
 
-	priv = E_MAIL_BROWSER_GET_PRIVATE (reader);
-
-	return priv->message_list;
+	return self->priv->message_list;
 }
 
 static GtkMenu *
@@ -1032,14 +1088,12 @@ mail_browser_get_popup_menu (EMailReader *reader)
 static EPreviewPane *
 mail_browser_get_preview_pane (EMailReader *reader)
 {
-	EMailBrowserPrivate *priv;
+	EMailBrowser *self = E_MAIL_BROWSER (reader);
 
-	priv = E_MAIL_BROWSER_GET_PRIVATE (reader);
-
-	if (!priv->preview_pane)
+	if (!self->priv->preview_pane)
 		return NULL;
 
-	return E_PREVIEW_PANE (priv->preview_pane);
+	return E_PREVIEW_PANE (self->priv->preview_pane);
 }
 
 static GtkWindow *
@@ -1133,8 +1187,6 @@ static void
 e_mail_browser_class_init (EMailBrowserClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EMailBrowserPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_browser_set_property;
@@ -1288,7 +1340,7 @@ e_mail_browser_reader_init (EMailReaderInterface *iface)
 static void
 e_mail_browser_init (EMailBrowser *browser)
 {
-	browser->priv = E_MAIL_BROWSER_GET_PRIVATE (browser);
+	browser->priv = e_mail_browser_get_instance_private (browser);
 
 	gtk_window_set_title (GTK_WINDOW (browser), _("Evolution"));
 	gtk_window_set_default_size (GTK_WINDOW (browser), 600, 400);

@@ -49,6 +49,7 @@ static void
 e_mail_folder_sort_order_dialog_alert_sink_init (EAlertSinkInterface *interface);
 
 G_DEFINE_TYPE_WITH_CODE (EMailFolderSortOrderDialog, e_mail_folder_sort_order_dialog, GTK_TYPE_DIALOG,
+	G_ADD_PRIVATE (EMailFolderSortOrderDialog)
 	G_IMPLEMENT_INTERFACE (E_TYPE_ALERT_SINK, e_mail_folder_sort_order_dialog_alert_sink_init))
 
 static void
@@ -324,6 +325,7 @@ sort_order_tree_drag_begin_cb (GtkWidget *widget,
 
 	surface = gtk_tree_view_create_row_drag_icon (tree_view, path);
 	gtk_drag_set_icon_surface (context, surface);
+	cairo_surface_destroy (surface);
 
 	gtk_tree_path_free (path);
 
@@ -748,7 +750,8 @@ e_mail_folder_sort_order_dialog_constructed (GObject *object)
 	g_clear_object (&session);
 	g_clear_object (&model);
 
-	gtk_dialog_add_buttons (GTK_DIALOG (dialog), _("_Close"), GTK_RESPONSE_CANCEL, NULL);
+	if (!e_util_get_use_header_bar ())
+		gtk_dialog_add_buttons (GTK_DIALOG (dialog), _("_Close"), GTK_RESPONSE_CANCEL, NULL);
 
 	gtk_drag_source_set (dialog->priv->folder_tree, GDK_BUTTON1_MASK, row_targets, G_N_ELEMENTS (row_targets), GDK_ACTION_MOVE);
 	gtk_drag_dest_set (dialog->priv->folder_tree, GTK_DEST_DEFAULT_MOTION, row_targets, G_N_ELEMENTS (row_targets), GDK_ACTION_MOVE);
@@ -799,8 +802,6 @@ e_mail_folder_sort_order_dialog_class_init (EMailFolderSortOrderDialogClass *kla
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
 
-	g_type_class_add_private (klass, sizeof (EMailFolderSortOrderDialogPrivate));
-
 	widget_class = GTK_WIDGET_CLASS (klass);
 	widget_class->realize = e_mail_folder_sort_order_dialog_realize;
 
@@ -845,7 +846,7 @@ e_mail_folder_sort_order_dialog_alert_sink_init (EAlertSinkInterface *interface)
 static void
 e_mail_folder_sort_order_dialog_init (EMailFolderSortOrderDialog *dialog)
 {
-	dialog->priv = G_TYPE_INSTANCE_GET_PRIVATE (dialog, E_TYPE_MAIL_FOLDER_SORT_ORDER_DIALOG, EMailFolderSortOrderDialogPrivate);
+	dialog->priv = e_mail_folder_sort_order_dialog_get_instance_private (dialog);
 }
 
 GtkWidget *
@@ -857,6 +858,7 @@ e_mail_folder_sort_order_dialog_new (GtkWindow *parent,
 
 	return g_object_new (E_TYPE_MAIL_FOLDER_SORT_ORDER_DIALOG,
 		"transient-for", parent,
+		"use-header-bar", e_util_get_use_header_bar (),
 		"store", store,
 		"folder-uri", folder_uri,
 		NULL);

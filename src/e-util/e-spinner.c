@@ -20,7 +20,8 @@
 
 #include <gtk/gtk.h>
 
-#include "e-util/e-util-private.h"
+#include "e-util-private.h"
+#include "e-misc-utils.h"
 
 #include "e-spinner.h"
 
@@ -41,7 +42,7 @@ enum {
 	PROP_ACTIVE
 };
 
-G_DEFINE_TYPE (ESpinner, e_spinner, GTK_TYPE_IMAGE)
+G_DEFINE_TYPE_WITH_PRIVATE (ESpinner, e_spinner, GTK_TYPE_IMAGE)
 
 static gboolean
 e_spinner_update_frame_cb (gpointer user_data)
@@ -77,9 +78,15 @@ e_spinner_disable_spin (ESpinner *spinner)
 static void
 e_spinner_enable_spin (ESpinner *spinner)
 {
+	GtkSettings *settings;
+	gboolean enable_animations = TRUE;
+
+	settings = gtk_widget_get_settings (GTK_WIDGET (spinner));
+	g_object_get (settings, "gtk-enable-animations", &enable_animations, NULL);
+
 	e_spinner_disable_spin (spinner);
 
-	if (spinner->priv->pixbufs)
+	if (spinner->priv->pixbufs && enable_animations)
 		spinner->priv->timeout_id = g_timeout_add_full (
 			G_PRIORITY_LOW, FRAME_TIMEOUT_MS, e_spinner_update_frame_cb, spinner, NULL);
 }
@@ -134,11 +141,11 @@ e_spinner_constructed (GObject *object)
 #ifdef G_OS_WIN32
 	{
 		gchar *filename = g_strconcat (EVOLUTION_IMAGESDIR, G_DIR_SEPARATOR_S, MAIN_IMAGE_FILENAME, NULL);
-		main_pixbuf = gdk_pixbuf_new_from_file (filename, &error);
+		main_pixbuf = e_misc_util_ref_pixbuf (filename, &error);
 		g_free (filename);
 	}
 #else
-	main_pixbuf = gdk_pixbuf_new_from_file (EVOLUTION_IMAGESDIR G_DIR_SEPARATOR_S MAIN_IMAGE_FILENAME, &error);
+	main_pixbuf = e_misc_util_ref_pixbuf (EVOLUTION_IMAGESDIR G_DIR_SEPARATOR_S MAIN_IMAGE_FILENAME, &error);
 #endif
 	if (!main_pixbuf) {
 		g_warning ("%s: Failed to load image: %s", error ? error->message : "Unknown error", G_STRFUNC);
@@ -226,8 +233,6 @@ e_spinner_class_init (ESpinnerClass *klass)
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
 
-	g_type_class_add_private (klass, sizeof (ESpinnerPrivate));
-
 	object_class = G_OBJECT_CLASS (klass);
 	object_class->set_property = e_spinner_set_property;
 	object_class->get_property = e_spinner_get_property;
@@ -260,7 +265,7 @@ e_spinner_class_init (ESpinnerClass *klass)
 static void
 e_spinner_init (ESpinner *spinner)
 {
-	spinner->priv = G_TYPE_INSTANCE_GET_PRIVATE (spinner, E_TYPE_SPINNER, ESpinnerPrivate);
+	spinner->priv = e_spinner_get_instance_private (spinner);
 }
 
 GtkWidget *

@@ -25,6 +25,7 @@ G_BEGIN_DECLS
 /* An array of known supported translations with corresponding locale codes */
 
 static ESupportedLocales e_supported_locales[] = {
+	{ "ab", "ab_AB" },
 	{ "af", "af_ZA" },
 	{ "am", "am_ET" },
 	{ "an", "an_ES" },
@@ -68,6 +69,7 @@ static ESupportedLocales e_supported_locales[] = {
 	{ "hr", "hr_HR" },
 	{ "hu", "hu_HU" },
 	{ "id", "id_ID" },
+	{ "ie", "ie_XX" },
 	{ "is", "is_IS" },
 	{ "it", "it_IT" },
 	{ "ja", "ja_JP" },

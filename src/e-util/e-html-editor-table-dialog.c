@@ -29,10 +29,6 @@
 #include "e-image-chooser-dialog.h"
 #include "e-misc-utils.h"
 
-#define E_HTML_EDITOR_TABLE_DIALOG_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_HTML_EDITOR_TABLE_DIALOG, EHTMLEditorTableDialogPrivate))
-
 struct _EHTMLEditorTableDialogPrivate {
 	GtkWidget *rows_edit;
 	GtkWidget *columns_edit;
@@ -55,10 +51,7 @@ struct _EHTMLEditorTableDialogPrivate {
 
 static GdkRGBA transparent = { 0, 0, 0, 0 };
 
-G_DEFINE_TYPE (
-	EHTMLEditorTableDialog,
-	e_html_editor_table_dialog,
-	E_TYPE_HTML_EDITOR_DIALOG);
+G_DEFINE_TYPE_WITH_PRIVATE (EHTMLEditorTableDialog, e_html_editor_table_dialog, E_TYPE_HTML_EDITOR_DIALOG)
 
 static void
 html_editor_table_dialog_set_row_count (EHTMLEditorTableDialog *dialog)
@@ -481,8 +474,6 @@ e_html_editor_table_dialog_class_init (EHTMLEditorTableDialogClass *class)
 {
 	GtkWidgetClass *widget_class;
 
-	g_type_class_add_private (class, sizeof (EHTMLEditorTableDialogPrivate));
-
 	widget_class = GTK_WIDGET_CLASS (class);
 	widget_class->show = html_editor_table_dialog_show;
 	widget_class->hide = html_editor_table_dialog_hide;
@@ -496,7 +487,7 @@ e_html_editor_table_dialog_init (EHTMLEditorTableDialog *dialog)
 	GtkWidget *widget;
 	GtkFileFilter *file_filter;
 
-	dialog->priv = E_HTML_EDITOR_TABLE_DIALOG_GET_PRIVATE (dialog);
+	dialog->priv = e_html_editor_table_dialog_get_instance_private (dialog);
 
 	main_layout = e_html_editor_dialog_get_container (E_HTML_EDITOR_DIALOG (dialog));
 
@@ -513,9 +504,6 @@ e_html_editor_table_dialog_init (EHTMLEditorTableDialog *dialog)
 	gtk_widget_set_margin_left (GTK_WIDGET (grid), 10);
 
 	/* Rows */
-	widget = gtk_image_new_from_icon_name ("stock_select-row", GTK_ICON_SIZE_BUTTON);
-	gtk_grid_attach (grid, widget, 0, 0, 1, 1);
-
 	widget = gtk_spin_button_new_with_range (1, G_MAXINT, 1);
 	gtk_spin_button_set_digits (GTK_SPIN_BUTTON (widget), 0);
 	gtk_grid_attach (grid, widget, 2, 0, 1, 1);
@@ -530,9 +518,6 @@ e_html_editor_table_dialog_init (EHTMLEditorTableDialog *dialog)
 	gtk_grid_attach (grid, widget, 1, 0, 1, 1);
 
 	/* Columns */
-	widget = gtk_image_new_from_icon_name ("stock_select-column", GTK_ICON_SIZE_BUTTON);
-	gtk_grid_attach (grid, widget, 3, 0, 1, 1);
-
 	widget = gtk_spin_button_new_with_range (1, G_MAXINT, 1);
 	gtk_spin_button_set_digits (GTK_SPIN_BUTTON (widget), 0);
 	gtk_grid_attach (grid, widget, 5, 0, 1, 1);

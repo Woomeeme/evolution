@@ -24,6 +24,8 @@
 
 #include <glib/gi18n.h>
 
+#include <libedataserverui/libedataserverui.h>
+
 #include "nss.h"
 #include "pk11func.h"
 #include "certdb.h"
@@ -34,24 +36,13 @@
 #include "e-util/e-util.h"
 #include "e-util/e-util-private.h"
 
-/* XXX Hack to disable p11-kit's pkcs11.h header, since
- *     NSS headers supply the same PKCS #11 definitions. */
-#define PKCS11_H 1
-
-#define GCR_API_SUBJECT_TO_CHANGE
-#include "gcr/gcr.h"
-
 #include "smime/lib/e-cert.h"
-
-#define E_CERT_SELECTOR_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CERT_SELECTOR, ECertSelectorPrivate))
 
 struct _ECertSelectorPrivate {
 	CERTCertList *certlist;
 
 	GtkWidget *combobox;
-	GcrCertificateWidget *cert_widget;
+	GtkWidget *cert_widget;
 };
 
 enum {
@@ -61,7 +52,7 @@ enum {
 
 static guint ecs_signals[ECS_LAST_SIGNAL];
 
-G_DEFINE_TYPE (ECertSelector, e_cert_selector, GTK_TYPE_DIALOG)
+G_DEFINE_TYPE_WITH_PRIVATE (ECertSelector, e_cert_selector, GTK_TYPE_DIALOG)
 
 /* (this is what mozilla shows)
  * Issued to:
@@ -121,11 +112,10 @@ ecs_cert_changed (GtkWidget *w,
 	CERTCertListNode *node;
 
 	node = ecs_find_current (ecs);
-	if (node) {
-		ECert *ecert = e_cert_new (CERT_DupCertificate ((CERTCertificate *) node->cert));
-		gcr_certificate_widget_set_certificate (p->cert_widget, GCR_CERTIFICATE (ecert));
-		g_object_unref (ecert);
-	}
+	if (node && node->cert)
+		e_certificate_widget_set_der (E_CERTIFICATE_WIDGET (p->cert_widget), node->cert->derCert.data, node->cert->derCert.len);
+	else
+		e_certificate_widget_set_der (E_CERTIFICATE_WIDGET (p->cert_widget), NULL, 0);
 }
 
 /**
@@ -168,12 +158,12 @@ e_cert_selector_new (gint type,
 	e_load_ui_builder_definition (builder, "smime-ui.ui");
 
 	p->combobox = e_builder_get_widget (builder, "cert_combobox");
-	p->cert_widget = gcr_certificate_widget_new (NULL);
+	p->cert_widget = e_certificate_widget_new ();
 
 	w = e_builder_get_widget (builder, "cert_selector_vbox");
 	content_area = gtk_dialog_get_content_area (GTK_DIALOG (ecs));
-	gtk_container_add (GTK_CONTAINER (w), GTK_WIDGET (p->cert_widget));
-	gtk_widget_show (GTK_WIDGET (p->cert_widget));
+	gtk_container_add (GTK_CONTAINER (w), p->cert_widget);
+	gtk_widget_show_all (w);
 	gtk_box_pack_start (GTK_BOX (content_area), w, TRUE, TRUE, 3);
 	gtk_window_set_title (GTK_WINDOW (ecs), _("Select certificate"));
 
@@ -230,23 +220,22 @@ e_cert_selector_new (gint type,
 static void
 e_cert_selector_init (ECertSelector *ecs)
 {
+	ecs->priv = e_cert_selector_get_instance_private (ecs);
+	gtk_window_set_default_size (GTK_WINDOW (ecs), 400, 300);
+
 	gtk_dialog_add_buttons (
 		GTK_DIALOG (ecs),
 		_("_Cancel"), GTK_RESPONSE_CANCEL,
 		_("_OK"), GTK_RESPONSE_OK, NULL);
-
-	ecs->priv = E_CERT_SELECTOR_GET_PRIVATE (ecs);
 }
 
 static void
 e_cert_selector_finalize (GObject *object)
 {
-	ECertSelectorPrivate *priv;
+	ECertSelector *self = E_CERT_SELECTOR (object);
 
-	priv = E_CERT_SELECTOR_GET_PRIVATE (object);
-
-	if (priv->certlist)
-		CERT_DestroyCertList (priv->certlist);
+	if (self->priv->certlist)
+		CERT_DestroyCertList (self->priv->certlist);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_cert_selector_parent_class)->finalize (object);
@@ -257,8 +246,6 @@ e_cert_selector_class_init (ECertSelectorClass *class)
 {
 	GObjectClass *object_class;
 	GtkDialogClass *dialog_class;
-
-	g_type_class_add_private (class, sizeof (ECertSelectorPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->finalize = e_cert_selector_finalize;

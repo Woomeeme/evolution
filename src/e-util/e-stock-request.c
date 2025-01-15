@@ -40,6 +40,7 @@ enum {
 static void e_stock_request_content_request_init (EContentRequestInterface *iface);
 
 G_DEFINE_TYPE_WITH_CODE (EStockRequest, e_stock_request, G_TYPE_OBJECT,
+	G_ADD_PRIVATE (EStockRequest)
 	G_IMPLEMENT_INTERFACE (E_TYPE_CONTENT_REQUEST, e_stock_request_content_request_init))
 
 static gboolean
@@ -71,12 +72,13 @@ static gboolean
 process_stock_request_idle_cb (gpointer user_data)
 {
 	StockIdleData *sid = user_data;
-	SoupURI *suri;
+	GUri *guri;
 	GHashTable *query = NULL;
 	GtkStyleContext *context;
 	GtkWidgetPath *path;
 	GtkIconSet *icon_set;
 	gssize size = GTK_ICON_SIZE_BUTTON;
+	gboolean dark_color_scheme = FALSE;
 	gchar *buffer = NULL, *mime_type = NULL;
 	gsize buff_len = 0;
 	GError *local_error = NULL;
@@ -93,11 +95,11 @@ process_stock_request_idle_cb (gpointer user_data)
 		return FALSE;
 	}
 
-	suri = soup_uri_new (sid->uri);
-	g_return_val_if_fail (suri != NULL, FALSE);
+	guri = g_uri_parse (sid->uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+	g_return_val_if_fail (guri != NULL, FALSE);
 
-	if (suri->query != NULL)
-		query = soup_form_decode (suri->query);
+	if (g_uri_get_query (guri))
+		query = soup_form_decode (g_uri_get_query (guri));
 
 	if (query != NULL) {
 		const gchar *value;
@@ -105,6 +107,8 @@ process_stock_request_idle_cb (gpointer user_data)
 		value = g_hash_table_lookup (query, "size");
 		if (value)
 			size = atoi (value);
+		value = g_hash_table_lookup (query, "color-scheme");
+		dark_color_scheme = value && g_ascii_strcasecmp (value, "dark") == 0;
 
 		g_hash_table_destroy (query);
 	}
@@ -117,7 +121,7 @@ process_stock_request_idle_cb (gpointer user_data)
 	gtk_style_context_set_path (context, path);
 	gtk_widget_path_free (path);
 
-	icon_set = gtk_style_context_lookup_icon_set (context, suri->host);
+	icon_set = gtk_style_context_lookup_icon_set (context, g_uri_get_host (guri));
 	if (icon_set != NULL) {
 		GdkPixbuf *pixbuf;
 
@@ -150,7 +154,7 @@ process_stock_request_idle_cb (gpointer user_data)
 		icon_theme = gtk_icon_theme_get_default ();
 
 		icon_info = gtk_icon_theme_lookup_icon (
-			icon_theme, suri->host, size,
+			icon_theme, g_uri_get_host (guri), size,
 			GTK_ICON_LOOKUP_USE_BUILTIN);
 
 		/* Some icons can be missing in the theme */
@@ -176,7 +180,7 @@ process_stock_request_idle_cb (gpointer user_data)
 			}
 
 			gtk_icon_info_free (icon_info);
-		} else if (g_strcmp0 (suri->host, "x-evolution-arrow-down") == 0) {
+		} else if (g_strcmp0 (g_uri_get_host (guri), "x-evolution-arrow-down") == 0) {
 			GdkPixbuf *pixbuf;
 			GdkRGBA rgba;
 			guchar *data;
@@ -211,6 +215,53 @@ process_stock_request_idle_cb (gpointer user_data)
 
 			cairo_surface_destroy (surface);
 			g_free (data);
+		} else if (g_strcmp0 (g_uri_get_host (guri), "x-evolution-pan-down") == 0) {
+			#define PAN_SCHEME_LIGHT "#2e3436"
+			#define PAN_SCHEME_DARK "#d1cbc9"
+			#define PAN_PATH_DOWN "M 3.4393771,1.4543954 H 0.7935438 l 1.3229166,1.3229167 z"
+			#define PAN_PATH_END "M 1.4550021,3.4387704 V 0.7929371 l 1.3229167,1.3229166 z"
+			#define PAN_PATH_END_RTL "M 2.7779188,3.4387704 V 0.7929371 L 1.4550021,2.1158537 Z"
+			#define PAN_SVG(_path, _color) \
+				"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
+				"<svg viewBox=\"0 0 4.2333332 4.2333333\" width=\"16px\" height=\"16px\" xmlns=\"http://www.w3.org/2000/svg\">\n" \
+				"  <path d=\"" _path "\" fill=\"" _color "\"/>\n" \
+				"</svg>\n"
+
+			const gchar *svg;
+
+			if (dark_color_scheme)
+				svg = PAN_SVG (PAN_PATH_DOWN, PAN_SCHEME_DARK);
+			else
+				svg = PAN_SVG (PAN_PATH_DOWN, PAN_SCHEME_LIGHT);
+
+			mime_type = g_strdup ("image/svg+xml");
+			buff_len = strlen (svg);
+			buffer = g_strdup (svg);
+		} else if (g_strcmp0 (g_uri_get_host (guri), "x-evolution-pan-end") == 0) {
+			const gchar *svg;
+
+			if (dark_color_scheme) {
+				if (gtk_widget_get_default_direction () == GTK_TEXT_DIR_RTL)
+					svg = PAN_SVG (PAN_PATH_END_RTL, PAN_SCHEME_DARK);
+				else
+					svg = PAN_SVG (PAN_PATH_END, PAN_SCHEME_DARK);
+			} else {
+				if (gtk_widget_get_default_direction () == GTK_TEXT_DIR_RTL)
+					svg = PAN_SVG (PAN_PATH_END_RTL, PAN_SCHEME_LIGHT);
+				else
+					svg = PAN_SVG (PAN_PATH_END, PAN_SCHEME_LIGHT);
+			}
+
+			mime_type = g_strdup ("image/svg+xml");
+			buff_len = strlen (svg);
+			buffer = g_strdup (svg);
+
+			#undef PAN_COLOR_LIGHT
+			#undef PAN_COLOR_DARK
+			#undef PAN_PATH_DOWN
+			#undef PAN_PATH_END
+			#undef PAN_PATH_END_RTL
+			#undef PAN_SVG
 		}
 	}
 
@@ -223,7 +274,7 @@ process_stock_request_idle_cb (gpointer user_data)
 		mime_type = g_strdup ("image/png");
 
 	if (buffer != NULL) {
-		*sid->out_stream = g_memory_input_stream_new_from_data (buffer, buff_len, g_free);;
+		*sid->out_stream = g_memory_input_stream_new_from_data (buffer, buff_len, g_free);
 		*sid->out_stream_length = buff_len;
 		*sid->out_mime_type = mime_type;
 
@@ -237,7 +288,7 @@ process_stock_request_idle_cb (gpointer user_data)
 		sid->success = FALSE;
 	}
 
-	soup_uri_free (suri);
+	g_uri_unref (guri);
 	g_object_unref (context);
 
 	e_flag_set (sid->flag);
@@ -337,8 +388,6 @@ e_stock_request_class_init (EStockRequestClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (EStockRequestPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = e_stock_request_set_property;
 	object_class->get_property = e_stock_request_get_property;
@@ -358,7 +407,7 @@ e_stock_request_class_init (EStockRequestClass *class)
 static void
 e_stock_request_init (EStockRequest *request)
 {
-	request->priv = G_TYPE_INSTANCE_GET_PRIVATE (request, E_TYPE_STOCK_REQUEST, EStockRequestPrivate);
+	request->priv = e_stock_request_get_instance_private (request);
 	request->priv->scale_factor = 0;
 }
 

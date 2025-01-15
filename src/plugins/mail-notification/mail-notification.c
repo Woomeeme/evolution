@@ -330,6 +330,17 @@ static GHashTable *unread_messages_by_folder = NULL;
 
 #ifdef HAVE_LIBUNITY
 static guint unread_message_count = 0;
+
+static void
+update_unity_launcher_entry (void)
+{
+	UnityLauncherEntry *entry = unity_launcher_entry_get_for_desktop_id ("org.gnome.Evolution.desktop");
+
+	if (entry) {
+		unity_launcher_entry_set_count (entry, unread_message_count);
+		unity_launcher_entry_set_count_visible (entry, unread_message_count != 0);
+	}
+}
 #endif
 
 static NotifyNotification *notify = NULL;
@@ -343,6 +354,11 @@ remove_notification (void)
 	notify = NULL;
 
 	status_count = 0;
+
+#ifdef HAVE_LIBUNITY
+	unread_message_count = 0;
+	update_unity_launcher_entry ();
+#endif
 }
 
 static gboolean
@@ -622,6 +638,12 @@ unread_notify_status (EMEventTargetFolderUnread *t)
 	 * messages in a folder. */
 	if (t->unread < old_unread)
 		remove_notification ();
+#ifdef HAVE_LIBUNITY
+	else if (t->is_inbox) {
+		unread_message_count += t->unread - old_unread;
+		update_unity_launcher_entry ();
+	}
+#endif
 
 	if (t->unread != old_unread) {
 		if (t->unread) {
@@ -630,15 +652,6 @@ unread_notify_status (EMEventTargetFolderUnread *t)
 			g_hash_table_remove (unread_messages_by_folder, t->folder_uri);
 		}
 	}
-
-#ifdef HAVE_LIBUNITY
-	if (t->is_inbox) {
-		UnityLauncherEntry *entry = unity_launcher_entry_get_for_desktop_id ("org.gnome.Evolution.desktop");
-		unread_message_count += t->unread - old_unread;
-		unity_launcher_entry_set_count (entry, unread_message_count);
-		unity_launcher_entry_set_count_visible (entry, unread_message_count != 0);
-	}
-#endif
 }
 
 static void
@@ -997,7 +1010,7 @@ e_mail_notify_account_tree_view_enabled_toggled_cb (GtkCellRendererToggle *cell_
 	GtkTreeIter iter;
 	GPtrArray *array;
 	GSettings *settings;
-	gboolean enabled = FALSE;
+	gboolean account_enabled = FALSE;
 
 	g_return_if_fail (GTK_IS_TREE_VIEW (tree_view));
 
@@ -1009,8 +1022,8 @@ e_mail_notify_account_tree_view_enabled_toggled_cb (GtkCellRendererToggle *cell_
 		return;
 	}
 
-	gtk_tree_model_get (model, &iter, E_MAIL_NOTIFY_ACCOUNTS_ENABLED, &enabled, -1);
-	gtk_list_store_set (GTK_LIST_STORE (model), &iter, E_MAIL_NOTIFY_ACCOUNTS_ENABLED, !enabled, -1);
+	gtk_tree_model_get (model, &iter, E_MAIL_NOTIFY_ACCOUNTS_ENABLED, &account_enabled, -1);
+	gtk_list_store_set (GTK_LIST_STORE (model), &iter, E_MAIL_NOTIFY_ACCOUNTS_ENABLED, !account_enabled, -1);
 
 	gtk_tree_path_free (path);
 
@@ -1019,14 +1032,15 @@ e_mail_notify_account_tree_view_enabled_toggled_cb (GtkCellRendererToggle *cell_
 	if (gtk_tree_model_get_iter_first (model, &iter)) {
 		do {
 			gchar *uid = NULL;
-			gboolean enabled = FALSE;
+
+			account_enabled = FALSE;
 
 			gtk_tree_model_get (model, &iter,
-				E_MAIL_NOTIFY_ACCOUNTS_ENABLED, &enabled,
+				E_MAIL_NOTIFY_ACCOUNTS_ENABLED, &account_enabled,
 				E_MAIL_NOTIFY_ACCOUNTS_UID, &uid,
 				-1);
 
-			if (!enabled && uid) {
+			if (!account_enabled && uid) {
 				g_ptr_array_add (array, uid);
 			} else {
 				g_free (uid);

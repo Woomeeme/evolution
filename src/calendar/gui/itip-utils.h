@@ -32,7 +32,8 @@ typedef enum {
 	E_ITIP_SEND_COMPONENT_FLAG_ENSURE_MASTER_OBJECT		= 1 << 2,
 	E_ITIP_SEND_COMPONENT_FLAG_SAVE_RESPONSE_ACCEPTED	= 1 << 3,
 	E_ITIP_SEND_COMPONENT_FLAG_SAVE_RESPONSE_DECLINED	= 1 << 4,
-	E_ITIP_SEND_COMPONENT_FLAG_SAVE_RESPONSE_TENTATIVE	= 1 << 5
+	E_ITIP_SEND_COMPONENT_FLAG_SAVE_RESPONSE_TENTATIVE	= 1 << 5,
+	E_ITIP_SEND_COMPONENT_FLAG_AS_ATTACHMENT		= 1 << 6
 } EItipSendComponentFlags;
 
 struct CalMimeAttach {
@@ -46,11 +47,6 @@ struct CalMimeAttach {
 };
 
 void		itip_cal_mime_attach_free	(gpointer ptr); /* struct CalMimeAttach * */
-
-gboolean	itip_get_default_name_and_address
-						(ESourceRegistry *registry,
-						 gchar **name,
-						 gchar **address);
 gchar **	itip_get_user_identities	(ESourceRegistry *registry);
 gchar *		itip_get_fallback_identity	(ESourceRegistry *registry);
 gboolean	itip_address_is_user		(ESourceRegistry *registry,
@@ -66,7 +62,6 @@ gboolean	itip_sentby_is_user		(ESourceRegistry *registry,
 						 ECalComponent *comp,
 						 ECalClient *cal_client);
 gboolean	itip_has_any_attendees		(ECalComponent *comp);
-const gchar *	itip_strip_mailto		(const gchar *address);
 gboolean	itip_attendee_is_user		(ESourceRegistry *registry,
 						 ECalComponent *comp,
 						 ECalClient *cal_client);

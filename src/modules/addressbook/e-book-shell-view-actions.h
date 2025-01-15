@@ -52,6 +52,8 @@
 	E_SHELL_WINDOW_ACTION ((window), "address-book-popup-map")
 
 /* Contact Actions */
+#define E_SHELL_WINDOW_ACTION_CONTACT_BULK_EDIT(window) \
+	E_SHELL_WINDOW_ACTION ((window), "contact-bulk-edit")
 #define E_SHELL_WINDOW_ACTION_CONTACT_COPY(window) \
 	E_SHELL_WINDOW_ACTION ((window), "contact-copy")
 #define E_SHELL_WINDOW_ACTION_CONTACT_DELETE(window) \
@@ -90,8 +92,22 @@
 	E_SHELL_WINDOW_ACTION ((window), "contact-search-any-field-contains")
 #define E_SHELL_WINDOW_ACTION_CONTACT_SEARCH_EMAIL_BEGINS_WITH(window) \
 	E_SHELL_WINDOW_ACTION ((window), "contact-search-email-begins-with")
+#define E_SHELL_WINDOW_ACTION_CONTACT_SEARCH_EMAIL_CONTAINS(window) \
+	E_SHELL_WINDOW_ACTION ((window), "contact-search-email-contains")
 #define E_SHELL_WINDOW_ACTION_CONTACT_SEARCH_NAME_CONTAINS(window) \
 	E_SHELL_WINDOW_ACTION ((window), "contact-search-name-contains")
+#define E_SHELL_WINDOW_ACTION_CONTACT_SEARCH_PHONE_CONTAINS(window) \
+	E_SHELL_WINDOW_ACTION ((window), "contact-search-phone-contains")
+
+/* Sort Cards By Actions */
+#define E_SHELL_WINDOW_ACTION_CONTACT_CARDS_SORT_BY_MENU(window) \
+	E_SHELL_WINDOW_ACTION ((window), "contact-cards-sort-by-menu")
+#define E_SHELL_WINDOW_ACTION_CONTACT_CARDS_SORT_BY_FILE_AS(window) \
+	E_SHELL_WINDOW_ACTION ((window), "contact-cards-sort-by-file-as")
+#define E_SHELL_WINDOW_ACTION_CONTACT_CARDS_SORT_BY_GIVEN_NAME(window) \
+	E_SHELL_WINDOW_ACTION ((window), "contact-cards-sort-by-given-name")
+#define E_SHELL_WINDOW_ACTION_CONTACT_CARDS_SORT_BY_FAMILY_NAME(window) \
+	E_SHELL_WINDOW_ACTION ((window), "contact-cards-sort-by-family-name")
 
 /* Action Groups */
 #define E_SHELL_WINDOW_ACTION_GROUP_CONTACTS(window) \

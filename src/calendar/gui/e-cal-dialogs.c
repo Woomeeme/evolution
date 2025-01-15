@@ -47,7 +47,7 @@ is_past_event (ECalComponent *comp)
 	if (!comp)
 		return TRUE;
 
-	end_date = e_cal_component_get_dtend (comp);
+	end_date = e_cal_component_get_vtype (comp) == E_CAL_COMPONENT_EVENT ? e_cal_component_get_dtend (comp) : NULL;
 
 	if (!end_date)
 		return FALSE;
@@ -62,10 +62,190 @@ is_past_event (ECalComponent *comp)
 }
 
 /**
+ * e_cal_dialogs_delete_with_comment:
+ * @parent: a dialog parent #GtkWindow
+ * @cal_client: an #ECalClient
+ * @comp: an #ECalComponent to be deleted
+ * @organizer_is_user: for meetings, whether the organizer is the app user
+ * @attendee_is_user: for meetings, whether the app user is in the attendees
+ * @out_can_send_notice: (out): set to %TRUE/%FALSE, whether the organizer/attendees can/cannot be notified about the deletion
+ *
+ * Asks the user whether the @comp can be deleted and when it's a meeting
+ * or assigned task or memo, also allows to enter deletion reason and
+ * decide the user whether to send the notice or not.
+ *
+ * The deletion reason is stored into the @comp's COMMENT property.
+ *
+ * Returns: %TRUE, when can delete the @comp, %FALSE otherwise
+ *
+ * Since: 3.54
+ **/
+gboolean
+e_cal_dialogs_delete_with_comment (GtkWindow *parent,
+				   ECalClient *cal_client,
+				   ECalComponent *comp,
+				   gboolean organizer_is_user,
+				   gboolean attendee_is_user,
+				   gboolean *out_can_send_notice)
+{
+	ECalComponentText *summary;
+	GtkWidget *dialog;
+	GtkWidget *textview = NULL;
+	const gchar *id = NULL;
+	gboolean ask_send_notice;
+	gboolean ask_notice_comment = FALSE;
+	gboolean has_attendees;
+	gchar *arg0 = NULL;
+	gint result;
+
+	g_return_val_if_fail (E_IS_CAL_CLIENT (cal_client), FALSE);
+	g_return_val_if_fail (E_IS_CAL_COMPONENT (comp), FALSE);
+
+	has_attendees = e_cal_component_has_attendees (comp);
+	ask_send_notice = has_attendees && out_can_send_notice && e_cal_component_get_vtype (comp) == E_CAL_COMPONENT_EVENT && !is_past_event (comp) &&
+		(!organizer_is_user || !e_cal_client_check_save_schedules (cal_client) ||
+		 e_client_check_capability (E_CLIENT (cal_client), E_CAL_STATIC_CAPABILITY_ITIP_SUPPRESS_ON_REMOVE_SUPPORTED) ||
+		 e_client_check_capability (E_CLIENT (cal_client), E_CAL_STATIC_CAPABILITY_RETRACT_SUPPORTED));
+	if (ask_send_notice) {
+		ask_notice_comment = e_client_check_capability (E_CLIENT (cal_client), E_CAL_STATIC_CAPABILITY_RETRACT_SUPPORTED) ||
+			(!e_cal_client_check_save_schedules (cal_client) && (organizer_is_user || attendee_is_user));
+	}
+
+	if (out_can_send_notice)
+		*out_can_send_notice = FALSE;
+
+	summary = e_cal_component_dup_summary_for_locale (comp, NULL);
+	if (summary) {
+		arg0 = g_strdup (e_cal_component_text_get_value (summary));
+		e_cal_component_text_free (summary);
+	}
+
+	switch (e_cal_component_get_vtype (comp)) {
+	case E_CAL_COMPONENT_EVENT:
+		if (arg0) {
+			if (has_attendees && ask_send_notice && organizer_is_user)
+				id = "calendar:prompt-delete-titled-meeting-with-notice-organizer";
+			else if (has_attendees && ask_send_notice && attendee_is_user)
+				id = "calendar:prompt-delete-titled-meeting-with-notice-attendee";
+			else if (has_attendees)
+				id = "calendar:prompt-delete-titled-meeting";
+			else
+				id = "calendar:prompt-delete-titled-appointment";
+		} else {
+			if (has_attendees && ask_send_notice && organizer_is_user)
+				id = "calendar:prompt-delete-meeting-with-notice-organizer";
+			else if (has_attendees && ask_send_notice && attendee_is_user)
+				id = "calendar:prompt-delete-meeting-with-notice-attendee";
+			else if (has_attendees)
+				id = "calendar:prompt-delete-meeting";
+			else
+				id = "calendar:prompt-delete-appointment";
+		}
+		break;
+
+	case E_CAL_COMPONENT_TODO:
+		if (arg0)
+			id = "calendar:prompt-delete-named-task";
+		else
+			id = "calendar:prompt-delete-task";
+		break;
+
+	case E_CAL_COMPONENT_JOURNAL:
+		if (arg0)
+			id = "calendar:prompt-delete-named-memo";
+		else
+			id = "calendar:prompt-delete-memo";
+		break;
+
+	default:
+		g_message ("%s: Cannot handle object of type %d", G_STRFUNC, e_cal_component_get_vtype (comp));
+		g_free (arg0);
+		return FALSE;
+	}
+
+	dialog = e_alert_dialog_new_for_args (parent, id, arg0, NULL);
+
+	g_free (arg0);
+
+	if (ask_notice_comment) {
+		GtkWidget *scrolled_window;
+		GtkWidget *label;
+		GtkWidget *vbox;
+		GtkWidget *content_area;
+
+		content_area = e_alert_dialog_get_content_area (E_ALERT_DIALOG (dialog));
+		vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+		gtk_widget_show (vbox);
+		gtk_box_pack_start (GTK_BOX (content_area), vbox, TRUE, TRUE, 0);
+
+		label = gtk_label_new_with_mnemonic (_("Deletion _reason:"));
+		gtk_widget_set_halign (label, GTK_ALIGN_START);
+		gtk_widget_show (label);
+		gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
+
+		scrolled_window = gtk_scrolled_window_new (NULL, NULL);
+		gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolled_window), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+		gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolled_window), GTK_SHADOW_IN);
+		gtk_box_pack_start (GTK_BOX (vbox), scrolled_window, TRUE, TRUE, 0);
+		gtk_widget_show (scrolled_window);
+
+		textview = gtk_text_view_new ();
+		gtk_text_view_set_accepts_tab (GTK_TEXT_VIEW (textview), FALSE);
+		gtk_widget_show (textview);
+		gtk_container_add (GTK_CONTAINER (scrolled_window), textview);
+		gtk_label_set_mnemonic_widget (GTK_LABEL (label), textview);
+
+		e_spell_text_view_attach (GTK_TEXT_VIEW (textview));
+	}
+
+	result = gtk_dialog_run (GTK_DIALOG (dialog));
+
+	if (result == GTK_RESPONSE_APPLY && textview) {
+		GtkTextIter text_iter_start, text_iter_end;
+		GtkTextBuffer *text_buffer;
+		gchar *comment;
+
+		text_buffer = gtk_text_view_get_buffer (GTK_TEXT_VIEW (textview));
+		gtk_text_buffer_get_start_iter (text_buffer, &text_iter_start);
+		gtk_text_buffer_get_end_iter (text_buffer, &text_iter_end);
+
+		comment = gtk_text_buffer_get_text (text_buffer, &text_iter_start, &text_iter_end, FALSE);
+		if (comment && *comment) {
+			ECalComponentText *text;
+			GSList lst = { NULL, NULL };
+
+			text = e_cal_component_text_new (comment, NULL);
+			lst.data = text;
+
+			e_cal_component_set_comments (comp, &lst);
+			e_cal_component_text_free (text);
+		}
+		g_free (comment);
+	}
+
+	gtk_widget_destroy (dialog);
+
+	if (out_can_send_notice)
+		*out_can_send_notice = result == GTK_RESPONSE_APPLY;
+
+	return result == GTK_RESPONSE_YES || result == GTK_RESPONSE_APPLY;
+}
+
+/**
  * e_cal_dialogs_cancel_component:
+ * @parent: a parent #GtkWindow
+ * @cal_client: a calendar client for whitch the component is cancelled
+ * @comp: the #ECalComponent to be cancelled
+ * @can_set_cancel_comment: whether can set cancellation comment
+ * @organizer_is_user: whether the @comp organizer is the user
  *
  * Pops up a dialog box asking the user whether he wants to send a
- * cancel and delete an iTip/iMip message
+ * cancel notice as an iTip/iMip message.
+ *
+ * The @can_set_cancel_comment is used only if the @cal_client has
+ * the %E_CAL_STATIC_CAPABILITY_RETRACT_SUPPORTED capability, otherwise (or when %FALSE),
+ * ask only whether to send the cancellation mail or not. When the comment
+ * had been entered, the @comp has it set as a COMMENT property.
  *
  * Return value: TRUE if the user clicked Yes, FALSE otherwise.
  **/
@@ -73,12 +253,18 @@ gboolean
 e_cal_dialogs_cancel_component (GtkWindow *parent,
 				ECalClient *cal_client,
 				ECalComponent *comp,
-				gboolean deleting)
+				gboolean can_set_cancel_comment,
+				gboolean organizer_is_user)
 {
 	ECalComponentVType vtype;
+	GtkWidget *dialog, *textview = NULL;
+	gboolean res;
 	const gchar *id;
 
-	if (deleting && e_cal_client_check_save_schedules (cal_client))
+	if ((!can_set_cancel_comment || !e_client_check_capability (E_CLIENT (cal_client), E_CAL_STATIC_CAPABILITY_RETRACT_SUPPORTED)) &&
+	    e_cal_client_check_save_schedules (cal_client) &&
+	    (organizer_is_user ||
+	     !e_client_check_capability (E_CLIENT (cal_client), E_CAL_STATIC_CAPABILITY_ITIP_SUPPRESS_ON_REMOVE_SUPPORTED)))
 		return TRUE;
 
 	vtype = e_cal_component_get_vtype (comp);
@@ -89,24 +275,24 @@ e_cal_dialogs_cancel_component (GtkWindow *parent,
 			/* don't ask neither send notification to others on past events */
 			return FALSE;
 		}
-		if (deleting)
+		if (organizer_is_user)
 			id = "calendar:prompt-cancel-meeting";
 		else
-			id = "calendar:prompt-delete-meeting";
+			id = "calendar:prompt-cancel-meeting-attendee";
 		break;
 
 	case E_CAL_COMPONENT_TODO:
-		if (deleting)
+		if (organizer_is_user)
 			id = "calendar:prompt-cancel-task";
 		else
-			id = "calendar:prompt-delete-task";
+			id = "calendar:prompt-cancel-task-attendee";
 		break;
 
 	case E_CAL_COMPONENT_JOURNAL:
-		if (deleting)
+		if (organizer_is_user)
 			id = "calendar:prompt-cancel-memo";
 		else
-			id = "calendar:prompt-delete-memo";
+			id = "calendar:prompt-cancel-memo-attendee";
 		break;
 
 	default:
@@ -114,10 +300,68 @@ e_cal_dialogs_cancel_component (GtkWindow *parent,
 		return FALSE;
 	}
 
-	if (e_alert_run_dialog_for_args (parent, id, NULL) == GTK_RESPONSE_YES)
-		return TRUE;
-	else
-		return FALSE;
+	dialog = e_alert_dialog_new_for_args (parent, id, NULL);
+
+	if (can_set_cancel_comment && organizer_is_user && (!e_cal_client_check_save_schedules (cal_client) ||
+	    e_client_check_capability (E_CLIENT (cal_client), E_CAL_STATIC_CAPABILITY_RETRACT_SUPPORTED))) {
+		GtkWidget *scrolled_window;
+		GtkWidget *label;
+		GtkWidget *vbox;
+		GtkWidget *content_area;
+
+		content_area = e_alert_dialog_get_content_area (E_ALERT_DIALOG (dialog));
+		vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+		gtk_widget_show (vbox);
+		gtk_box_pack_start (GTK_BOX (content_area), vbox, TRUE, TRUE, 0);
+
+		label = gtk_label_new_with_mnemonic (_("Cancellation _reason:"));
+		gtk_widget_set_halign (label, GTK_ALIGN_START);
+		gtk_widget_show (label);
+		gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
+
+		scrolled_window = gtk_scrolled_window_new (NULL, NULL);
+		gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolled_window), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+		gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (scrolled_window), GTK_SHADOW_IN);
+		gtk_box_pack_start (GTK_BOX (vbox), scrolled_window, TRUE, TRUE, 0);
+		gtk_widget_show (scrolled_window);
+
+		textview = gtk_text_view_new ();
+		gtk_text_view_set_accepts_tab (GTK_TEXT_VIEW (textview), FALSE);
+		gtk_widget_show (textview);
+		gtk_container_add (GTK_CONTAINER (scrolled_window), textview);
+		gtk_label_set_mnemonic_widget (GTK_LABEL (label), textview);
+
+		e_spell_text_view_attach (GTK_TEXT_VIEW (textview));
+	}
+
+	res = gtk_dialog_run (GTK_DIALOG (dialog)) == GTK_RESPONSE_YES;
+
+	if (res && can_set_cancel_comment && textview) {
+		GtkTextIter text_iter_start, text_iter_end;
+		GtkTextBuffer *text_buffer;
+		gchar *comment;
+
+		text_buffer = gtk_text_view_get_buffer (GTK_TEXT_VIEW (textview));
+		gtk_text_buffer_get_start_iter (text_buffer, &text_iter_start);
+		gtk_text_buffer_get_end_iter (text_buffer, &text_iter_end);
+
+		comment = gtk_text_buffer_get_text (text_buffer, &text_iter_start, &text_iter_end, FALSE);
+		if (comment && *comment) {
+			ECalComponentText *text;
+			GSList lst = { NULL, NULL };
+
+			text = e_cal_component_text_new (comment, NULL);
+			lst.data = text;
+
+			e_cal_component_set_comments (comp, &lst);
+			e_cal_component_text_free (text);
+		}
+		g_free (comment);
+	}
+
+	gtk_widget_destroy (dialog);
+
+	return res;
 }
 
 typedef struct {
@@ -199,14 +443,16 @@ copy_source_thread (EAlertSinkThreadJobData *job_data,
 	if (!csd)
 		goto out;
 
-	client = e_util_open_client_sync (job_data, e_cal_model_get_client_cache (csd->model), csd->extension_name, csd->from_source, 30, cancellable, error);
+	client = e_util_open_client_sync (job_data, e_cal_model_get_client_cache (csd->model), csd->extension_name,
+		csd->from_source, E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, cancellable, error);
 	if (client)
 		from_client = E_CAL_CLIENT (client);
 
 	if (!from_client)
 		goto out;
 
-	client = e_util_open_client_sync (job_data, e_cal_model_get_client_cache (csd->model), csd->extension_name, csd->to_source, 30, cancellable, error);
+	client = e_util_open_client_sync (job_data, e_cal_model_get_client_cache (csd->model), csd->extension_name,
+		csd->to_source, E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, cancellable, error);
 	if (client)
 		to_client = E_CAL_CLIENT (client);
 
@@ -394,7 +640,7 @@ e_cal_dialogs_delete_component (ECalComponent *comp,
 		if (!consider_as_untitled) {
 			ECalComponentText *summary;
 
-			summary = e_cal_component_get_summary (comp);
+			summary = e_cal_component_dup_summary_for_locale (comp, NULL);
 			if (summary) {
 				arg0 = g_strdup (e_cal_component_text_get_value (summary));
 				e_cal_component_text_free (summary);
@@ -592,7 +838,7 @@ typedef struct {
 	time_t *out_exact_date;
 } GoToDialog;
 
-static GoToDialog *dlg = NULL;
+static GoToDialog *glob_dlg = NULL;
 
 /* Callback used when the year adjustment is changed */
 static void
@@ -765,7 +1011,7 @@ e_cal_dialogs_goto_run (GtkWindow *parent,
 	GtkAdjustment *adj;
 	gint response;
 
-	if (dlg) {
+	if (glob_dlg) {
 		return FALSE;
 	}
 
@@ -773,76 +1019,76 @@ e_cal_dialogs_goto_run (GtkWindow *parent,
 	g_return_val_if_fail (out_move_type != NULL, FALSE);
 	g_return_val_if_fail (out_exact_date != NULL, FALSE);
 
-	dlg = g_new0 (GoToDialog, 1);
+	glob_dlg = g_new0 (GoToDialog, 1);
 
-	goto_dialog_create_widgets (dlg, parent);
+	goto_dialog_create_widgets (glob_dlg, parent);
 
-	dlg->data_model = e_cal_data_model_new_clone (data_model);
-	dlg->out_move_type = out_move_type;
-	dlg->out_exact_date = out_exact_date;
+	glob_dlg->data_model = e_cal_data_model_new_clone (data_model);
+	glob_dlg->out_move_type = out_move_type;
+	glob_dlg->out_exact_date = out_exact_date;
 
 	if (from_date) {
-		dlg->year_val = g_date_get_year (from_date);
-		dlg->month_val = g_date_get_month (from_date) - 1;
-		dlg->day_val = g_date_get_day (from_date);
+		glob_dlg->year_val = g_date_get_year (from_date);
+		glob_dlg->month_val = g_date_get_month (from_date) - 1;
+		glob_dlg->day_val = g_date_get_day (from_date);
 	} else {
 		ICalTime *tt;
 		ICalTimezone *timezone;
 
-		timezone = e_cal_data_model_get_timezone (dlg->data_model);
+		timezone = e_cal_data_model_get_timezone (glob_dlg->data_model);
 		tt = i_cal_time_new_current_with_zone (timezone);
 
-		dlg->year_val = i_cal_time_get_year (tt);
-		dlg->month_val = i_cal_time_get_month (tt) - 1;
-		dlg->day_val = i_cal_time_get_day (tt);
+		glob_dlg->year_val = i_cal_time_get_year (tt);
+		glob_dlg->month_val = i_cal_time_get_month (tt) - 1;
+		glob_dlg->day_val = i_cal_time_get_day (tt);
 
 		g_clear_object (&tt);
 	}
 
 	g_signal_connect (
-		dlg->month_combobox, "changed",
-		G_CALLBACK (month_changed), dlg);
+		glob_dlg->month_combobox, "changed",
+		G_CALLBACK (month_changed), glob_dlg);
 
-	adj = gtk_spin_button_get_adjustment (GTK_SPIN_BUTTON (dlg->year));
+	adj = gtk_spin_button_get_adjustment (GTK_SPIN_BUTTON (glob_dlg->year));
 	g_signal_connect (
 		adj, "value_changed",
-		G_CALLBACK (year_changed), dlg);
+		G_CALLBACK (year_changed), glob_dlg);
 
 	g_signal_connect (
-		e_calendar_get_item (dlg->ecal), "selection_changed",
-		G_CALLBACK (ecal_event), dlg);
+		e_calendar_get_item (glob_dlg->ecal), "selection_changed",
+		G_CALLBACK (ecal_event), glob_dlg);
 
-	gtk_combo_box_set_active (GTK_COMBO_BOX (dlg->month_combobox), dlg->month_val);
-	gtk_spin_button_set_value (GTK_SPIN_BUTTON (dlg->year), dlg->year_val);
+	gtk_combo_box_set_active (GTK_COMBO_BOX (glob_dlg->month_combobox), glob_dlg->month_val);
+	gtk_spin_button_set_value (GTK_SPIN_BUTTON (glob_dlg->year), glob_dlg->year_val);
 
-	gtk_window_set_transient_for (GTK_WINDOW (dlg->dialog), parent);
+	gtk_window_set_transient_for (GTK_WINDOW (glob_dlg->dialog), parent);
 
 	/* set initial selection to current day */
 
-	e_calendar_get_item (dlg->ecal)->selection_set = TRUE;
-	e_calendar_get_item (dlg->ecal)->selection_start_month_offset = 0;
-	e_calendar_get_item (dlg->ecal)->selection_start_day = dlg->day_val;
-	e_calendar_get_item (dlg->ecal)->selection_end_month_offset = 0;
-	e_calendar_get_item (dlg->ecal)->selection_end_day = dlg->day_val;
+	e_calendar_get_item (glob_dlg->ecal)->selection_set = TRUE;
+	e_calendar_get_item (glob_dlg->ecal)->selection_start_month_offset = 0;
+	e_calendar_get_item (glob_dlg->ecal)->selection_start_day = glob_dlg->day_val;
+	e_calendar_get_item (glob_dlg->ecal)->selection_end_month_offset = 0;
+	e_calendar_get_item (glob_dlg->ecal)->selection_end_day = glob_dlg->day_val;
 
-	gnome_canvas_item_grab_focus (GNOME_CANVAS_ITEM (e_calendar_get_item (dlg->ecal)));
+	gnome_canvas_item_grab_focus (GNOME_CANVAS_ITEM (e_calendar_get_item (glob_dlg->ecal)));
 
-	e_tag_calendar_subscribe (dlg->tag_calendar, dlg->data_model);
+	e_tag_calendar_subscribe (glob_dlg->tag_calendar, glob_dlg->data_model);
 
-	response = gtk_dialog_run (GTK_DIALOG (dlg->dialog));
+	response = gtk_dialog_run (GTK_DIALOG (glob_dlg->dialog));
 
-	e_tag_calendar_unsubscribe (dlg->tag_calendar, dlg->data_model);
+	e_tag_calendar_unsubscribe (glob_dlg->tag_calendar, glob_dlg->data_model);
 
-	gtk_widget_destroy (dlg->dialog);
+	gtk_widget_destroy (glob_dlg->dialog);
 
 	if (response == GTK_RESPONSE_ACCEPT)
-		*(dlg->out_move_type) = E_CALENDAR_VIEW_MOVE_TO_TODAY;
+		*(glob_dlg->out_move_type) = E_CALENDAR_VIEW_MOVE_TO_TODAY;
 
-	g_clear_object (&dlg->tag_calendar);
-	g_clear_object (&dlg->data_model);
+	g_clear_object (&glob_dlg->tag_calendar);
+	g_clear_object (&glob_dlg->data_model);
 
-	g_free (dlg);
-	dlg = NULL;
+	g_free (glob_dlg);
+	glob_dlg = NULL;
 
 	return response == GTK_RESPONSE_ACCEPT || response == GTK_RESPONSE_APPLY;
 }
@@ -862,6 +1108,17 @@ e_cal_dialogs_recur_component (ECalClient *client,
 	gboolean ret;
 
 	g_return_val_if_fail (E_IS_CAL_COMPONENT (comp), FALSE);
+
+	if (!e_cal_component_is_instance (comp)) {
+		*mod = E_CAL_OBJ_MOD_ALL;
+		return TRUE;
+	}
+
+	/* It's a detached instance, modify only that one */
+	if (!e_cal_component_has_recurrences (comp)) {
+		*mod = E_CAL_OBJ_MOD_THIS;
+		return TRUE;
+	}
 
 	vtype = e_cal_component_get_vtype (comp);
 
@@ -1093,7 +1350,7 @@ add_checkbox (GtkBox *where,
 /**
  * e_cal_dialogs_send_component:
  *
- * Pops up a dialog box asking the user whether he wants to send a
+ * Pops up a dialog box asking the user whether he wants to send an
  * iTip/iMip message
  *
  * Return value: TRUE if the user clicked Yes, FALSE otherwise.
@@ -1107,6 +1364,7 @@ e_cal_dialogs_send_component (GtkWindow *parent,
 			      gboolean *only_new_attendees)
 {
 	ECalComponentVType vtype;
+	GSettings *settings = NULL;
 	const gchar *id;
 	GtkWidget *dialog, *sa_checkbox = NULL, *ona_checkbox = NULL;
 	GtkWidget *content_area;
@@ -1167,19 +1425,26 @@ e_cal_dialogs_send_component (GtkWindow *parent,
 	dialog = e_alert_dialog_new_for_args (parent, id, NULL);
 	content_area = e_alert_dialog_get_content_area (E_ALERT_DIALOG (dialog));
 
-	if (strip_alarms)
+	if (strip_alarms) {
 		sa_checkbox = add_checkbox (GTK_BOX (content_area), _("Send my reminders with this event"));
+		settings = e_util_ref_settings ("org.gnome.evolution.calendar");
+		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (sa_checkbox), g_settings_get_boolean (settings, "send-reminder-with-event"));
+	}
 	if (only_new_attendees)
 		ona_checkbox = add_checkbox (GTK_BOX (content_area), _("Notify new attendees _only"));
 
 	res = gtk_dialog_run (GTK_DIALOG (dialog)) == GTK_RESPONSE_YES;
 
-	if (res && strip_alarms)
-		*strip_alarms = !gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (sa_checkbox));
+	if (res && strip_alarms) {
+		gboolean send_alarms = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (sa_checkbox));
+		g_settings_set_boolean (settings, "send-reminder-with-event", send_alarms);
+		*strip_alarms = !send_alarms;
+	}
 	if (only_new_attendees)
 		*only_new_attendees = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (ona_checkbox));
 
 	gtk_widget_destroy (GTK_WIDGET (dialog));
+	g_clear_object (&settings);
 
 	return res;
 }
@@ -1187,7 +1452,7 @@ e_cal_dialogs_send_component (GtkWindow *parent,
 /**
  * e_cal_dialogs_send_dragged_or_resized_component:
  *
- * Pops up a dialog box asking the user whether he wants to send a
+ * Pops up a dialog box asking the user whether he wants to send an
  * iTip/iMip message or cancel the drag/resize operations
  *
  * Return value: GTK_RESPONSE_YES if the user clicked Yes,
@@ -1202,6 +1467,7 @@ e_cal_dialogs_send_dragged_or_resized_component (GtkWindow *parent,
 						 gboolean *only_new_attendees)
 {
 	ECalComponentVType vtype;
+	GSettings *settings = NULL;
 	const gchar *id;
 	GtkWidget *dialog, *sa_checkbox = NULL, *ona_checkbox = NULL;
 	GtkWidget *content_area;
@@ -1249,8 +1515,11 @@ e_cal_dialogs_send_dragged_or_resized_component (GtkWindow *parent,
 	dialog = e_alert_dialog_new_for_args (parent, id, NULL);
 	content_area = e_alert_dialog_get_content_area (E_ALERT_DIALOG (dialog));
 
-	if (strip_alarms)
+	if (strip_alarms) {
 		sa_checkbox = add_checkbox (GTK_BOX (content_area), _("Send my reminders with this event"));
+		settings = e_util_ref_settings ("org.gnome.evolution.calendar");
+		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (sa_checkbox), g_settings_get_boolean (settings, "send-reminder-with-event"));
+	}
 	if (only_new_attendees)
 		ona_checkbox = add_checkbox (GTK_BOX (content_area), _("Notify new attendees _only"));
 
@@ -1263,12 +1532,16 @@ e_cal_dialogs_send_dragged_or_resized_component (GtkWindow *parent,
 	if (res == GTK_RESPONSE_DELETE_EVENT)
 		res = GTK_RESPONSE_CANCEL;
 
-	if (res == GTK_RESPONSE_YES && strip_alarms)
-		*strip_alarms = !gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (sa_checkbox));
+	if (res == GTK_RESPONSE_YES && strip_alarms) {
+		gboolean send_alarms = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (sa_checkbox));
+		g_settings_set_boolean (settings, "send-reminder-with-event", send_alarms);
+		*strip_alarms = !send_alarms;
+	}
 	if (only_new_attendees)
 		*only_new_attendees = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (ona_checkbox));
 
 	gtk_widget_destroy (GTK_WIDGET (dialog));
+	g_clear_object (&settings);
 
 	return res;
 }
@@ -1303,4 +1576,36 @@ e_cal_dialogs_send_component_prompt_subject (GtkWindow *parent,
 		return TRUE;
 	else
 		return FALSE;
+}
+
+gboolean
+e_cal_dialogs_detach_and_copy (GtkWindow *parent,
+			       ICalComponent *component)
+{
+	ICalComponentKind kind;
+	gchar *summary;
+	const gchar *id;
+	gboolean res;
+
+	kind = i_cal_component_isa (component);
+
+	switch (kind) {
+	case I_CAL_VEVENT_COMPONENT:
+		id = "calendar:prompt-detach-copy-event";
+		break;
+
+	case I_CAL_VTODO_COMPONENT:
+	case I_CAL_VJOURNAL_COMPONENT:
+		return TRUE;
+
+	default:
+		g_message ("%s: Cannot handle object of type %d", G_STRFUNC, kind);
+		return FALSE;
+	}
+
+	summary = e_calendar_view_dup_component_summary (component);
+	res = e_alert_run_dialog_for_args (parent, id, summary, NULL) == GTK_RESPONSE_YES;
+	g_free (summary);
+
+	return res;
 }

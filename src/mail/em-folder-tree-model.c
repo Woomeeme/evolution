@@ -42,10 +42,6 @@
 
 #include "em-folder-tree-model.h"
 
-#define EM_FOLDER_TREE_MODEL_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), EM_TYPE_FOLDER_TREE_MODEL, EMFolderTreeModelPrivate))
-
 /* See GtkCellRendererSpinner:pulse property.
  * Animation cycles over 12 frames in 750 ms. */
 #define SPINNER_PULSE_INTERVAL (750 / 12)
@@ -117,6 +113,8 @@ enum {
 enum {
 	LOADING_ROW,
 	LOADED_ROW,
+	FOLDER_CUSTOM_ICON,
+	COMPARE_FOLDERS,
 	LAST_SIGNAL
 };
 
@@ -152,7 +150,9 @@ static void	folder_tree_model_status_notify_cb
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE (EMFolderTreeModel, em_folder_tree_model, GTK_TYPE_TREE_STORE)
+G_DEFINE_TYPE_WITH_CODE (EMFolderTreeModel, em_folder_tree_model, GTK_TYPE_TREE_STORE,
+	G_ADD_PRIVATE (EMFolderTreeModel)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 static StoreInfo *
 store_info_ref (StoreInfo *si)
@@ -470,6 +470,9 @@ folder_tree_model_sort (GtkTreeModel *model,
 			rv = 1;
 	}
 
+	if (rv == -2 && !a_is_store && !b_is_store)
+		g_signal_emit (model, signals[COMPARE_FOLDERS], 0, store_uid, a, b, &rv);
+
 	if (rv == -2) {
 		if (aname != NULL && bname != NULL)
 			rv = g_utf8_collate (aname, bname);
@@ -684,8 +687,7 @@ folder_tree_model_get_special_folders_uri (ESourceRegistry *registry,
 
 		extension = e_source_get_extension (source, extension_name);
 
-		if (e_source_mail_submission_get_use_sent_folder (extension))
-			*sent_folder_uri = e_source_mail_submission_dup_sent_folder (extension);
+		*sent_folder_uri = e_source_mail_submission_dup_sent_folder (extension);
 	}
 
 	g_object_unref (source);
@@ -781,7 +783,7 @@ em_folder_tree_model_get_icon_name_for_folder_uri (EMFolderTreeModel *model,
 		if (folder_is_drafts)
 			icon_name = "accessories-text-editor";
 		else if (folder_is_templates)
-			icon_name = "text-x-generic-template";
+			icon_name = "folder-templates";
 		else if (folder_is_archive)
 			icon_name = "mail-archive";
 	}
@@ -847,6 +849,9 @@ em_folder_tree_model_update_folder_icon (EMFolderTreeModel *model,
 		e_event_emit (
 			(EEvent *) em_event_peek (), "folder.customicon",
 			(EEventTarget *) target);
+
+		g_signal_emit (model, signals[FOLDER_CUSTOM_ICON], 0,
+			&iter, store, full_name);
 	}
 
 	g_clear_object (&store);
@@ -928,38 +933,34 @@ folder_tree_model_get_property (GObject *object,
 static void
 folder_tree_model_dispose (GObject *object)
 {
-	EMFolderTreeModelPrivate *priv;
+	EMFolderTreeModel *self = EM_FOLDER_TREE_MODEL (object);
 
-	priv = EM_FOLDER_TREE_MODEL_GET_PRIVATE (object);
-
-	if (priv->selection != NULL) {
+	if (self->priv->selection != NULL) {
 		g_object_weak_unref (
-			G_OBJECT (priv->selection), (GWeakNotify)
+			G_OBJECT (self->priv->selection), (GWeakNotify)
 			folder_tree_model_selection_finalized_cb, object);
-		priv->selection = NULL;
+		self->priv->selection = NULL;
 	}
 
-	if (priv->session != NULL) {
+	if (self->priv->session != NULL) {
 		MailFolderCache *folder_cache;
 
-		folder_cache = e_mail_session_get_folder_cache (priv->session);
+		folder_cache = e_mail_session_get_folder_cache (self->priv->session);
 		g_signal_handlers_disconnect_by_data (folder_cache, object);
 
-		g_signal_handlers_disconnect_by_data (priv->session, object);
+		g_signal_handlers_disconnect_by_data (self->priv->session, object);
 
-		g_object_unref (priv->session);
-		priv->session = NULL;
+		g_clear_object (&self->priv->session);
 	}
 
-	if (priv->account_store != NULL) {
+	if (self->priv->account_store != NULL) {
 		g_signal_handlers_disconnect_matched (
-			priv->account_store, G_SIGNAL_MATCH_DATA,
+			self->priv->account_store, G_SIGNAL_MATCH_DATA,
 			0, 0, NULL, NULL, object);
-		g_object_unref (priv->account_store);
-		priv->account_store = NULL;
+		g_clear_object (&self->priv->account_store);
 	}
 
-	g_signal_handlers_disconnect_by_func (priv->folder_tweaks,
+	g_signal_handlers_disconnect_by_func (self->priv->folder_tweaks,
 		em_folder_tree_model_folder_tweaks_changed_cb, object);
 
 	/* Chain up to parent's dispose() method. */
@@ -969,13 +970,11 @@ folder_tree_model_dispose (GObject *object)
 static void
 folder_tree_model_finalize (GObject *object)
 {
-	EMFolderTreeModelPrivate *priv;
+	EMFolderTreeModel *self = EM_FOLDER_TREE_MODEL (object);
 
-	priv = EM_FOLDER_TREE_MODEL_GET_PRIVATE (object);
-
-	g_hash_table_destroy (priv->store_index);
-	g_mutex_clear (&priv->store_index_lock);
-	g_clear_object (&priv->folder_tweaks);
+	g_hash_table_destroy (self->priv->store_index);
+	g_mutex_clear (&self->priv->store_index_lock);
+	g_clear_object (&self->priv->folder_tweaks);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (em_folder_tree_model_parent_class)->finalize (object);
@@ -1021,14 +1020,14 @@ folder_tree_model_constructed (GObject *object)
 
 	/* Chain up to parent's constructed() method. */
 	G_OBJECT_CLASS (em_folder_tree_model_parent_class)->constructed (object);
+
+	e_extensible_load_extensions (E_EXTENSIBLE (object));
 }
 
 static void
 em_folder_tree_model_class_init (EMFolderTreeModelClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EMFolderTreeModelPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = folder_tree_model_set_property;
@@ -1076,6 +1075,29 @@ em_folder_tree_model_class_init (EMFolderTreeModelClass *class)
 		NULL, NULL,
 		e_marshal_VOID__POINTER_POINTER,
 		G_TYPE_NONE, 2,
+		G_TYPE_POINTER,
+		G_TYPE_POINTER);
+
+	signals[FOLDER_CUSTOM_ICON] = g_signal_new (
+		"folder-custom-icon",
+		G_OBJECT_CLASS_TYPE (object_class),
+		G_SIGNAL_RUN_FIRST,
+		G_STRUCT_OFFSET (EMFolderTreeModelClass, folder_custom_icon),
+		NULL, NULL, NULL,
+		G_TYPE_NONE, 3,
+		G_TYPE_POINTER,
+		CAMEL_TYPE_STORE,
+		G_TYPE_STRING);
+
+	/* Return -2 for "default sort order", otherwise expects only -1, 0 or 1. */
+	signals[COMPARE_FOLDERS] = g_signal_new (
+		"compare-folders",
+		G_OBJECT_CLASS_TYPE (object_class),
+		G_SIGNAL_RUN_FIRST,
+		G_STRUCT_OFFSET (EMFolderTreeModelClass, compare_folders),
+		NULL, NULL, NULL,
+		G_TYPE_INT, 3,
+		G_TYPE_STRING,
 		G_TYPE_POINTER,
 		G_TYPE_POINTER);
 }
@@ -1209,7 +1231,7 @@ em_folder_tree_model_init (EMFolderTreeModel *model)
 		(GDestroyNotify) NULL,
 		(GDestroyNotify) store_info_dispose);
 
-	model->priv = EM_FOLDER_TREE_MODEL_GET_PRIVATE (model);
+	model->priv = em_folder_tree_model_get_instance_private (model);
 	model->priv->store_index = store_index;
 	model->priv->folder_tweaks = e_mail_folder_tweaks_new ();
 
@@ -1507,20 +1529,26 @@ em_folder_tree_model_set_folder_info (EMFolderTreeModel *model,
 			flags = (flags & ~CAMEL_FOLDER_TYPE_MASK) |
 				CAMEL_FOLDER_TYPE_INBOX;
 			display_name = _("Inbox");
+			folder_is_drafts = FALSE;
+			folder_is_sent = FALSE;
 		} else if (strcmp (fi->full_name, "Outbox") == 0) {
 			flags = (flags & ~CAMEL_FOLDER_TYPE_MASK) |
 				CAMEL_FOLDER_TYPE_OUTBOX;
 			display_name = _("Outbox");
+			folder_is_drafts = FALSE;
+			folder_is_sent = FALSE;
 		} else if (strcmp (fi->full_name, "Sent") == 0) {
 			folder_is_sent = TRUE;
 			display_name = _("Sent");
 		}
 	}
 
-	if (folder_is_drafts)
-		flags = (flags & ~CAMEL_FOLDER_TYPE_MASK) | CAMEL_FOLDER_TYPE_DRAFTS;
-	if (folder_is_sent)
-		flags = (flags & ~CAMEL_FOLDER_TYPE_MASK) | CAMEL_FOLDER_TYPE_SENT;
+	if ((flags & CAMEL_FOLDER_TYPE_MASK) != CAMEL_FOLDER_TYPE_INBOX) {
+		if (folder_is_drafts)
+			flags = (flags & ~CAMEL_FOLDER_TYPE_MASK) | CAMEL_FOLDER_TYPE_DRAFTS;
+		if (folder_is_sent)
+			flags = (flags & ~CAMEL_FOLDER_TYPE_MASK) | CAMEL_FOLDER_TYPE_SENT;
+	}
 
 	/* Choose an icon name for the folder. */
 	icon_name = em_folder_tree_model_get_icon_name_for_folder_uri (model, uri, store, fi->full_name, &flags);
@@ -1573,6 +1601,9 @@ em_folder_tree_model_set_folder_info (EMFolderTreeModel *model,
 	e_event_emit (
 		(EEvent *) em_event_peek (), "folder.customicon",
 		(EEventTarget *) target);
+
+	g_signal_emit (model, signals[FOLDER_CUSTOM_ICON], 0,
+		iter, store, fi->full_name);
 
 	if (unread != ~0)
 		gtk_tree_store_set (
@@ -2282,4 +2313,46 @@ em_folder_tree_model_update_row_tweaks (EMFolderTreeModel *model,
 	g_clear_object (&custom_icon);
 	g_free (icon_filename);
 	g_free (folder_uri);
+}
+
+void
+em_folder_tree_model_update_folder_icons_for_store (EMFolderTreeModel *model,
+						    CamelStore *store)
+{
+	GtkTreeModel *tree_model;
+	GHashTableIter iter;
+	gpointer value;
+	StoreInfo *si;
+
+	g_return_if_fail (EM_IS_FOLDER_TREE_MODEL (model));
+	g_return_if_fail (CAMEL_IS_STORE (store));
+
+	si = folder_tree_model_store_index_lookup (model, store);
+	if (!si)
+		return;
+
+	tree_model = GTK_TREE_MODEL (model);
+
+	g_hash_table_iter_init (&iter, si->full_hash);
+
+	while (g_hash_table_iter_next (&iter, NULL, &value)) {
+		GtkTreeRowReference *row = value;
+
+		if (gtk_tree_row_reference_valid (row)) {
+			gchar *folder_uri = NULL;
+			GtkTreePath *path;
+			GtkTreeIter titer;
+
+			path = gtk_tree_row_reference_get_path (row);
+			gtk_tree_model_get_iter (tree_model, &titer, path);
+			gtk_tree_path_free (path);
+
+			gtk_tree_model_get (tree_model, &titer, COL_STRING_FOLDER_URI, &folder_uri, -1);
+			if (folder_uri)
+				em_folder_tree_model_update_folder_icon (model, folder_uri);
+			g_free (folder_uri);
+		}
+	}
+
+	store_info_unref (si);
 }

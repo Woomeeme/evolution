@@ -79,6 +79,10 @@ void		e_search_bar_set_case_sensitive	(ESearchBar *search_bar,
 gchar *		e_search_bar_get_text		(ESearchBar *search_bar);
 void		e_search_bar_set_text		(ESearchBar *search_bar,
 						 const gchar *text);
+gboolean	e_search_bar_get_can_hide	(ESearchBar *search_bar);
+void		e_search_bar_set_can_hide	(ESearchBar *search_bar,
+						 gboolean can_hide);
+void		e_search_bar_focus_entry	(ESearchBar *search_bar);
 
 G_END_DECLS
 

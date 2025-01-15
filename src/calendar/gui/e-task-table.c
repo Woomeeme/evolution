@@ -42,13 +42,10 @@
 #include "e-cal-ops.h"
 #include "e-calendar-view.h"
 #include "e-cell-date-edit-text.h"
+#include "e-cell-estimated-duration.h"
 #include "itip-utils.h"
 #include "print.h"
 #include "misc.h"
-
-#define E_TASK_TABLE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_TASK_TABLE, ETaskTablePrivate))
 
 struct _ETaskTablePrivate {
 	gpointer shell_view;  /* weak pointer */
@@ -97,13 +94,9 @@ static const gchar *icon_names[] = {
 static void	e_task_table_selectable_init
 					(ESelectableInterface *iface);
 
-G_DEFINE_TYPE_WITH_CODE (
-	ETaskTable,
-	e_task_table,
-	E_TYPE_TABLE,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_SELECTABLE,
-		e_task_table_selectable_init))
+G_DEFINE_TYPE_WITH_CODE (ETaskTable, e_task_table, E_TYPE_TABLE,
+	G_ADD_PRIVATE (ETaskTable)
+	G_IMPLEMENT_INTERFACE (E_TYPE_SELECTABLE, e_task_table_selectable_init))
 
 static void
 task_table_emit_open_component (ETaskTable *task_table,
@@ -302,36 +295,32 @@ task_table_get_property (GObject *object,
 static void
 task_table_dispose (GObject *object)
 {
-	ETaskTablePrivate *priv;
+	ETaskTable *self = E_TASK_TABLE (object);
 
-	priv = E_TASK_TABLE_GET_PRIVATE (object);
-
-	if (priv->completed_cancellable) {
-		g_cancellable_cancel (priv->completed_cancellable);
-		g_object_unref (priv->completed_cancellable);
-		priv->completed_cancellable = NULL;
+	if (self->priv->completed_cancellable) {
+		g_cancellable_cancel (self->priv->completed_cancellable);
+		g_clear_object (&self->priv->completed_cancellable);
 	}
 
-	if (priv->shell_view != NULL) {
+	if (self->priv->shell_view != NULL) {
 		g_object_remove_weak_pointer (
-			G_OBJECT (priv->shell_view), &priv->shell_view);
-		priv->shell_view = NULL;
+			G_OBJECT (self->priv->shell_view), &self->priv->shell_view);
+		self->priv->shell_view = NULL;
 	}
 
-	if (priv->model != NULL) {
-		g_signal_handlers_disconnect_by_data (priv->model, object);
+	if (self->priv->model != NULL) {
+		g_signal_handlers_disconnect_by_data (self->priv->model, object);
 
-		e_signal_disconnect_notify_handler (priv->model, &priv->notify_highlight_due_today_id);
-		e_signal_disconnect_notify_handler (priv->model, &priv->notify_color_due_today_id);
-		e_signal_disconnect_notify_handler (priv->model, &priv->notify_highlight_overdue_id);
-		e_signal_disconnect_notify_handler (priv->model, &priv->notify_color_overdue_id);
+		e_signal_disconnect_notify_handler (self->priv->model, &self->priv->notify_highlight_due_today_id);
+		e_signal_disconnect_notify_handler (self->priv->model, &self->priv->notify_color_due_today_id);
+		e_signal_disconnect_notify_handler (self->priv->model, &self->priv->notify_highlight_overdue_id);
+		e_signal_disconnect_notify_handler (self->priv->model, &self->priv->notify_color_overdue_id);
 
-		g_object_unref (priv->model);
-		priv->model = NULL;
+		g_clear_object (&self->priv->model);
 	}
 
-	g_clear_pointer (&priv->copy_target_list, gtk_target_list_unref);
-	g_clear_pointer (&priv->paste_target_list, gtk_target_list_unref);
+	g_clear_pointer (&self->priv->copy_target_list, gtk_target_list_unref);
+	g_clear_pointer (&self->priv->paste_target_list, gtk_target_list_unref);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_task_table_parent_class)->dispose (object);
@@ -415,6 +404,16 @@ task_table_constructed (GObject *object)
 	e_cell_date_edit_set_get_time_callback (
 		E_CELL_DATE_EDIT (popup_cell),
 		e_task_table_get_current_time, task_table, NULL);
+
+	cell = e_cell_estimated_duration_new (NULL, GTK_JUSTIFY_LEFT);
+	g_object_set (
+		cell,
+		"strikeout_column", E_CAL_MODEL_TASKS_FIELD_STRIKEOUT,
+		"bold_column", E_CAL_MODEL_TASKS_FIELD_OVERDUE,
+		"bg_color_column", E_CAL_MODEL_FIELD_COLOR,
+		NULL);
+	e_table_extras_add_cell (extras, "estimatedduration", cell);
+	g_object_unref (cell);
 
 	/*
 	 * Combo fields.
@@ -643,18 +642,9 @@ task_table_query_tooltip (GtkWidget *widget,
 	ECalModel *model;
 	ECalModelComponent *comp_data;
 	gint row = -1, col = -1, row_y = -1, row_height = -1;
-	GtkWidget *box, *l, *w;
-	GdkRGBA sel_bg, sel_fg, norm_bg, norm_text;
-	gchar *tmp, *summary, *str;
-	GString *tmp2;
+	gchar *markup;
 	ECalComponent *new_comp;
-	ECalComponentOrganizer *organizer;
-	ECalComponentDateTime *dtstart, *dtdue;
-	ICalTimezone *zone, *default_zone;
-	GSList *desc, *p;
-	gint len;
 	ESelectionModel *esm;
-	struct tm tmp_tm;
 
 	if (keyboard_mode)
 		return FALSE;
@@ -681,226 +671,13 @@ task_table_query_tooltip (GtkWidget *widget,
 	if (!new_comp)
 		return FALSE;
 
-	e_utils_get_theme_color (widget, "theme_selected_bg_color", E_UTILS_DEFAULT_THEME_SELECTED_BG_COLOR, &sel_bg);
-	e_utils_get_theme_color (widget, "theme_selected_fg_color", E_UTILS_DEFAULT_THEME_SELECTED_FG_COLOR, &sel_fg);
-	e_utils_get_theme_color (widget, "theme_bg_color", E_UTILS_DEFAULT_THEME_BG_COLOR, &norm_bg);
-	e_utils_get_theme_color (widget, "theme_text_color,theme_fg_color", E_UTILS_DEFAULT_THEME_TEXT_COLOR, &norm_text);
+	markup = cal_comp_util_dup_tooltip (new_comp, comp_data->client,
+		e_cal_model_get_registry (model),
+		e_cal_model_get_timezone (model));
 
-	box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	gtk_tooltip_set_markup (tooltip, markup);
 
-	summary = e_calendar_view_dup_component_summary (comp_data->icalcomp);
-	if (!(summary && *summary)) {
-		g_free (summary);
-		summary = g_strdup (_("* No Summary *"));
-	}
-
-	l = gtk_label_new (NULL);
-	tmp = g_markup_printf_escaped ("<b>%s</b>", summary);
-	gtk_label_set_line_wrap (GTK_LABEL (l), TRUE);
-	gtk_label_set_width_chars (GTK_LABEL (l), 20);
-	gtk_label_set_markup (GTK_LABEL (l), tmp);
-	gtk_misc_set_alignment (GTK_MISC (l), 0.0, 0.5);
-	w = gtk_event_box_new ();
-
-	gtk_widget_override_background_color (w, GTK_STATE_FLAG_NORMAL, &sel_bg);
-	gtk_widget_override_color (l, GTK_STATE_FLAG_NORMAL, &sel_fg);
-	gtk_container_add (GTK_CONTAINER (w), l);
-	gtk_box_pack_start (GTK_BOX (box), w, TRUE, TRUE, 0);
-	g_free (tmp);
-
-	g_free (summary);
-
-	w = gtk_event_box_new ();
-	gtk_widget_override_background_color (w, GTK_STATE_FLAG_NORMAL, &norm_bg);
-
-	l = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-	gtk_container_add (GTK_CONTAINER (w), l);
-	gtk_box_pack_start (GTK_BOX (box), w, FALSE, FALSE, 0);
-	w = l;
-
-	organizer = e_cal_component_get_organizer (new_comp);
-	if (organizer && e_cal_component_organizer_get_cn (organizer)) {
-		const gchar *email;
-
-		email = itip_strip_mailto (e_cal_component_organizer_get_value (organizer));
-
-		if (email) {
-			/* To Translators: It will display
-			 * "Organizer: NameOfTheUser <email@ofuser.com>" */
-			tmp = g_strdup_printf (_("Organizer: %s <%s>"), e_cal_component_organizer_get_cn (organizer), email);
-		} else {
-			/* With SunOne accounts, there may be no ':' in
-			 * organizer.value. */
-			tmp = g_strdup_printf (_("Organizer: %s"), e_cal_component_organizer_get_cn (organizer));
-		}
-
-		l = gtk_label_new (tmp);
-		gtk_label_set_line_wrap (GTK_LABEL (l), FALSE);
-		gtk_misc_set_alignment (GTK_MISC (l), 0.0, 0.5);
-		gtk_box_pack_start (GTK_BOX (w), l, FALSE, FALSE, 0);
-		g_free (tmp);
-
-		gtk_widget_override_color (l, GTK_STATE_FLAG_NORMAL, &norm_text);
-	}
-
-	e_cal_component_organizer_free (organizer);
-
-	str = e_cal_component_get_location (new_comp);
-
-	if (str) {
-		/* Translators: It will display "Location: PlaceOfTheMeeting" */
-		tmp = g_markup_printf_escaped (_("Location: %s"), str);
-		l = gtk_label_new (NULL);
-		gtk_widget_set_halign (l, GTK_ALIGN_START);
-		gtk_misc_set_alignment ((GtkMisc *) l, 0.0, 0.0);
-		gtk_label_set_markup ((GtkLabel *) l, tmp);
-		gtk_label_set_line_wrap ((GtkLabel *) l, TRUE);
-		gtk_label_set_width_chars (GTK_LABEL (l), 20);
-		gtk_label_set_max_width_chars ((GtkLabel *) l, 80);
-		gtk_box_pack_start (GTK_BOX (w), l, FALSE, FALSE, 0);
-		g_free (tmp);
-		g_free (str);
-	}
-
-	dtstart = e_cal_component_get_dtstart (new_comp);
-	dtdue = e_cal_component_get_due (new_comp);
-
-	default_zone = e_cal_model_get_timezone (model);
-
-	if (dtstart && e_cal_component_datetime_get_tzid (dtstart)) {
-		zone = i_cal_component_get_timezone (
-			e_cal_component_get_icalcomponent (new_comp),
-			e_cal_component_datetime_get_tzid (dtstart));
-		if (!zone) {
-			if (!e_cal_client_get_timezone_sync (comp_data->client, e_cal_component_datetime_get_tzid (dtstart), &zone, NULL, NULL))
-				zone = NULL;
-		}
-		if (!zone)
-			zone = default_zone;
-	} else {
-		zone = NULL;
-	}
-
-	tmp2 = g_string_new ("");
-
-	if (dtstart && e_cal_component_datetime_get_value (dtstart)) {
-		gchar *str;
-
-		tmp_tm = e_cal_util_icaltime_to_tm_with_zone (e_cal_component_datetime_get_value (dtstart), zone, default_zone);
-		str = e_datetime_format_format_tm ("calendar", "table",
-			i_cal_time_is_date (e_cal_component_datetime_get_value (dtstart)) ? DTFormatKindDate : DTFormatKindDateTime,
-			&tmp_tm);
-
-		if (str && *str) {
-			g_string_append (tmp2, _("Start: "));
-			g_string_append (tmp2, str);
-		}
-
-		g_free (str);
-	}
-
-	if (dtdue && e_cal_component_datetime_get_tzid (dtdue)) {
-		zone = i_cal_component_get_timezone (
-			e_cal_component_get_icalcomponent (new_comp),
-			e_cal_component_datetime_get_tzid (dtdue));
-		if (!zone) {
-			if (!e_cal_client_get_timezone_sync (comp_data->client, e_cal_component_datetime_get_tzid (dtdue), &zone, NULL, NULL))
-				zone = NULL;
-		}
-		if (!zone)
-			zone = default_zone;
-	} else {
-		zone = NULL;
-	}
-
-	if (dtdue && e_cal_component_datetime_get_value (dtdue)) {
-		gchar *str;
-
-		tmp_tm = e_cal_util_icaltime_to_tm_with_zone (e_cal_component_datetime_get_value (dtdue), zone, default_zone);
-		str = e_datetime_format_format_tm ("calendar", "table",
-			i_cal_time_is_date (e_cal_component_datetime_get_value (dtdue)) ? DTFormatKindDate : DTFormatKindDateTime,
-			&tmp_tm);
-
-		if (str && *str) {
-			if (tmp2->len)
-				g_string_append (tmp2, "; ");
-
-			g_string_append (tmp2, _("Due: "));
-			g_string_append (tmp2, str);
-		}
-
-		g_free (str);
-	}
-
-	if (tmp2->len) {
-		l = gtk_label_new (tmp2->str);
-		gtk_misc_set_alignment (GTK_MISC (l), 0.0, 0.5);
-		gtk_box_pack_start (GTK_BOX (w), l, FALSE, FALSE, 0);
-
-		gtk_widget_override_color (l, GTK_STATE_FLAG_NORMAL, &norm_text);
-	}
-
-	g_string_free (tmp2, TRUE);
-
-	e_cal_component_datetime_free (dtstart);
-	e_cal_component_datetime_free (dtdue);
-
-	tmp = e_cal_model_get_attendees_status_info (
-		model, new_comp, comp_data->client);
-	if (tmp) {
-		l = gtk_label_new (tmp);
-		gtk_misc_set_alignment (GTK_MISC (l), 0.0, 0.5);
-		gtk_box_pack_start (GTK_BOX (w), l, FALSE, FALSE, 0);
-
-		g_free (tmp);
-		tmp = NULL;
-
-		gtk_widget_override_color (l, GTK_STATE_FLAG_NORMAL, &norm_text);
-	}
-
-	tmp = cal_comp_util_get_attendee_comments (e_cal_component_get_icalcomponent (new_comp));
-	if (tmp) {
-		l = gtk_label_new (tmp);
-		gtk_misc_set_alignment (GTK_MISC (l), 0.0, 0.5);
-		gtk_box_pack_start (GTK_BOX (w), l, FALSE, FALSE, 0);
-		gtk_widget_override_color (l, GTK_STATE_FLAG_NORMAL, &norm_text);
-
-		g_free (tmp);
-		tmp = NULL;
-	}
-
-	tmp2 = g_string_new ("");
-	desc = e_cal_component_get_descriptions (new_comp);
-	for (len = 0, p = desc; p != NULL; p = p->next) {
-		ECalComponentText *text = p->data;
-
-		if (text && e_cal_component_text_get_value (text)) {
-			len += strlen (e_cal_component_text_get_value (text));
-			g_string_append (tmp2, e_cal_component_text_get_value (text));
-			if (len > 1024) {
-				g_string_set_size (tmp2, 1023);
-				g_string_append (tmp2, _("…"));
-				break;
-			}
-		}
-	}
-	g_slist_free_full (desc, e_cal_component_text_free);
-
-	if (tmp2->len) {
-		l = gtk_label_new (tmp2->str);
-		gtk_label_set_line_wrap (GTK_LABEL (l), TRUE);
-		gtk_label_set_width_chars (GTK_LABEL (l), 20);
-		gtk_misc_set_alignment (GTK_MISC (l), 0.0, 0.5);
-		gtk_box_pack_start (GTK_BOX (w), l, FALSE, FALSE, 0);
-
-		gtk_widget_override_color (l, GTK_STATE_FLAG_NORMAL, &norm_text);
-	}
-
-	g_string_free (tmp2, TRUE);
-
-	gtk_widget_show_all (box);
-	gtk_tooltip_set_custom (tooltip, box);
-
+	g_free (markup);
 	g_object_unref (new_comp);
 
 	if (esm && esm->sorter && e_sorter_needs_sorting (esm->sorter))
@@ -929,10 +706,12 @@ task_table_query_tooltip (GtkWidget *widget,
 		rect.width = allocation.width;
 		rect.height = row_height + 2 * BUTTON_PADDING;
 
-		if (etable && etable->header_canvas) {
-			gtk_widget_get_allocation (GTK_WIDGET (etable->header_canvas), &allocation);
+		if (etable && etable->click_to_add && !etable->use_click_to_add_end) {
+			gdouble spacing = 0.0;
 
-			rect.y += allocation.height;
+			g_object_get (etable->canvas_vbox, "spacing", &spacing, NULL);
+
+			rect.y += spacing + BUTTON_PADDING;
 		}
 
 		gtk_tooltip_set_tip_area (tooltip, &rect);
@@ -1254,16 +1033,18 @@ static void
 add_retract_data (ECalComponent *comp,
                   const gchar *retract_comment)
 {
-	ICalComponent *icomp = NULL;
-	ICalProperty *prop = NULL;
+	if (retract_comment && *retract_comment) {
+		ECalComponentText *text;
+		GSList lst = { NULL, NULL };
 
-	icomp = e_cal_component_get_icalcomponent (comp);
-	if (retract_comment && *retract_comment)
-		prop = i_cal_property_new_x (retract_comment);
-	else
-		prop = i_cal_property_new_x ("0");
-	i_cal_property_set_x_name (prop, "X-EVOLUTION-RETRACT-COMMENT");
-	i_cal_component_take_property (icomp, prop);
+		text = e_cal_component_text_new (retract_comment, NULL);
+		lst.data = text;
+
+		e_cal_component_set_comments (comp, &lst);
+		e_cal_component_text_free (text);
+	} else {
+		e_cal_component_set_comments (comp, NULL);
+	}
 }
 
 static gboolean
@@ -1282,7 +1063,7 @@ check_for_retract (ECalComponent *comp,
 		return FALSE;
 
 	org = e_cal_component_get_organizer (comp);
-	strip = org ? itip_strip_mailto (e_cal_component_organizer_get_value (org)) : NULL;
+	strip = e_cal_util_get_organizer_email (org);
 
 	if (!strip || !*strip) {
 		e_cal_component_organizer_free (org);
@@ -1293,7 +1074,7 @@ check_for_retract (ECalComponent *comp,
 		E_CLIENT (client),
 		E_CAL_BACKEND_PROPERTY_CAL_EMAIL_ADDRESS,
 		&email, NULL, NULL) && email != NULL &&
-		g_ascii_strcasecmp (email, strip) == 0;
+		e_cal_util_email_addresses_equal (email, strip);
 
 	e_cal_component_organizer_free (org);
 	g_free (email);
@@ -1371,8 +1152,6 @@ e_task_table_class_init (ETaskTableClass *class)
 	GtkWidgetClass *widget_class;
 	ETableClass *table_class;
 
-	g_type_class_add_private (class, sizeof (ETaskTablePrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = task_table_set_property;
 	object_class->get_property = task_table_get_property;
@@ -1449,7 +1228,7 @@ e_task_table_init (ETaskTable *task_table)
 {
 	GtkTargetList *target_list;
 
-	task_table->priv = E_TASK_TABLE_GET_PRIVATE (task_table);
+	task_table->priv = e_task_table_get_instance_private (task_table);
 
 	task_table->priv->completed_cancellable = NULL;
 
@@ -1523,10 +1302,9 @@ struct get_selected_uids_closure {
 	GSList *objects;
 };
 
-/* Used from e_table_selected_row_foreach(), builds a list of the selected UIDs */
 static void
-add_uid_cb (gint model_row,
-            gpointer data)
+add_comp_data_cb (gint model_row,
+		  gpointer data)
 {
 	struct get_selected_uids_closure *closure = data;
 	ECalModelComponent *comp_data;
@@ -1535,7 +1313,8 @@ add_uid_cb (gint model_row,
 	model = e_task_table_get_model (closure->task_table);
 	comp_data = e_cal_model_get_component_at (model, model_row);
 
-	closure->objects = g_slist_prepend (closure->objects, comp_data);
+	if (comp_data)
+		closure->objects = g_slist_prepend (closure->objects, comp_data);
 }
 
 /**
@@ -1555,8 +1334,7 @@ e_task_table_get_selected (ETaskTable *task_table)
 	closure.task_table = task_table;
 	closure.objects = NULL;
 
-	e_table_selected_row_foreach (
-		E_TABLE (task_table), add_uid_cb, &closure);
+	e_table_selected_row_foreach (E_TABLE (task_table), add_comp_data_cb, &closure);
 
 	return closure.objects;
 }
@@ -1602,7 +1380,7 @@ hide_completed_rows_ready (GObject *source_object,
 {
 	ECalModel *model = user_data;
 	ECalClient *cal_client;
-	GSList *m, *objects;
+	GSList *m, *objects = NULL;
 	gboolean changed = FALSE;
 	gint pos;
 	GPtrArray *comp_objects;
@@ -1610,7 +1388,8 @@ hide_completed_rows_ready (GObject *source_object,
 
 	cal_client = E_CAL_CLIENT (source_object);
 
-	e_cal_client_get_object_list_finish (cal_client, result, &objects, &error);
+	if (!e_cal_client_get_object_list_finish (cal_client, result, &objects, &error))
+		objects = NULL;
 
 	if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
 		g_error_free (error);
@@ -1674,14 +1453,15 @@ show_completed_rows_ready (GObject *source_object,
 {
 	ECalClient *cal_client;
 	ECalModel *model = user_data;
-	GSList *m, *objects;
+	GSList *m, *objects = NULL;
 	GPtrArray *comp_objects;
 	GError *error = NULL;
 
 	cal_client = E_CAL_CLIENT (source_object);
 	g_return_if_fail (cal_client != NULL);
 
-	e_cal_client_get_object_list_finish (cal_client, result, &objects, &error);
+	if (!e_cal_client_get_object_list_finish (cal_client, result, &objects, &error))
+		objects = NULL;
 
 	if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
 		g_error_free (error);

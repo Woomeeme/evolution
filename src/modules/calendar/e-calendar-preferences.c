@@ -48,10 +48,8 @@ struct _ECalendarPreferencesPrivate {
 	GtkWidget *reminder_tasks_scrolled_window;
 };
 
-G_DEFINE_DYNAMIC_TYPE (
-	ECalendarPreferences,
-	e_calendar_preferences,
-	GTK_TYPE_BOX)
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (ECalendarPreferences, e_calendar_preferences, GTK_TYPE_BOX, 0,
+	G_ADD_PRIVATE_DYNAMIC (ECalendarPreferences))
 
 static gboolean
 calendar_preferences_map_string_to_integer (GValue *value,
@@ -249,6 +247,32 @@ calendar_preferences_map_gdk_color_to_string (const GValue *value,
 	return variant;
 }
 
+static gboolean
+calendar_preferences_shorten_time_kind_to_object_cb (GValue *value,
+						     GVariant *variant,
+						     gpointer user_data)
+{
+	gboolean shorten_time_end;
+
+	shorten_time_end = g_variant_get_boolean (variant);
+
+	g_value_set_string (value, shorten_time_end ? "end" : "start");
+
+	return TRUE;
+}
+
+static GVariant *
+calendar_preferences_shorten_time_kind_to_settings_cb (const GValue *value,
+						       const GVariantType *expected_type,
+						       gpointer user_data)
+{
+	const gchar *string;
+
+	string = g_value_get_string (value);
+
+	return g_variant_new_boolean (g_strcmp0 (string, "end") == 0);
+}
+
 static void
 calendar_preferences_dispose (GObject *object)
 {
@@ -266,8 +290,6 @@ e_calendar_preferences_class_init (ECalendarPreferencesClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (ECalendarPreferencesPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->dispose = calendar_preferences_dispose;
 }
@@ -280,7 +302,7 @@ e_calendar_preferences_class_finalize (ECalendarPreferencesClass *class)
 static void
 e_calendar_preferences_init (ECalendarPreferences *preferences)
 {
-	preferences->priv = G_TYPE_INSTANCE_GET_PRIVATE (preferences, E_TYPE_CALENDAR_PREFERENCES, ECalendarPreferencesPrivate);
+	preferences->priv = e_calendar_preferences_get_instance_private (preferences);
 
 	gtk_orientable_set_orientation (GTK_ORIENTABLE (preferences), GTK_ORIENTATION_VERTICAL);
 }
@@ -481,8 +503,8 @@ update_system_tz_widgets (GtkCheckButton *button,
 	const gchar *display_name;
 	gchar *text;
 
-	widget = e_builder_get_widget (prefs->priv->builder, "system-tz-label");
-	g_return_if_fail (GTK_IS_LABEL (widget));
+	widget = e_builder_get_widget (prefs->priv->builder, "use-system-tz-check");
+	g_return_if_fail (GTK_IS_CHECK_BUTTON (widget));
 
 	zone = e_cal_util_get_system_timezone ();
 	if (zone != NULL)
@@ -490,8 +512,9 @@ update_system_tz_widgets (GtkCheckButton *button,
 	else
 		display_name = "UTC";
 
-	text = g_strdup_printf ("(%s)", display_name);
-	gtk_label_set_text (GTK_LABEL (widget), text);
+	/* Translators: The '%s' is replaced with the time zone name, like "America/New York" or "UTC" */
+	text = g_strdup_printf (_("Use s_ystem time zone (%s)"), display_name);
+	gtk_button_set_label (GTK_BUTTON (widget), text);
 	g_free (text);
 }
 
@@ -597,6 +620,7 @@ calendar_preferences_add_itip_formatter_page (EShell *shell,
 	GtkWidget *hbox;
 	GtkWidget *inner_vbox;
 	GtkWidget *check;
+	GtkWidget *check_delete_on_decline;
 	GtkWidget *label;
 	GtkWidget *ess;
 	GtkWidget *scrolledwin;
@@ -643,11 +667,36 @@ calendar_preferences_add_itip_formatter_page (EShell *shell,
 		check, "active",
 		G_SETTINGS_BIND_DEFAULT);
 
+	check_delete_on_decline = gtk_check_button_new_with_mnemonic (_("Delete _meeting from calendar on Decline"));
+	gtk_box_pack_start (GTK_BOX (inner_vbox), check_delete_on_decline, FALSE, FALSE, 0);
+
 	check = gtk_check_button_new_with_mnemonic (_("_Preserve existing reminder by default"));
 	gtk_box_pack_start (GTK_BOX (inner_vbox), check, FALSE, FALSE, 0);
 
 	g_settings_bind (settings, "preserve-reminder",
 		check, "active",
+		G_SETTINGS_BIND_DEFAULT);
+
+	check = gtk_check_button_new_with_mnemonic (_("_Show invitation description provided by the sender"));
+	gtk_box_pack_start (GTK_BOX (inner_vbox), check, FALSE, FALSE, 0);
+
+	g_settings_bind (settings, "show-message-description",
+		check, "active",
+		G_SETTINGS_BIND_DEFAULT);
+
+	check = gtk_check_button_new_with_mnemonic (_("_Always attach components in mail messages"));
+	gtk_box_pack_start (GTK_BOX (inner_vbox), check, FALSE, FALSE, 0);
+
+	g_settings_bind (settings, "attach-components",
+		check, "active",
+		G_SETTINGS_BIND_DEFAULT);
+
+	g_object_unref (settings);
+
+	settings = e_util_ref_settings ("org.gnome.evolution-data-server.calendar");
+
+	g_settings_bind (settings, "delete-meeting-on-decline",
+		check_delete_on_decline, "active",
 		G_SETTINGS_BIND_DEFAULT);
 
 	g_object_unref (settings);
@@ -849,6 +898,21 @@ calendar_preferences_construct (ECalendarPreferences *prefs,
 		widget, "active",
 		G_SETTINGS_BIND_DEFAULT);
 
+	widget = e_builder_get_widget (prefs->priv->builder, "shorten_time_interval");
+	g_settings_bind (
+		settings, "shorten-time",
+		widget, "value",
+		G_SETTINGS_BIND_DEFAULT);
+
+	widget = e_builder_get_widget (prefs->priv->builder, "shorten_time_kind");
+	g_settings_bind_with_mapping (
+		settings, "shorten-time-end",
+		widget, "active-id",
+		G_SETTINGS_BIND_DEFAULT,
+		calendar_preferences_shorten_time_kind_to_object_cb,
+		calendar_preferences_shorten_time_kind_to_settings_cb,
+		NULL, NULL);
+
 	widget = e_builder_get_widget (prefs->priv->builder, "confirm_delete");
 	g_settings_bind (
 		settings, "confirm-delete",
@@ -891,6 +955,12 @@ calendar_preferences_construct (ECalendarPreferences *prefs,
 		widget, "active",
 		G_SETTINGS_BIND_DEFAULT);
 
+	widget = e_builder_get_widget (prefs->priv->builder, "use-markdown-editor");
+	g_settings_bind (
+		settings, "use-markdown-editor",
+		widget, "active",
+		G_SETTINGS_BIND_DEFAULT);
+
 	/* These settings control the "Birthdays & Anniversaries" backend. */
 
 	eds_settings =
@@ -923,6 +993,36 @@ calendar_preferences_construct (ECalendarPreferences *prefs,
 		(GDestroyNotify) g_type_class_unref);
 	g_settings_bind (
 		eds_settings, "contacts-reminder-enabled",
+		widget, "sensitive",
+		G_SETTINGS_BIND_GET);
+
+	widget = e_builder_get_widget (prefs->priv->builder, "defall_reminder");
+	g_settings_bind (
+		eds_settings, "defall-reminder-enabled",
+		widget, "active",
+		G_SETTINGS_BIND_DEFAULT);
+
+	widget = e_builder_get_widget (prefs->priv->builder, "defall_reminder_interval");
+	g_settings_bind (
+		eds_settings, "defall-reminder-interval",
+		widget, "value",
+		G_SETTINGS_BIND_DEFAULT);
+	g_settings_bind (
+		eds_settings, "defall-reminder-enabled",
+		widget, "sensitive",
+		G_SETTINGS_BIND_GET);
+
+	widget = e_builder_get_widget (prefs->priv->builder, "defall_reminder_units");
+	g_settings_bind_with_mapping (
+		eds_settings, "defall-reminder-units",
+		widget, "active",
+		G_SETTINGS_BIND_DEFAULT,
+		calendar_preferences_map_string_to_integer,
+		calendar_preferences_map_integer_to_string,
+		g_type_class_ref (E_TYPE_DURATION_TYPE),
+		(GDestroyNotify) g_type_class_unref);
+	g_settings_bind (
+		eds_settings, "defall-reminder-enabled",
 		widget, "sensitive",
 		G_SETTINGS_BIND_GET);
 
@@ -989,6 +1089,12 @@ calendar_preferences_construct (ECalendarPreferences *prefs,
 	widget = e_builder_get_widget (prefs->priv->builder, "allow_direct_summary_edit");
 	g_settings_bind (
 		settings, "allow-direct-summary-edit",
+		widget, "active",
+		G_SETTINGS_BIND_DEFAULT);
+
+	widget = e_builder_get_widget (prefs->priv->builder, "allow_event_dnd");
+	g_settings_bind (
+		settings, "allow-event-dnd",
 		widget, "active",
 		G_SETTINGS_BIND_DEFAULT);
 
@@ -1098,6 +1204,18 @@ calendar_preferences_construct (ECalendarPreferences *prefs,
 	widget = e_builder_get_widget (prefs->priv->builder, "notify_window_on_top");
 	g_settings_bind (
 		eds_calendar_settings, "notify-window-on-top",
+		widget, "active",
+		G_SETTINGS_BIND_DEFAULT);
+
+	widget = e_builder_get_widget (prefs->priv->builder, "notify_enable_display");
+	g_settings_bind (
+		eds_calendar_settings, "notify-enable-display",
+		widget, "active",
+		G_SETTINGS_BIND_DEFAULT);
+
+	widget = e_builder_get_widget (prefs->priv->builder, "notify_enable_audio");
+	g_settings_bind (
+		eds_calendar_settings, "notify-enable-audio",
 		widget, "active",
 		G_SETTINGS_BIND_DEFAULT);
 

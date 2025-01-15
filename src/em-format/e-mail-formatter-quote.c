@@ -28,10 +28,6 @@
 #include <gdk/gdk.h>
 #include <glib/gi18n.h>
 
-#define E_MAIL_FORMATTER_QUOTE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_FORMATTER_QUOTE, EMailFormatterQuotePrivate))
-
 struct _EMailFormatterQuotePrivate {
 	gchar *credits;
 	EMailFormatterQuoteFlags flags;
@@ -44,7 +40,14 @@ GType e_mail_formatter_quote_text_enriched_get_type (void);
 GType e_mail_formatter_quote_text_html_get_type (void);
 GType e_mail_formatter_quote_text_plain_get_type (void);
 
-static gpointer e_mail_formatter_quote_parent_class = 0;
+static gpointer e_mail_formatter_quote_parent_class = NULL;
+static gint EMailFormatterQuote_private_offset = 0;
+
+static inline gpointer
+e_mail_formatter_quote_get_instance_private (EMailFormatterQuote *self)
+{
+	return (G_STRUCT_MEMBER_P (self, EMailFormatterQuote_private_offset));
+}
 
 static void
 mail_formatter_quote_run (EMailFormatter *formatter,
@@ -57,6 +60,8 @@ mail_formatter_quote_run (EMailFormatter *formatter,
 	GQueue queue = G_QUEUE_INIT;
 	GList *head, *link;
 	const gchar *string;
+	GHashTable *secured_message_ids = NULL;
+	gboolean has_encrypted_part = FALSE;
 
 	if (g_cancellable_is_cancelled (cancellable))
 		return;
@@ -76,6 +81,9 @@ mail_formatter_quote_run (EMailFormatter *formatter,
 	e_mail_part_list_queue_parts (context->part_list, NULL, &queue);
 
 	head = g_queue_peek_head_link (&queue);
+
+	if ((qf->priv->flags & E_MAIL_FORMATTER_QUOTE_FLAG_SKIP_INSECURE_PARTS) != 0)
+		secured_message_ids = e_mail_formatter_utils_extract_secured_message_ids (head);
 
 	for (link = head; link != NULL; link = g_list_next (link)) {
 		EMailPart *part = E_MAIL_PART (link->data);
@@ -97,6 +105,20 @@ mail_formatter_quote_run (EMailFormatter *formatter,
 		if (e_mail_part_get_is_attachment (part))
 			continue;
 
+		if (secured_message_ids &&
+		    e_mail_formatter_utils_consider_as_secured_part (part, secured_message_ids)) {
+			if (!e_mail_part_has_validity (part))
+				continue;
+
+			if (e_mail_part_get_validity (part, E_MAIL_PART_VALIDITY_ENCRYPTED)) {
+				/* consider the second and following encrypted parts as evil */
+				if (has_encrypted_part)
+					continue;
+
+				has_encrypted_part = TRUE;
+			}
+		}
+
 		mime_type = e_mail_part_get_mime_type (part);
 
 		/* Skip error messages in the quoted part */
@@ -110,6 +132,8 @@ mail_formatter_quote_run (EMailFormatter *formatter,
 
 	while (!g_queue_is_empty (&queue))
 		g_object_unref (g_queue_pop_head (&queue));
+
+	g_clear_pointer (&secured_message_ids, g_hash_table_destroy);
 
 	/* Before we were inserting the BR elements and the credits in front of
 	 * the actual HTML code of the message. But this was wrong as when WebKit
@@ -146,7 +170,7 @@ mail_formatter_quote_run (EMailFormatter *formatter,
 static void
 e_mail_formatter_quote_init (EMailFormatterQuote *formatter)
 {
-	formatter->priv = E_MAIL_FORMATTER_QUOTE_GET_PRIVATE (formatter);
+	formatter->priv = e_mail_formatter_quote_get_instance_private (formatter);
 }
 
 static void
@@ -190,7 +214,8 @@ e_mail_formatter_quote_class_init (EMailFormatterQuoteClass *class)
 	EMailFormatterClass *formatter_class;
 
 	e_mail_formatter_quote_parent_class = g_type_class_peek_parent (class);
-	g_type_class_add_private (class, sizeof (EMailFormatterQuotePrivate));
+	if (EMailFormatterQuote_private_offset != 0)
+		g_type_class_adjust_private_offset (class, &EMailFormatterQuote_private_offset);
 
 	formatter_class = E_MAIL_FORMATTER_CLASS (class);
 	formatter_class->context_size = sizeof (EMailFormatterQuoteContext);
@@ -222,6 +247,8 @@ e_mail_formatter_quote_get_type (void)
 		type = g_type_register_static (
 			E_TYPE_MAIL_FORMATTER,
 			"EMailFormatterQuote", &type_info, 0);
+
+		EMailFormatterQuote_private_offset = g_type_add_instance_private (type, sizeof (EMailFormatterQuotePrivate));
 	}
 
 	return type;

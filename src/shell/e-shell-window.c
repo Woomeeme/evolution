@@ -47,6 +47,7 @@ enum {
 enum {
 	CLOSE_ALERT,
 	SHELL_VIEW_CREATED,
+	UPDATE_NEW_MENU,
 	LAST_SIGNAL
 };
 
@@ -56,14 +57,10 @@ static gulong signals[LAST_SIGNAL];
 static void	e_shell_window_alert_sink_init
 					(EAlertSinkInterface *iface);
 
-G_DEFINE_TYPE_WITH_CODE (
-	EShellWindow,
-	e_shell_window,
-	GTK_TYPE_WINDOW,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_ALERT_SINK, e_shell_window_alert_sink_init)
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL))
+G_DEFINE_TYPE_WITH_CODE (EShellWindow, e_shell_window, GTK_TYPE_WINDOW,
+	G_ADD_PRIVATE (EShellWindow)
+	G_IMPLEMENT_INTERFACE (E_TYPE_ALERT_SINK, e_shell_window_alert_sink_init)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 static const char *css =
 ".table-header {\
@@ -109,15 +106,22 @@ shell_window_menubar_update_new_menu (EShellWindow *shell_window)
 }
 
 static void
-shell_window_toolbar_update_new_menu (GtkMenuToolButton *menu_tool_button,
-                                      GParamSpec *pspec,
-                                      EShellWindow *shell_window)
+shell_window_toolbar_update_new_menu (EShellWindow *shell_window,
+				      GtkMenuToolButton *menu_tool_button)
 {
 	GtkWidget *menu;
 
 	/* Update the "New" menu tool button submenu. */
 	menu = e_shell_window_create_new_menu (shell_window);
 	gtk_menu_tool_button_set_menu (menu_tool_button, menu);
+}
+
+static void
+shell_window_toolbar_prefer_item_cb (GtkMenuToolButton *menu_tool_button,
+				     GParamSpec *pspec,
+				     EShellWindow *shell_window)
+{
+	shell_window_toolbar_update_new_menu (shell_window, menu_tool_button);
 }
 
 static gboolean
@@ -160,6 +164,8 @@ shell_window_set_notebook_page (EShellWindow *shell_window,
 	g_return_if_fail (page_num >= 0);
 
 	gtk_notebook_set_current_page (notebook, page_num);
+
+	g_signal_emit (shell_window, signals[UPDATE_NEW_MENU], 0, NULL);
 }
 
 static void
@@ -463,8 +469,8 @@ shell_window_construct_menubar (EShellWindow *shell_window)
 		main_menu, "visible",
 		G_BINDING_SYNC_CREATE);
 
-	e_signal_connect_notify (
-		shell_window, "notify::active-view",
+	g_signal_connect (
+		shell_window, "update-new-menu",
 		G_CALLBACK (shell_window_menubar_update_new_menu), NULL);
 
 	return main_menu;
@@ -473,12 +479,8 @@ shell_window_construct_menubar (EShellWindow *shell_window)
 static GtkWidget *
 shell_window_construct_toolbar (EShellWindow *shell_window)
 {
-	GtkUIManager *ui_manager;
 	GtkWidget *toolbar;
 	GtkWidget *box;
-	GtkToolItem *item;
-
-	ui_manager = e_shell_window_get_ui_manager (shell_window);
 
 	box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_widget_show (box);
@@ -490,69 +492,83 @@ shell_window_construct_toolbar (EShellWindow *shell_window)
 
 	toolbar = e_shell_window_get_managed_widget (
 		shell_window, "/main-toolbar");
+	e_util_setup_toolbar_icon_size (GTK_TOOLBAR (toolbar), GTK_ICON_SIZE_BUTTON);
 
 	gtk_style_context_add_class (
 		gtk_widget_get_style_context (toolbar),
 		GTK_STYLE_CLASS_PRIMARY_TOOLBAR);
 
-	/* XXX Having this separator in the UI definition doesn't work
-	 *     because GtkUIManager is unaware of the "New" button, so
-	 *     it makes the separator invisible.  One possibility is to
-	 *     define a GtkAction subclass for which create_tool_item()
-	 *     return an EMenuToolButton.  Then both this separator
-	 *     and the "New" button could be added to the UI definition.
-	 *     Tempting, but the "New" button and its dynamically
-	 *     generated menu is already a complex beast, and I'm not
-	 *     convinced having it proxy some new type of GtkAction
-	 *     is worth the extra effort. */
-	item = gtk_separator_tool_item_new ();
-	gtk_toolbar_insert (GTK_TOOLBAR (toolbar), item, 0);
-	gtk_widget_show (GTK_WIDGET (item));
+	if (!e_util_get_use_header_bar ()) {
+		GtkUIManager *ui_manager;
+		GtkToolItem *item;
 
-	/* Translators: a 'New' toolbar button caption which is context sensitive and
-	   runs one of the actions under File->New menu */
-	item = e_menu_tool_button_new (C_("toolbar-button", "New"));
-	gtk_tool_item_set_is_important (GTK_TOOL_ITEM (item), TRUE);
-	gtk_widget_add_accelerator (
-		GTK_WIDGET (item), "clicked",
-		gtk_ui_manager_get_accel_group (ui_manager),
-		GDK_KEY_N, GDK_CONTROL_MASK, GTK_ACCEL_VISIBLE);
-	gtk_toolbar_insert (GTK_TOOLBAR (toolbar), item, 0);
-	gtk_widget_show (GTK_WIDGET (item));
+		ui_manager = e_shell_window_get_ui_manager (shell_window);
+		/* XXX Having this separator in the UI definition doesn't work
+		 *     because GtkUIManager is unaware of the "New" button, so
+		 *     it makes the separator invisible.  One possibility is to
+		 *     define a GtkAction subclass for which create_tool_item()
+		 *     return an EMenuToolButton.  Then both this separator
+		 *     and the "New" button could be added to the UI definition.
+		 *     Tempting, but the "New" button and its dynamically
+		 *     generated menu is already a complex beast, and I'm not
+		 *     convinced having it proxy some new type of GtkAction
+		 *     is worth the extra effort. */
+		item = gtk_separator_tool_item_new ();
+		gtk_toolbar_insert (GTK_TOOLBAR (toolbar), item, 0);
+		gtk_widget_show (GTK_WIDGET (item));
 
-	/* XXX The ECalShellBackend has a hack where it forces the
-	 *     EMenuToolButton to update its button image by forcing
-	 *     a "notify::active-view" signal emission on the window.
-	 *     This will trigger the property binding, which will set
-	 *     EMenuToolButton's "prefer-item" property, which will
-	 *     invoke shell_window_toolbar_update_new_menu(), which
-	 *     will cause EMenuToolButton to update its button image.
-	 *
-	 *     It's a bit of a Rube Goldberg machine and should be
-	 *     reworked, but it's just serving one (now documented)
-	 *     corner case and works for now. */
-	e_binding_bind_property_full (
-		shell_window, "active-view",
-		item, "prefer-item",
-		G_BINDING_SYNC_CREATE,
-		shell_window_active_view_to_prefer_item,
-		(GBindingTransformFunc) NULL,
-		NULL, (GDestroyNotify) NULL);
+		/* Translators: a 'New' toolbar button caption which is context sensitive and
+		   runs one of the actions under File->New menu */
+		item = e_menu_tool_button_new (C_("toolbar-button", "New"));
+		gtk_tool_item_set_is_important (GTK_TOOL_ITEM (item), TRUE);
+		gtk_widget_add_accelerator (
+			GTK_WIDGET (item), "clicked",
+			gtk_ui_manager_get_accel_group (ui_manager),
+			GDK_KEY_N, GDK_CONTROL_MASK, GTK_ACCEL_VISIBLE);
+		gtk_toolbar_insert (GTK_TOOLBAR (toolbar), item, 0);
+		gtk_widget_show (GTK_WIDGET (item));
 
-	g_signal_connect (
-		item, "notify::prefer-item",
-		G_CALLBACK (shell_window_toolbar_update_new_menu),
-		shell_window);
+		/* XXX The ECalShellBackend has a hack where it forces the
+		 *     EMenuToolButton to update its button image by forcing
+		 *     a "notify::active-view" signal emission on the window.
+		 *     This will trigger the property binding, which will set
+		 *     EMenuToolButton's "prefer-item" property, which will
+		 *     invoke shell_window_toolbar_update_new_menu(), which
+		 *     will cause EMenuToolButton to update its button image.
+		 *
+		 *     It's a bit of a Rube Goldberg machine and should be
+		 *     reworked, but it's just serving one (now documented)
+		 *     corner case and works for now. */
+		e_binding_bind_property_full (
+			shell_window, "active-view",
+			item, "prefer-item",
+			G_BINDING_SYNC_CREATE,
+			shell_window_active_view_to_prefer_item,
+			(GBindingTransformFunc) NULL,
+			NULL, (GDestroyNotify) NULL);
+
+		g_signal_connect_object (
+			item, "notify::prefer-item",
+			G_CALLBACK (shell_window_toolbar_prefer_item_cb),
+			shell_window, 0);
+
+		g_signal_connect_object (
+			shell_window, "update-new-menu",
+			G_CALLBACK (shell_window_toolbar_update_new_menu),
+			item, 0);
+	}
 
 	gtk_box_pack_start (GTK_BOX (box), toolbar, TRUE, TRUE, 0);
 
 	toolbar = e_shell_window_get_managed_widget (
 		shell_window, "/search-toolbar");
 	gtk_toolbar_set_show_arrow (GTK_TOOLBAR (toolbar), FALSE);
+	e_util_setup_toolbar_icon_size (GTK_TOOLBAR (toolbar), GTK_ICON_SIZE_BUTTON);
 
 	toolbar = e_shell_window_get_managed_widget (
 		shell_window, "/close-toolbar");
 	gtk_toolbar_set_show_arrow (GTK_TOOLBAR (toolbar), FALSE);
+	e_util_setup_toolbar_icon_size (GTK_TOOLBAR (toolbar), GTK_ICON_SIZE_BUTTON);
 
 	return box;
 }
@@ -879,8 +895,6 @@ e_shell_window_class_init (EShellWindowClass *class)
 	GtkWidgetClass *widget_class;
 	GtkBindingSet *binding_set;
 
-	g_type_class_add_private (class, sizeof (EShellWindowPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = shell_window_set_property;
 	object_class->get_property = shell_window_get_property;
@@ -1133,6 +1147,24 @@ e_shell_window_class_init (EShellWindowClass *class)
 		G_TYPE_NONE, 1,
 		E_TYPE_SHELL_VIEW);
 
+	/**
+	 * EShellWindow::update-new-menu
+	 * @shell_window: the #EShellWindow
+	 *
+	 * Emitted when the 'New' menu should be updated.
+	 *
+	 * Since: 3.46
+	 **/
+	signals[UPDATE_NEW_MENU] = g_signal_new (
+		"update-new-menu",
+		G_OBJECT_CLASS_TYPE (object_class),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		0,
+		NULL, NULL,
+		g_cclosure_marshal_VOID__VOID,
+		G_TYPE_NONE, 0,
+		G_TYPE_NONE);
+
 	binding_set = gtk_binding_set_by_class (class);
 	gtk_binding_entry_add_signal (
 		binding_set, GDK_KEY_Escape, 0, "close-alert", 0);
@@ -1149,7 +1181,7 @@ e_shell_window_init (EShellWindow *shell_window)
 {
 	GtkCssProvider *css_provider;
 
-	shell_window->priv = E_SHELL_WINDOW_GET_PRIVATE (shell_window);
+	shell_window->priv = e_shell_window_get_instance_private (shell_window);
 
 	e_shell_window_private_init (shell_window);
 
@@ -1158,6 +1190,7 @@ e_shell_window_init (EShellWindow *shell_window)
 	gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
 		GTK_STYLE_PROVIDER (css_provider),
 		GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+	g_clear_object (&css_provider);
 
 	g_signal_connect (shell_window, "delete-event",
 		G_CALLBACK (shell_window_delete_event_cb), NULL);
@@ -1452,17 +1485,12 @@ e_shell_window_get_managed_widget (EShellWindow *shell_window,
                                    const gchar *widget_path)
 {
 	GtkUIManager *ui_manager;
-	GtkWidget *widget;
 
 	g_return_val_if_fail (E_IS_SHELL_WINDOW (shell_window), NULL);
 	g_return_val_if_fail (widget_path != NULL, NULL);
 
 	ui_manager = e_shell_window_get_ui_manager (shell_window);
-	widget = gtk_ui_manager_get_widget (ui_manager, widget_path);
-
-	g_return_val_if_fail (widget != NULL, NULL);
-
-	return widget;
+	return gtk_ui_manager_get_widget (ui_manager, widget_path);
 }
 
 /**
@@ -1649,7 +1677,8 @@ e_shell_window_get_menubar_visible (EShellWindow *shell_window)
 {
 	g_return_val_if_fail (E_IS_SHELL_WINDOW (shell_window), FALSE);
 
-	return shell_window->priv->menubar_visible;
+	return shell_window->priv->menu_bar &&
+		e_menu_bar_get_visible (E_MENU_BAR (shell_window->priv->menu_bar));
 }
 
 /**
@@ -1669,10 +1698,10 @@ e_shell_window_set_menubar_visible (EShellWindow *shell_window,
 
 	g_return_if_fail (E_IS_SHELL_WINDOW (shell_window));
 
-	if (shell_window->priv->menubar_visible == menubar_visible)
+	if (e_menu_bar_get_visible (E_MENU_BAR (shell_window->priv->menu_bar)) == menubar_visible)
 		return;
 
-	shell_window->priv->menubar_visible = menubar_visible;
+	e_menu_bar_set_visible (E_MENU_BAR (shell_window->priv->menu_bar), menubar_visible);
 
 	settings = e_util_ref_settings ("org.gnome.evolution.shell");
 	if (!menubar_visible &&
@@ -1891,7 +1920,7 @@ shell_window_connect_client_thread (EAlertSinkThreadJobData *job_data,
 	client_cache = e_shell_get_client_cache (shell);
 
 	cc_data->client = e_client_cache_get_client_sync (client_cache,
-		cc_data->source, cc_data->extension_name, 30, cancellable, &local_error);
+		cc_data->source, cc_data->extension_name, (guint32) -1, cancellable, &local_error);
 
 	e_util_propagate_open_source_job_error (job_data, cc_data->extension_name, local_error, error);
 }
@@ -2048,6 +2077,8 @@ e_shell_window_register_new_item_actions (EShellWindow *shell_window,
 				G_OBJECT (action),
 				"primary", GINT_TO_POINTER (TRUE));
 	}
+
+	g_signal_emit (shell_window, signals[UPDATE_NEW_MENU], 0, NULL);
 }
 
 /**
@@ -2125,6 +2156,8 @@ e_shell_window_register_new_source_actions (EShellWindow *shell_window,
 			G_OBJECT (action),
 			"backend-name", (gpointer) backend_name);
 	}
+
+	g_signal_emit (shell_window, signals[UPDATE_NEW_MENU], 0, NULL);
 }
 
 /**

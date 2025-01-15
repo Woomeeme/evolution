@@ -62,14 +62,12 @@ static void
 composer_update_gallery_visibility (EMsgComposer *composer)
 {
 	EHTMLEditor *editor;
-	EContentEditor *cnt_editor;
 	GtkToggleAction *toggle_action;
 	gboolean gallery_active;
 	gboolean is_html;
 
 	editor = e_msg_composer_get_editor (composer);
-	cnt_editor = e_html_editor_get_content_editor (editor);
-	is_html = e_content_editor_get_html_mode (cnt_editor);
+	is_html = e_html_editor_get_mode (editor) == E_CONTENT_EDITOR_MODE_HTML;
 
 	toggle_action = GTK_TOGGLE_ACTION (ACTION (PICTURE_GALLERY));
 	gallery_active = gtk_toggle_action_get_active (toggle_action);
@@ -81,6 +79,46 @@ composer_update_gallery_visibility (EMsgComposer *composer)
 		gtk_widget_hide (composer->priv->gallery_scrolled_window);
 		gtk_widget_hide (composer->priv->gallery_icon_view);
 	}
+}
+
+static GtkWidget *
+composer_construct_header_bar (EMsgComposer *composer,
+			       GtkWidget *menu_button)
+{
+	GtkWidget *widget;
+	GtkWidget *button;
+	GtkHeaderBar *header_bar;
+
+	widget = gtk_header_bar_new ();
+	gtk_widget_show (widget);
+	header_bar = GTK_HEADER_BAR (widget);
+	gtk_header_bar_set_show_close_button (header_bar, TRUE);
+
+	if (menu_button)
+		gtk_header_bar_pack_end (header_bar, menu_button);
+
+	button = e_header_bar_button_new (_("Send"), ACTION (SEND));
+	e_header_bar_button_css_add_class (E_HEADER_BAR_BUTTON (button), "suggested-action");
+	e_header_bar_button_set_show_icon_only (E_HEADER_BAR_BUTTON (button), FALSE);
+	gtk_widget_show (button);
+	gtk_header_bar_pack_start (header_bar, button);
+
+	button = e_header_bar_button_new (NULL, ACTION (SAVE_DRAFT));
+	e_header_bar_button_css_add_class (E_HEADER_BAR_BUTTON (button), "flat");
+	gtk_widget_show (button);
+	gtk_header_bar_pack_start (header_bar, button);
+
+	button = e_header_bar_button_new (NULL, ACTION (PRIORITIZE_MESSAGE));
+	e_header_bar_button_css_add_class (E_HEADER_BAR_BUTTON (button), "flat");
+	gtk_widget_show (button);
+	gtk_header_bar_pack_end (header_bar, button);
+
+	button = e_header_bar_button_new (NULL, ACTION (REQUEST_READ_RECEIPT));
+	e_header_bar_button_css_add_class (E_HEADER_BAR_BUTTON (button), "flat");
+	gtk_widget_show (button);
+	gtk_header_bar_pack_end (header_bar, button);
+
+	return widget;
 }
 
 static gchar *
@@ -196,12 +234,11 @@ e_composer_private_constructed (EMsgComposer *composer)
 	GtkAction *action;
 	GtkWidget *container;
 	GtkWidget *widget;
-	GtkWidget *send_widget;
+	GtkWidget *menu_button = NULL;
 	GtkWindow *window;
 	GSettings *settings;
-	const gchar *path;
 	gchar *filename, *gallery_path;
-	gint ii;
+	guint ii;
 	GError *error = NULL;
 
 	editor = e_msg_composer_get_editor (composer);
@@ -244,11 +281,6 @@ e_composer_private_constructed (EMsgComposer *composer)
 	gtk_ui_manager_add_ui_from_file (ui_manager, filename, &error);
 	g_free (filename);
 
-	/* We set the send button as important to have a label */
-	path = "/main-toolbar/pre-main-toolbar/send";
-	send_widget = gtk_ui_manager_get_widget (ui_manager, path);
-	gtk_tool_item_set_is_important (GTK_TOOL_ITEM (send_widget), TRUE);
-
 	composer_setup_charset_menu (composer);
 
 	if (error != NULL) {
@@ -261,23 +293,7 @@ e_composer_private_constructed (EMsgComposer *composer)
 
 	focus_tracker = e_focus_tracker_new (GTK_WINDOW (composer));
 
-	action = e_html_editor_get_action (editor, "cut");
-	e_focus_tracker_set_cut_clipboard_action (focus_tracker, action);
-
-	action = e_html_editor_get_action (editor, "copy");
-	e_focus_tracker_set_copy_clipboard_action (focus_tracker, action);
-
-	action = e_html_editor_get_action (editor, "paste");
-	e_focus_tracker_set_paste_clipboard_action (focus_tracker, action);
-
-	action = e_html_editor_get_action (editor, "select-all");
-	e_focus_tracker_set_select_all_action (focus_tracker, action);
-
-	action = e_html_editor_get_action (editor, "undo");
-	e_focus_tracker_set_undo_action (focus_tracker, action);
-
-	action = e_html_editor_get_action (editor, "redo");
-	e_focus_tracker_set_redo_action (focus_tracker, action);
+	e_html_editor_connect_focus_tracker (editor, focus_tracker);
 
 	priv->focus_tracker = focus_tracker;
 
@@ -287,15 +303,50 @@ e_composer_private_constructed (EMsgComposer *composer)
 
 	container = widget;
 
-	/* Construct the main menu and toolbar. */
+	/* Construct the main menu and headerbar. */
 
 	widget = e_html_editor_get_managed_widget (editor, "/main-menu");
+	priv->menu_bar = e_menu_bar_new (GTK_MENU_BAR (widget), window, &menu_button);
 	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
-	gtk_widget_show (widget);
+
+	if (e_util_get_use_header_bar ()) {
+		const gchar *items[] = {
+			"/main-toolbar/pre-main-toolbar/send",
+			"/main-toolbar/pre-main-toolbar/send-separator",
+			"/main-toolbar/pre-main-toolbar/save-draft",
+			"/main-toolbar/pre-main-toolbar/save-draft-separator",
+			"/main-toolbar/prioritize-message-separator",
+			"/main-toolbar/toolbar-prioritize-message",
+			"/main-toolbar/toolbar-request-read-receipt"
+		};
+		widget = composer_construct_header_bar (composer, menu_button);
+		gtk_window_set_titlebar (window, widget);
+
+		/* Destroy items from the toolbar, which are in the header bar */
+		for (ii = 0; ii < G_N_ELEMENTS (items); ii++) {
+			widget = gtk_ui_manager_get_widget (ui_manager, items[ii]);
+			if (widget)
+				gtk_widget_destroy (widget);
+		}
+	} else {
+		/* We set the send button as important to have a label */
+		widget = gtk_ui_manager_get_widget (ui_manager, "/main-toolbar/pre-main-toolbar/send");
+		gtk_tool_item_set_is_important (GTK_TOOL_ITEM (widget), TRUE);
+
+		if (menu_button) {
+			g_object_ref_sink (menu_button);
+			gtk_widget_destroy (menu_button);
+		}
+	}
 
 	widget = e_html_editor_get_managed_widget (editor, "/main-toolbar");
 	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
 	gtk_widget_show (widget);
+
+	e_binding_bind_property (
+		ACTION (TOOLBAR_SHOW_MAIN), "active",
+		widget, "visible",
+		G_BINDING_SYNC_CREATE);
 
 	/* Construct the header table. */
 
@@ -329,7 +380,7 @@ e_composer_private_constructed (EMsgComposer *composer)
 
 	e_binding_bind_property (
 		cnt_editor, "editable",
-		widget, "sensitive",
+		widget, "editable",
 		G_BINDING_SYNC_CREATE);
 
 	container = e_attachment_paned_get_content_area (
@@ -351,12 +402,7 @@ e_composer_private_constructed (EMsgComposer *composer)
 	priv->gallery_scrolled_window = g_object_ref (widget);
 	gtk_widget_show (widget);
 
-	widget = GTK_WIDGET (cnt_editor);
-	if (GTK_IS_SCROLLABLE (cnt_editor)) {
-		/* Scrollables are packed in a scrolled window */
-		widget = gtk_widget_get_parent (widget);
-		g_warn_if_fail (GTK_IS_SCROLLED_WINDOW (widget));
-	}
+	widget = e_html_editor_get_content_box (editor);
 	gtk_widget_reparent (widget, container);
 
 	/* Construct the picture gallery. */
@@ -372,7 +418,7 @@ e_composer_private_constructed (EMsgComposer *composer)
 	g_free (gallery_path);
 
 	e_signal_connect_notify_swapped (
-		cnt_editor, "notify::html-mode",
+		editor, "notify::mode",
 		G_CALLBACK (composer_update_gallery_visibility), composer);
 
 	g_signal_connect_swapped (
@@ -386,7 +432,6 @@ e_composer_private_constructed (EMsgComposer *composer)
 
 	for (ii = 0; ii < E_COMPOSER_NUM_HEADERS; ii++) {
 		EComposerHeaderTable *table;
-		EComposerHeader *header;
 
 		table = E_COMPOSER_HEADER_TABLE (priv->header_table);
 		header = e_composer_header_table_get_header (table, ii);
@@ -421,6 +466,20 @@ e_composer_private_constructed (EMsgComposer *composer)
 
 			case E_COMPOSER_HEADER_REPLY_TO:
 				action = ACTION (VIEW_REPLY_TO);
+				e_widget_undo_attach (
+					GTK_WIDGET (header->input_widget),
+					focus_tracker);
+				break;
+
+			case E_COMPOSER_HEADER_MAIL_FOLLOWUP_TO:
+				action = ACTION (VIEW_MAIL_FOLLOWUP_TO);
+				e_widget_undo_attach (
+					GTK_WIDGET (header->input_widget),
+					focus_tracker);
+				break;
+
+			case E_COMPOSER_HEADER_MAIL_REPLY_TO:
+				action = ACTION (VIEW_MAIL_REPLY_TO);
 				e_widget_undo_attach (
 					GTK_WIDGET (header->input_widget),
 					focus_tracker);
@@ -471,6 +530,11 @@ e_composer_private_constructed (EMsgComposer *composer)
 		G_BINDING_SYNC_CREATE |
 		G_BINDING_INVERT_BOOLEAN);
 
+	e_binding_bind_property (
+		E_HTML_EDITOR_ACTION (editor, "paragraph-style-menu"), "visible",
+		ACTION (TOOLBAR_SHOW_EDIT), "sensitive",
+		G_BINDING_SYNC_CREATE);
+
 	g_object_unref (settings);
 }
 
@@ -494,6 +558,7 @@ e_composer_private_dispose (EMsgComposer *composer)
 	g_clear_object (&composer->priv->composer_actions);
 	g_clear_object (&composer->priv->gallery_scrolled_window);
 	g_clear_object (&composer->priv->redirect);
+	g_clear_object (&composer->priv->menu_bar);
 }
 
 void
@@ -660,6 +725,54 @@ e_composer_selection_is_base64_uris (EMsgComposer *composer,
 	return all_base64_uris;
 }
 
+static gboolean
+e_composer_selection_uri_is_image (const gchar *uri)
+{
+	GFile *file;
+	GFileInfo *file_info;
+	GdkPixbufLoader *loader;
+	const gchar *attribute;
+	const gchar *content_type;
+	gchar *mime_type = NULL;
+
+	file = g_file_new_for_uri (uri);
+	attribute = G_FILE_ATTRIBUTE_STANDARD_FAST_CONTENT_TYPE;
+
+	/* XXX This blocks, but we're requesting the fast content
+	 *     type (which only inspects filenames), so hopefully
+	 *     it won't be noticeable.  Also, this is best effort
+	 *     so we don't really care if it fails. */
+	file_info = g_file_query_info (file, attribute, G_FILE_QUERY_INFO_NONE, NULL, NULL);
+
+	if (file_info == NULL) {
+		g_object_unref (file);
+		return FALSE;
+	}
+
+	content_type = g_file_info_get_attribute_string (file_info, attribute);
+	mime_type = g_content_type_get_mime_type (content_type);
+
+	g_object_unref (file_info);
+	g_object_unref (file);
+
+	if (mime_type == NULL)
+		return FALSE;
+
+	/* Easy way to determine if a MIME type is a supported
+	 * image format: try creating a GdkPixbufLoader for it. */
+	loader = gdk_pixbuf_loader_new_with_mime_type (mime_type, NULL);
+
+	g_free (mime_type);
+
+	if (loader == NULL)
+		return FALSE;
+
+	gdk_pixbuf_loader_close (loader, NULL);
+	g_object_unref (loader);
+
+	return TRUE;
+}
+
 gboolean
 e_composer_selection_is_image_uris (EMsgComposer *composer,
                                     GtkSelectionData *selection)
@@ -677,59 +790,58 @@ e_composer_selection_is_image_uris (EMsgComposer *composer,
 		return FALSE;
 
 	for (ii = 0; uris[ii] != NULL; ii++) {
-		GFile *file;
-		GFileInfo *file_info;
-		GdkPixbufLoader *loader;
-		const gchar *attribute;
-		const gchar *content_type;
-		gchar *mime_type = NULL;
-
-		file = g_file_new_for_uri (uris[ii]);
-		attribute = G_FILE_ATTRIBUTE_STANDARD_FAST_CONTENT_TYPE;
-
-		/* XXX This blocks, but we're requesting the fast content
-		 *     type (which only inspects filenames), so hopefully
-		 *     it won't be noticeable.  Also, this is best effort
-		 *     so we don't really care if it fails. */
-		file_info = g_file_query_info (
-			file, attribute, G_FILE_QUERY_INFO_NONE, NULL, NULL);
-
-		if (file_info == NULL) {
-			g_object_unref (file);
-			all_image_uris = FALSE;
+		all_image_uris = e_composer_selection_uri_is_image (uris[ii]);
+		if (!all_image_uris)
 			break;
-		}
-
-		content_type = g_file_info_get_attribute_string (
-			file_info, attribute);
-		mime_type = g_content_type_get_mime_type (content_type);
-
-		g_object_unref (file_info);
-		g_object_unref (file);
-
-		if (mime_type == NULL) {
-			all_image_uris = FALSE;
-			break;
-		}
-
-		/* Easy way to determine if a MIME type is a supported
-		 * image format: try creating a GdkPixbufLoader for it. */
-		loader = gdk_pixbuf_loader_new_with_mime_type (mime_type, NULL);
-
-		g_free (mime_type);
-
-		if (loader == NULL) {
-			all_image_uris = FALSE;
-			break;
-		}
-
-		gdk_pixbuf_loader_close (loader, NULL);
-		g_object_unref (loader);
 	}
 
 	g_strfreev (uris);
 
 	return all_image_uris;
+}
+
+gboolean
+e_composer_selection_is_moz_url_image (EMsgComposer *composer,
+				       GtkSelectionData *selection,
+				       gchar **out_moz_url)
+{
+	static GdkAtom moz_url_atom = GDK_NONE;
+	const guchar *raw_data;
+	gchar *utf8 = NULL;
+	gint len;
+
+	g_return_val_if_fail (E_IS_MSG_COMPOSER (composer), FALSE);
+	g_return_val_if_fail (selection != NULL, FALSE);
+
+	if (moz_url_atom == GDK_NONE)
+		moz_url_atom = gdk_atom_intern_static_string ("text/x-moz-url");
+
+	if (gtk_selection_data_get_data_type (selection) != moz_url_atom)
+		return FALSE;
+
+	raw_data = gtk_selection_data_get_data_with_length (selection, &len);
+	if (raw_data)
+		utf8 = g_utf16_to_utf8 ((const gunichar2 *) raw_data, len, NULL, NULL, NULL);
+
+	if (utf8) {
+		gchar *ptr;
+
+		ptr = strchr (utf8, '\n');
+		if (ptr)
+			*ptr = '\0';
+	}
+
+	if (!utf8 || !e_composer_selection_uri_is_image ((const gchar *) utf8)) {
+		g_free (utf8);
+		return FALSE;
+	}
+
+	if (out_moz_url)
+		*out_moz_url = utf8;
+	else
+		g_free (utf8);
+
+	return TRUE;
 }
 
 typedef struct _UpdateSignatureData {
@@ -757,13 +869,13 @@ composer_load_signature_cb (EMailSignatureComboBox *combo_box,
 	EMsgComposer *composer = usd->composer;
 	gchar *contents = NULL, *new_signature_id;
 	gsize length = 0;
-	gboolean is_html;
+	EContentEditorMode editor_mode = E_CONTENT_EDITOR_MODE_UNKNOWN;
 	GError *error = NULL;
 	EHTMLEditor *editor;
 	EContentEditor *cnt_editor;
 
 	e_mail_signature_combo_box_load_selected_finish (
-		combo_box, result, &contents, &length, &is_html, &error);
+		combo_box, result, &contents, &length, &editor_mode, &error);
 
 	/* FIXME Use an EAlert here. */
 	if (error != NULL) {
@@ -788,7 +900,7 @@ composer_load_signature_cb (EMailSignatureComboBox *combo_box,
 	new_signature_id = e_content_editor_insert_signature (
 		cnt_editor,
 		contents,
-		is_html,
+		editor_mode,
 		usd->can_reposition_caret,
 		gtk_combo_box_get_active_id (GTK_COMBO_BOX (combo_box)),
 		&composer->priv->set_signature_from_message,

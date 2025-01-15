@@ -1,3 +1,586 @@
+evolution (3.54.3-1) unstable; urgency=medium
+
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.54.3
+  * debian/gbp.conf: Switch to debian/trixie and upstream/3.54.x branches
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Wed, 08 Jan 2025 10:18:18 -0900
+
+evolution (3.54.2-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.54.1
+
+ -- Alessandro Astone <alessandro.astone@canonical.com>  Thu, 05 Dec 2024 10:56:09 +0100
+
+evolution (3.54.1-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.54.1
+
+ -- Alessandro Astone <alessandro.astone@canonical.com>  Fri, 18 Oct 2024 16:15:17 +0200
+
+evolution (3.54.0-1) unstable; urgency=medium
+
+  [ Alessandro Astone ]
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.54.0
+
+  [ Jeremy Bícha ]
+  * Update homepage
+
+ -- Alessandro Astone <alessandro.astone@canonical.com>  Mon, 16 Sep 2024 15:53:18 +0200
+
+evolution (3.53.3-1) unstable; urgency=medium
+
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.53.2
+
+ -- Alessandro Astone <alessandro.astone@canonical.com>  Fri, 06 Sep 2024 10:18:32 +0200
+
+evolution (3.53.2-1) unstable; urgency=medium
+
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.53.2
+  * Remove obsolete Breaks/Replaces
+  * Bump Standards Version to 4.7.0
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Fri, 02 Aug 2024 13:49:13 -0400
+
+evolution (3.52.4-1) unstable; urgency=medium
+
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.52.4
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Fri, 02 Aug 2024 13:18:18 -0400
+
+evolution (3.52.3-1) unstable; urgency=medium
+
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.52.2
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Fri, 28 Jun 2024 10:13:01 -0400
+
+evolution (3.52.2-2) unstable; urgency=medium
+
+  * Fix accidental bumped Breaks/Replaces
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Wed, 29 May 2024 15:17:08 -0400
+
+evolution (3.52.2-1) unstable; urgency=medium
+
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.52.2
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Wed, 29 May 2024 08:45:22 -0400
+
+evolution (3.52.1-4) unstable; urgency=medium
+
+  * Fix arch:all build
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Fri, 10 May 2024 07:29:35 -0400
+
+evolution (3.52.1-3) unstable; urgency=medium
+
+  * Move libevolution-rss-common.so to libevolution package (Closes: #1070833)
+    (LP: #2061744)
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Fri, 10 May 2024 06:19:45 -0400
+
+evolution (3.52.1-2) unstable; urgency=medium
+
+  * Release to unstable
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Thu, 09 May 2024 21:09:19 -0400
+
+evolution (3.52.1-1) experimental; urgency=medium
+
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.52.1
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Wed, 01 May 2024 16:36:52 -0400
+
+evolution (3.52.0-1) experimental; urgency=medium
+
+  * New upstream release
+    - 3.51.3 Bug Fixes:
+      + Skip message Note part in "Edit as New Message"
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2627)
+      + Composer: Option to prefer local datetime in reply credits
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2657)
+      + Composer: Preserve whitespace in text/plain drafts
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2659)
+      + Unclear licensing in some places
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2661)
+      + Composer: Try to parse pasted addresses with ';' better
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2663)
+      + itip-view: Prefer user's choice for 24h time format
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2664)
+      + Tasks: Add Status=Needs Action filter option (Nico Rikken)
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2665)
+      + Pasting into composer address box can lose spaces
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2670)
+      + Support webcals: URI
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2675)
+      + ESourceConfig: Window width always increases on Type change
+        in Wayland
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2677)
+      + Remove old stock icons from table and cell Properties dialogs
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2679)
+      + Mail: Add 'From' header to default Free Form Expression
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2680)
+      + Composer: Drop extra font-size in elems of paste in HTML
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2685)
+      + build: Make sure tests run in serial
+        (https://gitlab.gnome.org/GNOME/evolution-data-server/-/issues/522)
+    - 3.51.3 Miscellaneous:
+      + Replace G_TYPE_INSTANCE_GET_PRIVATE() with G_ADD_PRIVATE()
+      + plugin_ui_hook_finalize: Chain up to the finalize() method
+      + Composer: Stop message send when retrieve of the content
+        failed
+      + Composer: Hint places for folding in Autocrypt header
+      + Composer: Change "Remove Key" to "Send without Key" in
+        Autocrypt question
+      + ci: Export the help with Gitlab Pages (Corentin Noël)
+      + itip-formatter: Show "Unable to send item..." errors with
+        error icon
+      + Calendar: Remove support for
+        E_CAL_STATIC_CAPABILITY_RETRACT_SUPPORTED
+      + Calendar: Meeting deletion can sometimes send duplicate
+        cancel messages
+      + appdata: Add <branding/> colors
+    - 3.52.0 Bug Fixes:
+      + Workaround excessive memory use
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2632)
+      + Calendar: Prefer html/markdown description in preview
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2672)
+      + Incorrect/missing URLs in app metadata
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2691)
+    - 3.52.0 Miscellaneous:
+      + main.c: Fix unused variable when in non-development build
+      + SetupBuildFlags.cmake: Remove "-Wl,--no-undefined" from
+        compiler flags
+      + ci: Create top 'pages' index.html page
+      + Plugins' .xml.in: Update homepage URI from GNOME wiki to
+        GNOME GitLab (Andre Klapper)
+  * debian/control: Bump e-d-s dependencies and build-dependencies
+    to 3.52.0
+
+ -- Amin Bandali <bandali@ubuntu.com>  Wed, 20 Mar 2024 15:32:24 -0400
+
+evolution (3.51.2-1) experimental; urgency=medium
+
+  * New upstream release
+  * debian/control: Bump e-d-s dependencies and build-dependencies to 3.51.2
+    (Closes: #1064378)
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Wed, 28 Feb 2024 14:05:52 -0500
+
+evolution (3.50.3-1) unstable; urgency=medium
+
+  * New upstream release
+    - Bug Fixes:
+      + Calendar: Improve print of the Month view
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2593)
+      + rss: Better parse itunes feeds
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2604)
+      + Drag and drop images in HTML composer from Chrome
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2608)
+      + EMFolderTree: Do not expand to-be-selected folder
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2613)
+    - Miscellaneous:
+      + rss: Ensure feed icon size to not be too large
+        (https://gitlab.gnome.org/GNOME/evolution/-/commit/b9419a22)
+  * debian/control: Bump e-d-s dependencies and build-dependencies
+    to 3.50.3
+
+ -- Amin Bandali <bandali@ubuntu.com>  Mon, 08 Jan 2024 20:57:19 -0500
+
+evolution (3.50.2-1) unstable; urgency=medium
+
+  * New upstream release
+    - Bug Fixes:
+      + EAttachment: Ask for GFileInfo's icon only when attribute
+        is set
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2550)
+      + Mail: Subject header not decoded with encrypted messages
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2551)
+      + On empty mailbox new mail is automatically selected and
+        marked read
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2552)
+      + Contacts: Update preview on contact change in List View
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2557)
+      + Mail: Search with "current folder and subfolders" in local
+        Trash fails
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2569)
+      + "Do not sign meeting requests" has no effect
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2570)
+    - Miscellaneous:
+      + EContactCard: Card sometimes hides values
+      + docs: Add API indexes for new symbols in 3.50
+      + Fix a memory leak in ECompEditor
+      + ECompoEditor: Some attachments can be hidden
+      + Calendar: Go to day/today in Year View doesn't update internal
+        view dates
+      + data: Update appdata (Sabri Ünal)
+      + EYearView: Fix a crash when moving through search results
+  * Stop using debian/control.in
+  * debian/control: Bump e-d-s dependencies and build-dependencies
+    to 3.50.2
+
+ -- Amin Bandali <bandali@ubuntu.com>  Tue, 05 Dec 2023 18:09:56 -0500
+
+evolution (3.50.1-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+    - Bug Fixes:
+      + Mail: Correct conversion of UTF-16 encoded text files
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/1436)
+      + ConfigLookup: Default to STARTTLS for LDAP from SRV records
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/1608)
+      + EWebView: Enable spell checking for editable fields
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2526)
+      + Make SRV config lookup records lower priority than the others
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2533)
+      + Calendar: "Work Week" column separator light in dark theme
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2535)
+      + OpenPGP: "Always sign/encrypt" doesn't always work (nkr)
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2546)
+      + Update default calendar colors
+        (https://gitlab.gnome.org/GNOME/evolution-data-server/-/issues/494)
+    - Miscellaneous:
+      + flatpak: Add missing comma in the manifests
+  * debian/control.in: Bump e-d-s dependencies and build-dependencies to 3.50.1
+
+ -- Amin Bandali <bandali@ubuntu.com>  Tue, 24 Oct 2023 07:25:57 -0400
+
+evolution (3.50.0-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.50.0
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Fri, 15 Sep 2023 15:11:19 -0400
+
+evolution (3.49.3-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.49.3
+  * Drop patch applied in new release
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Fri, 01 Sep 2023 09:22:13 -0400
+
+evolution (3.49.2-3) unstable; urgency=medium
+
+  * Team upload
+  * Cherry-pick patch to prevent sending 'Autocrypt' headers larger
+    than 10KB; related to
+    https://gitlab.gnome.org/GNOME/evolution/-/issues/375
+
+ -- Amin Bandali <bandali@ubuntu.com>  Thu, 17 Aug 2023 00:31:09 -0400
+
+evolution (3.49.2-2) unstable; urgency=medium
+
+  * Release to unstable
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Sat, 05 Aug 2023 04:50:36 -0400
+
+evolution (3.49.2-1) experimental; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.49.2
+  * debian/control.in: Bump minimum libchamplain for restored contact maps
+    feature
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Fri, 04 Aug 2023 07:20:27 -0400
+
+evolution (3.48.4-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream release
+    - Bug Fixes:
+      + HTML attachment viewport is tiny
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2400)
+      + EMailFormatter: Style change not propagated to all instances
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2401)
+    - Miscellaneous:
+      + EMailSignatureScriptDialog: Cannot choose script file under
+        Flatpak
+      + EMeetingListStore: Wrong role section picked in Attendees
+        dialog
+  * Bump e-d-s dependencies and build-dependencies to 3.48.4
+
+ -- Amin Bandali <bandali@ubuntu.com>  Sat, 01 Jul 2023 13:19:48 -0400
+
+evolution (3.48.3-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+    - Bug Fixes:
+      + EShellSearchbar: Cannot clear search by deleting text
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2362)
+      + Mail: Preview content sometimes grows indefinitely
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2380)
+      + Composer: Use 'Wrap quoted text in replies' option also for text/html parts
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2381)
+      + Mail: Workaround recursion in iframe height computation
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2382)
+  * Bump e-d-s dependencies and build-dependencies to 3.48.3
+
+ -- Amin Bandali <bandali@ubuntu.com>  Tue, 13 Jun 2023 11:54:31 -0400
+
+evolution (3.48.2-1) unstable; urgency=medium
+
+  [ Amin Bandali ]
+  * New upstream release (LP: #2021529)
+    - Bug Fixes:
+      + Updated attachments are shown as updated, but sent in old version
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/1463)
+      + TNEF attached message decoded incorrectly
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/1810)
+      + Mail: Preview panel has too many vertical scrollbars
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2310)
+      + Mail: Recalc preview iframe heights more often
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2332)
+      + Composer: HTML formatting lost on paste from external browser
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2335)
+      + Inconsistent S/MIME signature validation results
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2340)
+      + Wrong S/MIME certificate selection for encrypted email
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2345)
+      + Search input field's clear button unclickable during first entry
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2355)
+      + PGP-MIME: Show decrypted protected header as Subject in preview
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2356)
+      + Composer: Added extra quotation level after draft open
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2371)
+      + Bundle 'x-office-...' non-symbolic icons
+        (https://gitlab.gnome.org/GNOME/evolution/-/issues/2372)
+    - Miscellaneous:
+      + rss: Fix recently introduced memory leaks
+  * Bump e-d-s dependencies and build-dependencies to 3.48.2
+
+  [ Jeremy Bícha ]
+  * Release to unstable
+
+ -- Amin Bandali <bandali@ubuntu.com>  Mon, 29 May 2023 15:28:49 -0400
+
+evolution (3.48.1-1) experimental; urgency=medium
+
+  * New upstream release (LP: #2017229)
+  * Bump e-d-s dependencies and build-dependencies to 3.48.1
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 21 Apr 2023 12:48:18 +0200
+
+evolution (3.48.0-1) experimental; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.48.0
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Sun, 26 Mar 2023 15:55:31 -0400
+
+evolution (3.47.3-1) experimental; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.47.3
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 03 Mar 2023 07:15:16 -0500
+
+evolution (3.47.2-1) experimental; urgency=medium
+
+  * New upstream release (for GNOME 44)
+  * Bump e-d-s dependencies and build-dependencies to 3.47.2
+  * Revert branching for bookworm
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 10 Feb 2023 12:25:23 -0500
+
+evolution (3.46.4-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.46.4
+  * Update standards version to 4.6.2, no changes needed
+  * debian/gbp.conf, debian/control.in: Branch for bookworm
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 10 Feb 2023 07:12:00 -0500
+
+evolution (3.46.3-1) unstable; urgency=medium
+
+  * New upstream release
+  * Avoid explicitly specifying -Wl,--as-needed linker flag.
+  * Bump e-d-s dependencies and build-dependencies to 3.46.3
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 09 Jan 2023 11:49:20 -0500
+
+evolution (3.46.2-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.46.2
+  * Add debian/upstream/metadata
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 05 Dec 2022 16:47:57 -0500
+
+evolution (3.46.1-1) unstable; urgency=medium
+
+  * New upstream release (LP: #1993835)
+  * Bump e-d-s dependencies and build-dependencies to 3.46.1
+  * Drop patches applied in new release
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 21 Oct 2022 11:43:45 -0400
+
+evolution (3.46.0-2) unstable; urgency=medium
+
+  * Cherry-pick bugfix commits that weren't part of 3.46.0
+    because of the GNOME 43 hard code freeze
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 16 Sep 2022 16:00:40 -0400
+
+evolution (3.46.0-1) unstable; urgency=medium
+
+  [ Jeremy Bicha ]
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.46.0
+  * Build-Depend on debhelper-compat 13
+  * debian/control.in: Bump Standards-Version to 4.6.1
+  * debian/control.in: Set Rules-Requires-Root: no
+
+  [ Simon McVittie ]
+  * Build-depend on libgdk-pixbuf-2.0-dev instead of transitional
+    libgdk-pixbuf2.0-dev
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 16 Sep 2022 15:49:44 -0400
+
+evolution (3.45.3-2) unstable; urgency=medium
+
+  * Release to unstable
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 05 Sep 2022 16:11:10 -0400
+
+evolution (3.45.3-1) experimental; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.45.3
+  * debian/control.in: Drop obsolete Build-Depends on gcr
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 02 Sep 2022 04:26:02 -0400
+
+evolution (3.45.2-2) experimental; urgency=medium
+
+  [ Luca Boccassi ]
+  * evolution: depend on default-dbus-system-bus | dbus-system-bus
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Thu, 18 Aug 2022 04:29:11 -0400
+
+evolution (3.45.2-1) experimental; urgency=medium
+
+  * New upstream release
+  * debian/rules: Keep using gcr3 for now
+  * debian/control.in: Update dependencies for e-d-s 3.45 and libsoup3
+  * Drop gnome-desktop patch: applied in new release
+  * debian/libevolution.install: Install new NEWS & Blogs (RSS) Reader
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 05 Aug 2022 14:49:48 -0400
+
+evolution (3.44.4-1) unstable; urgency=medium
+
+  * New upstream release (LP: #1976623)
+  * Bump e-d-s dependencies and build-dependencies to 3.44.4
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 05 Aug 2022 07:26:26 -0400
+
+evolution (3.44.3-2) unstable; urgency=medium
+
+  * Cherry-pick patch to fix build with gnome-desktop 43
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Thu, 28 Jul 2022 09:08:08 -0400
+
+evolution (3.44.3-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release (LP: #1976623)
+  * Bump dependencies to 3.44.3
+
+ -- Nathan Pratta Teodosio <nathan.teodosio@canonical.com>  Fri, 01 Jul 2022 15:15:22 -0300
+
+evolution (3.44.2-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+  * Bump dependencies to 3.44.2
+
+ -- Nathan Pratta Teodosio <nathan.teodosio@canonical.com>  Wed, 01 Jun 2022 16:01:10 -0300
+
+evolution (3.44.1-2) unstable; urgency=medium
+
+  * Drop 02_nss_paths.patch: no longer required (Closes: #1009367)
+  * debian/control.in: Bump Build-Depends on libnss3-dev to >= 2:3.72-1~
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Sat, 23 Apr 2022 08:13:10 -0400
+
+evolution (3.44.1-1) unstable; urgency=medium
+
+  * New upstream release (LP: #1969935)
+  * Bump e-d-s dependencies and build-dependencies to 3.44.1
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 22 Apr 2022 10:55:57 -0400
+
+evolution (3.44.0-2) unstable; urgency=medium
+
+  * Switch to libgweather 4
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 28 Mar 2022 14:07:15 -0400
+
+evolution (3.44.0-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.44.0
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 18 Mar 2022 08:29:19 -0400
+
+evolution (3.43.3-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.43.3
+
+ -- Jeremy Bicha <jeremy.bicha@canonical.com>  Sun, 06 Mar 2022 09:08:17 -0500
+
+evolution (3.43.2-2) unstable; urgency=medium
+
+  * debian/evolution-common.gsettings-override: Don't show beta warning
+
+ -- Jeremy Bicha <jeremy.bicha@canonical.com>  Wed, 16 Feb 2022 07:58:53 -0500
+
+evolution (3.43.2-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.43.2
+  * debian/control.in: Build-Depend on libcmark-dev for Markdown formatting
+  * debian/control.in: Build-Depend on libsqlite3-dev
+
+ -- Jeremy Bicha <jeremy.bicha@canonical.com>  Tue, 15 Feb 2022 11:46:45 -0500
+
+evolution (3.42.4-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.42.4
+
+ -- Jeremy Bicha <jeremy.bicha@canonical.com>  Fri, 11 Feb 2022 08:14:54 -0500
+
+evolution (3.42.3-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.42.3
+
+ -- Jeremy Bicha <jbicha@debian.org>  Fri, 14 Jan 2022 20:06:40 -0500
+
+evolution (3.42.2-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump e-d-s dependencies and build-dependencies to 3.42.2
+
+ -- Jeremy Bicha <jbicha@debian.org>  Sat, 04 Dec 2021 03:58:57 -0500
+
 evolution (3.42.1-1) unstable; urgency=medium
 
   * New upstream release

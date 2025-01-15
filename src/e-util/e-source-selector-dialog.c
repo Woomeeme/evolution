@@ -5,12 +5,13 @@
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
- * published by the Free Software Foundation; either the
+ * published by the Free Software Foundation; either the version 2 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * for more details.
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser  General Public
+ * License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -22,13 +23,10 @@
 
 #include <glib/gi18n-lib.h>
 
+#include "e-misc-utils.h"
 #include "e-tree-view-frame.h"
 #include "e-source-selector.h"
 #include "e-source-selector-dialog.h"
-
-#define E_SOURCE_SELECTOR_DIALOG_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_SOURCE_SELECTOR_DIALOG, ESourceSelectorDialogPrivate))
 
 struct _ESourceSelectorDialogPrivate {
 	GtkWidget *selector;
@@ -46,10 +44,7 @@ enum {
 	PROP_EXCEPT_SOURCE
 };
 
-G_DEFINE_TYPE (
-	ESourceSelectorDialog,
-	e_source_selector_dialog,
-	GTK_TYPE_DIALOG)
+G_DEFINE_TYPE_WITH_PRIVATE (ESourceSelectorDialog, e_source_selector_dialog, GTK_TYPE_DIALOG)
 
 static void
 source_selector_dialog_row_activated_cb (GtkTreeView *tree_view,
@@ -57,6 +52,16 @@ source_selector_dialog_row_activated_cb (GtkTreeView *tree_view,
                                          GtkTreeViewColumn *column,
                                          GtkWidget *dialog)
 {
+	GtkTreeSelection *selection;
+
+	if (!path)
+		return;
+
+	selection = gtk_tree_view_get_selection (tree_view);
+
+	if (!gtk_tree_selection_path_is_selected (selection, path))
+		return;
+
 	gtk_dialog_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
 }
 
@@ -179,13 +184,11 @@ source_selector_dialog_get_property (GObject *object,
 static void
 source_selector_dialog_dispose (GObject *object)
 {
-	ESourceSelectorDialogPrivate *priv;
+	ESourceSelectorDialog *self = E_SOURCE_SELECTOR_DIALOG (object);
 
-	priv = E_SOURCE_SELECTOR_DIALOG_GET_PRIVATE (object);
-
-	g_clear_object (&priv->registry);
-	g_clear_object (&priv->selected_source);
-	g_clear_object (&priv->except_source);
+	g_clear_object (&self->priv->registry);
+	g_clear_object (&self->priv->selected_source);
+	g_clear_object (&self->priv->except_source);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_source_selector_dialog_parent_class)->dispose (object);
@@ -194,11 +197,9 @@ source_selector_dialog_dispose (GObject *object)
 static void
 source_selector_dialog_finalize (GObject *object)
 {
-	ESourceSelectorDialogPrivate *priv;
+	ESourceSelectorDialog *self = E_SOURCE_SELECTOR_DIALOG (object);
 
-	priv = E_SOURCE_SELECTOR_DIALOG_GET_PRIVATE (object);
-
-	g_free (priv->extension_name);
+	g_free (self->priv->extension_name);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_source_selector_dialog_parent_class)->finalize (object);
@@ -252,8 +253,6 @@ static void
 e_source_selector_dialog_class_init (ESourceSelectorDialogClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (ESourceSelectorDialogPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = source_selector_dialog_set_property;
@@ -310,7 +309,7 @@ e_source_selector_dialog_init (ESourceSelectorDialog *dialog)
 {
 	GtkWidget *action_area;
 
-	dialog->priv = E_SOURCE_SELECTOR_DIALOG_GET_PRIVATE (dialog);
+	dialog->priv = e_source_selector_dialog_get_instance_private (dialog);
 
 	action_area = gtk_dialog_get_action_area (GTK_DIALOG (dialog));
 
@@ -352,6 +351,7 @@ e_source_selector_dialog_new (GtkWindow *parent,
 
 	return g_object_new (
 		E_TYPE_SOURCE_SELECTOR_DIALOG,
+		"use-header-bar", e_util_get_use_header_bar (),
 		"transient-for", parent,
 		"registry", registry,
 		"extension-name", extension_name,

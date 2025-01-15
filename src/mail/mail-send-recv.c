@@ -1214,7 +1214,7 @@ send_done (gpointer data,
 
 	return res;
 }
-/* although we dont do anythign smart here yet, there is no need for this interface to
+/* although we don't do anything smart here yet, there is no need for this interface to
  * be available to anyone else.
  * This can also be used to hook into which folders are being updated, and occasionally
  * let them refresh */
@@ -1504,7 +1504,7 @@ refresh_folders_exec (struct _refresh_folders_msg *m,
 
 				if (folder) {
 					store = camel_folder_get_parent_store (folder);
-					full_name = camel_folder_get_full_name (folder);
+					full_name = camel_folder_get_full_display_name (folder);
 				} else {
 					store = m->store;
 					full_name = (const gchar *) m->folders->pdata[i];
@@ -1737,15 +1737,15 @@ ref_default_transport (EMailSession *session)
 	extension_name = E_SOURCE_EXTENSION_MAIL_SUBMISSION;
 	if (e_source_has_extension (source, extension_name)) {
 		ESourceMailSubmission *extension;
-		gchar *uid;
+		gchar *tr_uid;
 
 		extension = e_source_get_extension (source, extension_name);
-		uid = e_source_mail_submission_dup_transport_uid (extension);
+		tr_uid = e_source_mail_submission_dup_transport_uid (extension);
 
 		g_object_unref (source);
-		source = e_source_registry_ref_source (registry, uid);
+		source = e_source_registry_ref_source (registry, tr_uid);
 
-		g_free (uid);
+		g_free (tr_uid);
 	} else {
 		g_object_unref (source);
 		source = NULL;

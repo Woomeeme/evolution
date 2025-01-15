@@ -164,6 +164,9 @@ e_shell_run_save_dialog (EShell *shell,
 			if (g_ascii_strcasecmp (flt, "*.mbox") == 0)
 				gtk_file_filter_set_name (
 					filter, _("Berkeley Mailbox (mbox)"));
+			else if (g_ascii_strcasecmp (flt, "*.eml") == 0)
+				gtk_file_filter_set_name (
+					filter, _("Mail Message (eml)"));
 			else if (g_ascii_strcasecmp (flt, "*.vcf") == 0)
 				gtk_file_filter_set_name (
 					filter, _("vCard (.vcf)"));
@@ -323,8 +326,14 @@ e_shell_utils_run_help_about (EShell *shell)
 	static const gchar *authors[] = {
 		"The Evolution Team",
 		"",
-		"Milan Crha <mcrha@redhat.com>",
-		"Fabiano Fid\xC3\xAAncio <fabiano@fidencio.org>",
+		"Bharath Acharya",
+		"Matthew Barnes",
+		"Milan Crha",
+		"Fabiano Fid\xC3\xAAncio",
+		"Chenthill Palanisamy",
+		"Tomas Popela",
+		"Srinivasa Ragavan",
+		"Dan Vr\xC3\xA1til",
 		"",
 		"and many past contributors",
 		NULL
@@ -374,7 +383,7 @@ e_shell_utils_run_help_contents (EShell *shell)
 	 * See https://bugzilla.gnome.org/show_bug.cgi?id=576478 */
 
 	online_help_url = g_strconcat (
-		"http://library.gnome.org/users/evolution/",
+		"https://infrastructure.pages.gitlab.gnome.org/help.gnome.org/evolution/",
 		BASE_VERSION, NULL);
 	e_show_uri (window, online_help_url);
 	g_free (online_help_url);

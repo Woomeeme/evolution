@@ -15,18 +15,17 @@
  *
  */
 
+#include "evolution-config.h"
+
 #include <camel/camel.h>
 
 #include "e-mail-part-list.h"
-
-#define E_MAIL_PART_LIST_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_PART_LIST, EMailPartListPrivate))
 
 struct _EMailPartListPrivate {
 	CamelFolder *folder;
 	CamelMimeMessage *message;
 	gchar *message_uid;
+	GPtrArray *autocrypt_keys;
 
 	GQueue queue;
 	GMutex queue_lock;
@@ -39,10 +38,39 @@ enum {
 	PROP_MESSAGE_UID
 };
 
-G_DEFINE_TYPE (EMailPartList, e_mail_part_list, G_TYPE_OBJECT)
+G_DEFINE_TYPE_WITH_PRIVATE (EMailPartList, e_mail_part_list, G_TYPE_OBJECT)
 
 static CamelObjectBag *registry = NULL;
 G_LOCK_DEFINE_STATIC (registry);
+
+/* takes, aka assumes ownership, of all the pointers, which cannot be NULL */
+EMailAutocryptKey *
+e_mail_autocrypt_key_new (CamelGpgKeyInfo *info,
+			  guint8 *keydata,
+			  gsize keydata_size)
+{
+	EMailAutocryptKey *key;
+
+	g_return_val_if_fail (info != NULL, NULL);
+	g_return_val_if_fail (keydata != NULL, NULL);
+
+	key = g_new0 (EMailAutocryptKey, 1);
+	key->info = info;
+	key->keydata = keydata;
+	key->keydata_size = keydata_size;
+
+	return key;
+}
+
+void
+e_mail_autocrypt_key_free (EMailAutocryptKey *key)
+{
+	if (key) {
+		camel_gpg_key_info_free (key->info);
+		g_free (key->keydata);
+		g_free (key);
+	}
+}
 
 static void
 mail_part_list_set_folder (EMailPartList *part_list,
@@ -144,16 +172,16 @@ mail_part_list_get_property (GObject *object,
 static void
 mail_part_list_dispose (GObject *object)
 {
-	EMailPartListPrivate *priv;
+	EMailPartList *self = E_MAIL_PART_LIST (object);
 
-	priv = E_MAIL_PART_LIST_GET_PRIVATE (object);
-	g_clear_object (&priv->folder);
-	g_clear_object (&priv->message);
+	g_clear_object (&self->priv->folder);
+	g_clear_object (&self->priv->message);
+	g_clear_pointer (&self->priv->autocrypt_keys, g_ptr_array_unref);
 
-	g_mutex_lock (&priv->queue_lock);
-	while (!g_queue_is_empty (&priv->queue))
-		g_object_unref (g_queue_pop_head (&priv->queue));
-	g_mutex_unlock (&priv->queue_lock);
+	g_mutex_lock (&self->priv->queue_lock);
+	while (!g_queue_is_empty (&self->priv->queue))
+		g_object_unref (g_queue_pop_head (&self->priv->queue));
+	g_mutex_unlock (&self->priv->queue_lock);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_mail_part_list_parent_class)->dispose (object);
@@ -162,14 +190,12 @@ mail_part_list_dispose (GObject *object)
 static void
 mail_part_list_finalize (GObject *object)
 {
-	EMailPartListPrivate *priv;
+	EMailPartList *self = E_MAIL_PART_LIST (object);
 
-	priv = E_MAIL_PART_LIST_GET_PRIVATE (object);
+	g_free (self->priv->message_uid);
 
-	g_free (priv->message_uid);
-
-	g_warn_if_fail (g_queue_is_empty (&priv->queue));
-	g_mutex_clear (&priv->queue_lock);
+	g_warn_if_fail (g_queue_is_empty (&self->priv->queue));
+	g_mutex_clear (&self->priv->queue_lock);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_mail_part_list_parent_class)->finalize (object);
@@ -179,8 +205,6 @@ static void
 e_mail_part_list_class_init (EMailPartListClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EMailPartListPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_part_list_set_property;
@@ -228,7 +252,7 @@ e_mail_part_list_class_init (EMailPartListClass *class)
 static void
 e_mail_part_list_init (EMailPartList *part_list)
 {
-	part_list->priv = E_MAIL_PART_LIST_GET_PRIVATE (part_list);
+	part_list->priv = e_mail_part_list_get_instance_private (part_list);
 
 	g_mutex_init (&part_list->priv->queue_lock);
 }
@@ -447,6 +471,27 @@ e_mail_part_list_sum_validity (EMailPartList *part_list,
 
 	if (out_validity_smime_sum)
 		*out_validity_smime_sum = validity_smime_sum;
+}
+
+
+GPtrArray * /* EMailAutocryptKey * */
+e_mail_part_list_get_autocrypt_keys (EMailPartList *part_list)
+{
+	g_return_val_if_fail (E_IS_MAIL_PART_LIST (part_list), NULL);
+
+	return part_list->priv->autocrypt_keys;
+}
+
+void
+e_mail_part_list_take_autocrypt_keys (EMailPartList *part_list,
+				      GPtrArray *keys) /* EMailAutocryptKey * */
+{
+	g_return_if_fail (E_IS_MAIL_PART_LIST (part_list));
+
+	if (part_list->priv->autocrypt_keys != keys) {
+		g_clear_pointer (&part_list->priv->autocrypt_keys, g_ptr_array_unref);
+		part_list->priv->autocrypt_keys = keys;
+	}
 }
 
 /**

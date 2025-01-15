@@ -27,16 +27,12 @@
 #include "e-dialog-widgets.h"
 #include "e-misc-utils.h"
 
-#define E_CATEGORY_EDITOR_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CATEGORY_EDITOR, ECategoryEditorPrivate))
-
 struct _ECategoryEditorPrivate {
 	GtkWidget *category_name;
 	GtkWidget *category_icon;
 };
 
-G_DEFINE_TYPE (ECategoryEditor, e_category_editor, GTK_TYPE_DIALOG)
+G_DEFINE_TYPE_WITH_PRIVATE (ECategoryEditor, e_category_editor, GTK_TYPE_DIALOG)
 
 static void
 update_preview (GtkFileChooser *chooser,
@@ -140,14 +136,12 @@ check_category_name (const gchar *name)
 static void
 e_category_editor_class_init (ECategoryEditorClass *class)
 {
-	g_type_class_add_private (class, sizeof (ECategoryEditorPrivate));
 }
 
 static void
 e_category_editor_init (ECategoryEditor *editor)
 {
 	GtkWidget *dialog_content;
-	GtkWidget *dialog_action_area;
 	GtkGrid *grid_category_properties;
 	GtkWidget *label_name;
 	GtkWidget *label_icon;
@@ -157,7 +151,7 @@ e_category_editor_init (ECategoryEditor *editor)
 	GtkWidget *chooser_dialog = NULL;
 	GtkWidget *preview;
 
-	editor->priv = E_CATEGORY_EDITOR_GET_PRIVATE (editor);
+	editor->priv = e_category_editor_get_instance_private (editor);
 
 	gtk_window_set_resizable (GTK_WINDOW (editor), FALSE);
 	gtk_container_set_border_width (GTK_CONTAINER (editor), 6);
@@ -248,10 +242,6 @@ e_category_editor_init (ECategoryEditor *editor)
 	gtk_grid_attach (grid_category_properties, chooser_button, 1, 1, 1, 1);
 	editor->priv->category_icon = chooser_button;
 
-	dialog_action_area = gtk_dialog_get_action_area (GTK_DIALOG (editor));
-	gtk_button_box_set_layout (
-		GTK_BUTTON_BOX (dialog_action_area), GTK_BUTTONBOX_END);
-
 	gtk_dialog_add_buttons (
 		GTK_DIALOG (editor),
 		_("_Cancel"), GTK_RESPONSE_CANCEL,
@@ -283,7 +273,9 @@ e_category_editor_init (ECategoryEditor *editor)
 ECategoryEditor *
 e_category_editor_new (void)
 {
-	return g_object_new (E_TYPE_CATEGORY_EDITOR, NULL);
+	return g_object_new (E_TYPE_CATEGORY_EDITOR,
+		"use-header-bar", e_util_get_use_header_bar (),
+		NULL);
 }
 
 /**

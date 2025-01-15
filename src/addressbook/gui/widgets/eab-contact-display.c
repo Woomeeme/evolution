@@ -34,21 +34,15 @@
 #include "eab-contact-formatter.h"
 #include "eab-gui-util.h"
 
-#define EAB_CONTACT_DISPLAY_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), EAB_TYPE_CONTACT_DISPLAY, EABContactDisplayPrivate))
-
 #define TEXT_IS_RIGHT_TO_LEFT \
 	(gtk_widget_get_default_direction () == GTK_TEXT_DIR_RTL)
-
-#define GOOGLE_MAP_PREFIX "https://maps.google.com?q="
-#define OPENSTREETMAP_PREFIX "https://www.openstreetmap.org/search?query="
 
 struct _EABContactDisplayPrivate {
 	EContact *contact;
 
 	EABContactDisplayMode mode;
 	gboolean show_maps;
+	gboolean home_before_work;
 };
 
 enum {
@@ -77,43 +71,7 @@ static const gchar *ui =
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE (
-	EABContactDisplay,
-	eab_contact_display,
-	E_TYPE_WEB_VIEW)
-
-static void
-contact_display_open_map (EABContactDisplay *display,
-			  const gchar *query)
-{
-	GSettings *settings;
-	gchar *open_map_target;
-	gpointer parent;
-	gchar *uri;
-	const gchar *prefix;
-
-	g_return_if_fail (EAB_IS_CONTACT_DISPLAY (display));
-	g_return_if_fail (query != NULL);
-
-	parent = gtk_widget_get_toplevel (GTK_WIDGET (display));
-	parent = gtk_widget_is_toplevel (parent) ? parent : NULL;
-
-	settings = e_util_ref_settings ("org.gnome.evolution.addressbook");
-	open_map_target = g_settings_get_string (settings, "open-map-target");
-	g_object_unref (settings);
-
-	if (open_map_target && g_ascii_strcasecmp (open_map_target, "google") == 0) {
-		prefix = GOOGLE_MAP_PREFIX;
-	} else {
-		prefix = OPENSTREETMAP_PREFIX;
-	}
-
-	g_free (open_map_target);
-
-	uri = g_strconcat (prefix, query, NULL);
-	e_show_uri (parent, uri);
-	g_free (uri);
-}
+G_DEFINE_TYPE_WITH_PRIVATE (EABContactDisplay, eab_contact_display, E_TYPE_WEB_VIEW)
 
 static void
 contact_display_emit_send_message (EABContactDisplay *display,
@@ -285,10 +243,9 @@ contact_display_get_property (GObject *object,
 static void
 contact_display_dispose (GObject *object)
 {
-	EABContactDisplayPrivate *priv;
+	EABContactDisplay *self = EAB_CONTACT_DISPLAY (object);
 
-	priv = EAB_CONTACT_DISPLAY_GET_PRIVATE (object);
-	g_clear_object (&priv->contact);
+	g_clear_object (&self->priv->contact);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (eab_contact_display_parent_class)->dispose (object);
@@ -320,21 +277,23 @@ contact_display_hovering_over_link (EWebView *web_view,
 
 		handled = TRUE;
 	} else if (uri && g_str_has_prefix (uri, "open-map:")) {
-		SoupURI *suri;
+		GUri *guri;
 
-		suri = soup_uri_new (uri);
-		if (suri) {
+		guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+		if (guri) {
 			gchar *decoded;
 
-			decoded = soup_uri_decode (soup_uri_get_path (suri));
+			decoded = g_uri_unescape_string (g_uri_get_path (guri), NULL);
 
-			message = g_strdup_printf (_("Click to open map for %s"), decoded);
-			e_web_view_status_message (web_view, message);
-			g_free (message);
+			if (decoded) {
+				message = g_strdup_printf (_("Click to open map for %s"), decoded);
+				e_web_view_status_message (web_view, message);
+				g_free (message);
 
-			handled = TRUE;
+				handled = TRUE;
+			}
 
-			soup_uri_free (suri);
+			g_uri_unref (guri);
 			g_free (decoded);
 		}
 	}
@@ -360,19 +319,6 @@ contact_display_link_clicked (EWebView *web_view,
 
 		index = atoi (uri + length);
 		contact_display_emit_send_message (display, index);
-		return;
-	}
-
-	length = strlen ("open-map:");
-	if (g_ascii_strncasecmp (uri, "open-map:", length) == 0) {
-		SoupURI *suri;
-
-		suri = soup_uri_new (uri);
-		if (suri) {
-			contact_display_open_map (display, soup_uri_get_path (suri));
-			soup_uri_free (suri);
-		}
-
 		return;
 	}
 
@@ -423,7 +369,8 @@ contact_display_update_actions (EWebView *web_view)
 }
 
 static void
-contact_display_web_process_crashed_cb (EABContactDisplay *display)
+contact_display_web_process_terminated_cb (EABContactDisplay *display,
+					   WebKitWebProcessTerminationReason reason)
 {
 	EAlertSink *alert_sink;
 
@@ -436,12 +383,28 @@ contact_display_web_process_crashed_cb (EABContactDisplay *display)
 }
 
 static void
+eab_contact_display_settings_changed_cb (GSettings *settings,
+					 const gchar *key,
+					 gpointer user_data)
+{
+	EABContactDisplay *display = user_data;
+	gboolean home_before_work;
+
+	g_return_if_fail (EAB_IS_CONTACT_DISPLAY (display));
+
+	home_before_work = g_settings_get_boolean (settings, "preview-home-before-work");
+
+	if (display->priv->contact && (home_before_work ? 1 : 0) != (display->priv->home_before_work ? 1 : 0)) {
+		display->priv->home_before_work = home_before_work;
+		load_contact (display);
+	}
+}
+
+static void
 eab_contact_display_class_init (EABContactDisplayClass *class)
 {
 	GObjectClass *object_class;
 	EWebViewClass *web_view_class;
-
-	g_type_class_add_private (class, sizeof (EABContactDisplayPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = contact_display_set_property;
@@ -503,17 +466,18 @@ eab_contact_display_init (EABContactDisplay *display)
 	EWebView *web_view;
 	GtkUIManager *ui_manager;
 	GtkActionGroup *action_group;
+	GSettings *settings;
 	const gchar *domain = GETTEXT_PACKAGE;
 	GError *error = NULL;
 
-	display->priv = EAB_CONTACT_DISPLAY_GET_PRIVATE (display);
+	display->priv = eab_contact_display_get_instance_private (display);
 
 	web_view = E_WEB_VIEW (display);
 	ui_manager = e_web_view_get_ui_manager (web_view);
 
 	g_signal_connect (
-		display, "web-process-crashed",
-		G_CALLBACK (contact_display_web_process_crashed_cb), NULL);
+		display, "web-process-terminated",
+		G_CALLBACK (contact_display_web_process_terminated_cb), NULL);
 
 	g_signal_connect (
 		web_view, "content-loaded",
@@ -537,6 +501,12 @@ eab_contact_display_init (EABContactDisplay *display)
 	gtk_ui_manager_add_ui_from_string (ui_manager, ui, -1, &error);
 	if (error != NULL)
 		g_error ("%s", error->message);
+
+	settings = e_util_ref_settings ("org.gnome.evolution.addressbook");
+	g_signal_connect_object (settings, "changed::preview-home-before-work",
+		G_CALLBACK (eab_contact_display_settings_changed_cb), display, 0);
+	display->priv->home_before_work = g_settings_get_boolean (settings, "preview-home-before-work");
+	g_clear_object (&settings);
 }
 
 GtkWidget *

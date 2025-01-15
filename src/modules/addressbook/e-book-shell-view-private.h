@@ -46,10 +46,6 @@
 #include "e-book-shell-sidebar.h"
 #include "e-book-shell-view-actions.h"
 
-#define E_BOOK_SHELL_VIEW_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_BOOK_SHELL_VIEW, EBookShellViewPrivate))
-
 /* Shorthand, requires a variable named "shell_window". */
 #define ACTION(name) \
 	(E_SHELL_WINDOW_ACTION_##name (shell_window))
@@ -73,6 +69,8 @@ enum {
 	CONTACT_SEARCH_ADVANCED = -1,
 	CONTACT_SEARCH_NAME_CONTAINS,
 	CONTACT_SEARCH_EMAIL_BEGINS_WITH,
+	CONTACT_SEARCH_EMAIL_CONTAINS,
+	CONTACT_SEARCH_PHONE_CONTAINS,
 	CONTACT_SEARCH_ANY_FIELD_CONTAINS
 };
 
@@ -91,13 +89,13 @@ struct _EBookShellViewPrivate {
 
 	GHashTable *uid_to_view;
 
-	gint preview_index;
-
 	/* Can track whether search changed while locked,
 	 * but it is not usable at the moment. */
 	gint search_locked;
 
 	ESource *clicked_source;
+
+	gchar *selected_source_uid;
 };
 
 void		e_book_shell_view_private_init

@@ -55,19 +55,6 @@
 #include "certdb.h"
 #include "hasht.h"
 
-/* XXX Hack to disable p11-kit's pkcs11.h header, since
- *     NSS headers supply the same PKCS #11 definitions. */
-#define PKCS11_H 1
-
-/* XXX Yeah, yeah */
-#define GCR_API_SUBJECT_TO_CHANGE
-
-#include <gcr/gcr-base.h>
-
-#define E_CERT_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CERT, ECertPrivate))
-
 struct _ECertPrivate {
 	CERTCertificate *cert;
 
@@ -98,84 +85,59 @@ struct _ECertPrivate {
 	gboolean delete;
 };
 
-/* Forward Declarations */
-static void	e_cert_gcr_certificate_init
-					(GcrCertificateIface *iface);
-
-G_DEFINE_TYPE_WITH_CODE (
-	ECert,
-	e_cert,
-	G_TYPE_OBJECT,
-	GCR_CERTIFICATE_MIXIN_IMPLEMENT_COMPARABLE ()
-	G_IMPLEMENT_INTERFACE (
-		GCR_TYPE_CERTIFICATE,
-		e_cert_gcr_certificate_init))
+G_DEFINE_TYPE_WITH_PRIVATE (ECert, e_cert, G_TYPE_OBJECT)
 
 static void
 e_cert_finalize (GObject *object)
 {
-	ECertPrivate *priv;
+	ECert *self = E_CERT (object);
 
-	priv = E_CERT_GET_PRIVATE (object);
+	if (self->priv->org_name)
+		PORT_Free (self->priv->org_name);
+	if (self->priv->org_unit_name)
+		PORT_Free (self->priv->org_unit_name);
+	if (self->priv->cn)
+		PORT_Free (self->priv->cn);
 
-	if (priv->org_name)
-		PORT_Free (priv->org_name);
-	if (priv->org_unit_name)
-		PORT_Free (priv->org_unit_name);
-	if (priv->cn)
-		PORT_Free (priv->cn);
+	if (self->priv->issuer_org_name)
+		PORT_Free (self->priv->issuer_org_name);
+	if (self->priv->issuer_org_unit_name)
+		PORT_Free (self->priv->issuer_org_unit_name);
+	if (self->priv->issuer_cn)
+		PORT_Free (self->priv->issuer_cn);
 
-	if (priv->issuer_org_name)
-		PORT_Free (priv->issuer_org_name);
-	if (priv->issuer_org_unit_name)
-		PORT_Free (priv->issuer_org_unit_name);
-	if (priv->issuer_cn)
-		PORT_Free (priv->issuer_cn);
+	g_free (self->priv->issued_on_string);
+	g_free (self->priv->expires_on_string);
 
-	if (priv->issued_on_string)
-		PORT_Free (priv->issued_on_string);
-	if (priv->expires_on_string)
-		PORT_Free (priv->expires_on_string);
-	if (priv->serial_number)
-		PORT_Free (priv->serial_number);
+	if (self->priv->serial_number)
+		PORT_Free (self->priv->serial_number);
 
-	g_free (priv->usage_string);
+	g_free (self->priv->usage_string);
 
-	if (priv->sha256_fingerprint)
-		PORT_Free (priv->sha256_fingerprint);
-	if (priv->sha1_fingerprint)
-		PORT_Free (priv->sha1_fingerprint);
-	if (priv->md5_fingerprint)
-		PORT_Free (priv->md5_fingerprint);
+	if (self->priv->sha256_fingerprint)
+		PORT_Free (self->priv->sha256_fingerprint);
+	if (self->priv->sha1_fingerprint)
+		PORT_Free (self->priv->sha1_fingerprint);
+	if (self->priv->md5_fingerprint)
+		PORT_Free (self->priv->md5_fingerprint);
 
-	if (priv->delete) {
+	if (self->priv->delete) {
 		printf ("attempting to delete cert marked for deletion\n");
 		if (e_cert_get_cert_type (E_CERT (object)) == E_CERT_USER) {
-			PK11_DeleteTokenCertAndKey (priv->cert, NULL);
-		} else if (!PK11_IsReadOnly (priv->cert->slot)) {
+			PK11_DeleteTokenCertAndKey (self->priv->cert, NULL);
+		} else if (!PK11_IsReadOnly (self->priv->cert->slot)) {
 			/* If the list of built-ins does contain a non-removable
 			 * copy of this certificate, our call will not remove
 			 * the certificate permanently, but rather remove all trust. */
-			SEC_DeletePermCertificate (priv->cert);
+			SEC_DeletePermCertificate (self->priv->cert);
 		}
 	}
 
-	if (priv->cert)
-		CERT_DestroyCertificate (priv->cert);
+	if (self->priv->cert)
+		CERT_DestroyCertificate (self->priv->cert);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_cert_parent_class)->finalize (object);
-}
-
-static const guchar *
-cert_get_der_data (GcrCertificate *certificate,
-                   gsize *n_data)
-{
-	ECertPrivate *priv = E_CERT_GET_PRIVATE (certificate);
-
-	*n_data = priv->cert->derCert.len;
-
-	return priv->cert->derCert.data;
 }
 
 static void
@@ -183,25 +145,14 @@ e_cert_class_init (ECertClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (ECertPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
-	object_class->get_property = gcr_certificate_mixin_get_property;
 	object_class->finalize = e_cert_finalize;
-
-	gcr_certificate_mixin_class_init (object_class);
-}
-
-static void
-e_cert_gcr_certificate_init (GcrCertificateIface *iface)
-{
-	iface->get_der_data = cert_get_der_data;
 }
 
 static void
 e_cert_init (ECert *ec)
 {
-	ec->priv = E_CERT_GET_PRIVATE (ec);
+	ec->priv = e_cert_get_instance_private (ec);
 }
 
 static void
@@ -411,8 +362,8 @@ static struct {
 	const gchar *text;
 } usageinfo[] = {
 	/* x509 certificate usage types */
-	{ certificateUsageEmailSigner, N_("Sign") },
-	{ certificateUsageEmailRecipient, N_("Encrypt") },
+	{ KU_DIGITAL_SIGNATURE, N_("Sign") },
+	{ KU_KEY_ENCIPHERMENT | KU_DATA_ENCIPHERMENT, N_("Encrypt") },
 };
 
 const gchar *

@@ -44,11 +44,9 @@
 #include "e-table.h"
 #include "e-xml-utils.h"
 
-#include "data/xpm/arrow-up.xpm"
-#include "data/xpm/arrow-down.xpm"
-
 enum {
 	BUTTON_PRESSED,
+	HEADER_CLICK_CAN_SORT,
 	LAST_SIGNAL
 };
 
@@ -445,12 +443,19 @@ ethi_remove_drop_marker (ETableHeaderItem *ethi)
 }
 
 static GtkWidget *
-make_shaped_window_from_xpm (const gchar **xpm)
+make_shaped_window_from_svg (const gchar *image_name)
 {
 	GdkPixbuf *pixbuf;
 	GtkWidget *win, *pix;
+	GError *error = NULL;
+	gchar *resource_path;
 
-	pixbuf = gdk_pixbuf_new_from_xpm_data (xpm);
+	resource_path = g_strconcat ("/org.gnome.Evolution/", image_name, NULL);
+	pixbuf = gdk_pixbuf_new_from_resource (resource_path, &error);
+	if (!pixbuf)
+		g_warning ("%s: Failed to load '%s': %s", G_STRFUNC, resource_path, error ? error->message : "Unknown error");
+	g_clear_error (&error);
+	g_clear_pointer (&resource_path, g_free);
 
 	win = gtk_window_new (GTK_WINDOW_POPUP);
 	gtk_window_set_type_hint (GTK_WINDOW (win), GDK_WINDOW_TYPE_HINT_NOTIFICATION);
@@ -489,8 +494,8 @@ ethi_add_drop_marker (ETableHeaderItem *ethi,
 		x += ethi->group_indent_width;
 
 	if (!arrow_up) {
-		arrow_up = make_shaped_window_from_xpm (arrow_up_xpm);
-		arrow_down = make_shaped_window_from_xpm (arrow_down_xpm);
+		arrow_up = make_shaped_window_from_svg ("arrow-up.svg");
+		arrow_down = make_shaped_window_from_svg ("arrow-down.svg");
 	}
 
 	canvas = GNOME_CANVAS_ITEM (ethi)->canvas;
@@ -2074,11 +2079,17 @@ ethi_event (GnomeCanvasItem *item,
 			needs_ungrab = (ethi->resize_guide != NULL);
 			ethi_end_resize (ethi);
 		} else if (was_maybe_drag && ethi->sort_info) {
-			ETableCol *ecol;
+			gboolean header_click_can_sort = TRUE;
 
-			col = ethi_find_col_by_x (ethi, event_x_win);
-			ecol = e_table_header_get_column (ethi->eth, col);
-			ethi_change_sort_state (ethi, ecol, sort_flag);
+			g_signal_emit (ethi, ethi_signals[HEADER_CLICK_CAN_SORT], 0, &header_click_can_sort);
+
+			if (header_click_can_sort) {
+				ETableCol *ecol;
+
+				col = ethi_find_col_by_x (ethi, event_x_win);
+				ecol = e_table_header_get_column (ethi->eth, col);
+				ethi_change_sort_state (ethi, ecol, sort_flag);
+			}
 		}
 
 		if (needs_ungrab)
@@ -2246,6 +2257,16 @@ ethi_class_init (ETableHeaderItemClass *class)
 		g_cclosure_marshal_VOID__BOXED,
 		G_TYPE_NONE, 1,
 		GDK_TYPE_EVENT | G_SIGNAL_TYPE_STATIC_SCOPE);
+
+	ethi_signals[HEADER_CLICK_CAN_SORT] = g_signal_new (
+		"header-click-can-sort",
+		G_OBJECT_CLASS_TYPE (object_class),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		/* G_STRUCT_OFFSET (ETableHeaderItemClass, header_click_can_sort) */ 0,
+		NULL, NULL,
+		g_cclosure_marshal_VOID__POINTER,
+		G_TYPE_NONE, 1,
+		G_TYPE_POINTER);
 }
 
 static void
@@ -2253,7 +2274,7 @@ ethi_init (ETableHeaderItem *ethi)
 {
 	GnomeCanvasItem *item = GNOME_CANVAS_ITEM (ethi);
 
-	ethi->resize_cursor = gdk_cursor_new (GDK_SB_H_DOUBLE_ARROW);
+	ethi->resize_cursor = gdk_cursor_new_from_name (gdk_display_get_default (), "ew-resize");
 
 	ethi->resize_col = -1;
 

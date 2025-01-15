@@ -90,6 +90,7 @@ enum {
 static guint signals[LAST_SIGNAL];
 
 G_DEFINE_TYPE_WITH_CODE (EAccountsWindow, e_accounts_window, GTK_TYPE_WINDOW,
+	G_ADD_PRIVATE (EAccountsWindow)
 	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 enum {
@@ -372,7 +373,6 @@ accounts_window_fill_row_with_source (EAccountsWindow *accounts_window,
 	const gchar *icon_name = NULL;
 	GdkRGBA rgba;
 	gboolean rgba_set = FALSE;
-	gboolean enabled_visible = TRUE;
 	guint editing_flags = E_SOURCE_EDITING_FLAG_NONE;
 
 	g_return_if_fail (E_IS_ACCOUNTS_WINDOW (accounts_window));
@@ -389,11 +389,9 @@ accounts_window_fill_row_with_source (EAccountsWindow *accounts_window,
 		if (e_source_has_extension (source, E_SOURCE_EXTENSION_GOA)) {
 			use_type = g_strconcat ("GOA:", backend_name, NULL);
 			icon_name = "goa-panel";
-			enabled_visible = FALSE;
 		} else if (e_source_has_extension (source, E_SOURCE_EXTENSION_UOA)) {
 			use_type = g_strconcat ("UOA:", backend_name, NULL);
 			icon_name = "credentials-preferences";
-			enabled_visible = FALSE;
 		} else if (g_strcmp0 (backend_name, "none") != 0) {
 			use_type = backend_name;
 			backend_name = NULL;
@@ -504,7 +502,7 @@ accounts_window_fill_row_with_source (EAccountsWindow *accounts_window,
 
 	gtk_tree_store_set (tree_store, iter,
 		COLUMN_BOOL_ENABLED, e_source_get_enabled (source),
-		COLUMN_BOOL_ENABLED_VISIBLE, can_show_enabled && enabled_visible && (editing_flags & E_SOURCE_EDITING_FLAG_CAN_ENABLE) != 0,
+		COLUMN_BOOL_ENABLED_VISIBLE, can_show_enabled && (editing_flags & E_SOURCE_EDITING_FLAG_CAN_ENABLE) != 0,
 		COLUMN_STRING_DISPLAY_NAME, e_source_get_display_name (source),
 		COLUMN_STRING_ICON_NAME, icon_name,
 		COLUMN_BOOL_ICON_VISIBLE, icon_name != NULL,
@@ -676,9 +674,16 @@ accounts_window_fill_tree_view (EAccountsWindow *accounts_window)
 		for (slink = top_mail_accounts; slink; slink = g_slist_next (slink)) {
 			ESource *source = slink->data;
 			GtkTreeIter iter;
+			gboolean is_builtin = FALSE;
+
+			if (e_source_has_extension (source, E_SOURCE_EXTENSION_MAIL_ACCOUNT)) {
+				ESourceMailAccount *mail_account = e_source_get_extension (source, E_SOURCE_EXTENSION_MAIL_ACCOUNT);
+				is_builtin = e_source_mail_account_get_builtin (mail_account);
+			}
 
 			/* Skip 'On This Computer' and 'Search Folders' mail accounts */
-			if (g_strcmp0 (e_source_get_uid (source), "local") == 0 ||
+			if (is_builtin ||
+			    g_strcmp0 (e_source_get_uid (source), "local") == 0 ||
 			    g_strcmp0 (e_source_get_uid (source), "vfolder") == 0)
 				continue;
 
@@ -722,7 +727,7 @@ accounts_window_fill_tree_view (EAccountsWindow *accounts_window)
 
 				for (ii = 0; ii < G_N_ELEMENTS (infos); ii++) {
 					if (e_source_has_extension (child, infos[ii].extension_name)) {
-						GtkTreeIter *slave_root;
+						GtkTreeIter *sub_root;
 						GtkTreeIter iter;
 
 						if (!infos[ii].root) {
@@ -734,17 +739,17 @@ accounts_window_fill_tree_view (EAccountsWindow *accounts_window)
 							*(infos[ii].root) = root;
 						}
 
-						slave_root = g_hash_table_lookup (infos[ii].slaves, e_source_get_uid (source));
-						if (slave_root) {
-							root = *slave_root;
+						sub_root = g_hash_table_lookup (infos[ii].slaves, e_source_get_uid (source));
+						if (sub_root) {
+							root = *sub_root;
 						} else {
 							gtk_tree_store_append (tree_store, &root, infos[ii].root);
 							accounts_window_fill_row_with_source (accounts_window, tree_store, &root, source, NULL, FALSE);
 
-							slave_root = g_new (GtkTreeIter, 1);
-							*slave_root = root;
+							sub_root = g_new (GtkTreeIter, 1);
+							*sub_root = root;
 
-							g_hash_table_insert (infos[ii].slaves, e_source_dup_uid (source), slave_root);
+							g_hash_table_insert (infos[ii].slaves, e_source_dup_uid (source), sub_root);
 						}
 
 						gtk_tree_store_append (tree_store, &iter, &root);
@@ -883,9 +888,12 @@ accounts_window_source_added_cb (ESourceRegistry *registry,
 		accounts_window_fill_children (accounts_window, tree_store, &iter, is_managed_collection, TRUE, children_and_siblings);
 	} else if (e_source_has_extension (source, E_SOURCE_EXTENSION_MAIL_ACCOUNT) && (
 		   !e_source_get_parent (source) || g_strcmp0 (e_source_get_parent (source), "") == 0)) {
+		ESourceMailAccount *mail_account = e_source_get_extension (source, E_SOURCE_EXTENSION_MAIL_ACCOUNT);
+		gboolean is_builtin = e_source_mail_account_get_builtin (mail_account);
 
 		/* Skip 'On This Computer' and 'Search Folders' mail accounts */
-		if (g_strcmp0 (e_source_get_uid (source), "local") != 0 &&
+		if (!is_builtin &&
+		    g_strcmp0 (e_source_get_uid (source), "local") != 0 &&
 		    g_strcmp0 (e_source_get_uid (source), "vfolder") != 0) {
 			if (!accounts_window_find_child_with_sort_hint (accounts_window, tree_store, NULL, MAIL_ACCOUNTS_SORT_HINT, &root)) {
 				gtk_tree_store_append (tree_store, &root, NULL);
@@ -926,7 +934,7 @@ accounts_window_source_added_cb (ESourceRegistry *registry,
 
 		for (ii = 0; !done && ii < G_N_ELEMENTS (infos); ii++) {
 			if (e_source_has_extension (source, infos[ii].extension_name)) {
-				GtkTreeIter root, slave_root, iter;
+				GtkTreeIter sub_root;
 
 				if (is_in_collection) {
 					if (accounts_window_find_source_iter (accounts_window, parent_source, &iter, NULL)) {
@@ -949,12 +957,12 @@ accounts_window_source_added_cb (ESourceRegistry *registry,
 						_(infos[ii].display_name), infos[ii].icon_name, infos[ii].sort_hint);
 				}
 
-				if (!accounts_window_find_child_with_source_uid (accounts_window, tree_store, &root, e_source_get_parent (source), &slave_root)) {
-					gtk_tree_store_append (tree_store, &slave_root, &root);
-					accounts_window_fill_row_with_source (accounts_window, tree_store, &slave_root, parent_source, NULL, FALSE);
+				if (!accounts_window_find_child_with_source_uid (accounts_window, tree_store, &root, e_source_get_parent (source), &sub_root)) {
+					gtk_tree_store_append (tree_store, &sub_root, &root);
+					accounts_window_fill_row_with_source (accounts_window, tree_store, &sub_root, parent_source, NULL, FALSE);
 				}
 
-				gtk_tree_store_append (tree_store, &iter, &slave_root);
+				gtk_tree_store_append (tree_store, &iter, &sub_root);
 				accounts_window_fill_row_with_source (accounts_window, tree_store, &iter, source, NULL, !is_managed_collection);
 
 				break;
@@ -1280,11 +1288,11 @@ accounts_window_get_editing_flags_default (EAccountsWindow *accounts_window,
 	g_return_val_if_fail (out_flags != NULL, FALSE);
 
 	if (e_source_has_extension (source, E_SOURCE_EXTENSION_COLLECTION)) {
-		*out_flags = E_SOURCE_EDITING_FLAG_NONE;
+		*out_flags = E_SOURCE_EDITING_FLAG_CAN_ENABLE;
 
 		if (!e_source_has_extension (source, E_SOURCE_EXTENSION_GOA) &&
 		    !e_source_has_extension (source, E_SOURCE_EXTENSION_UOA)) {
-			*out_flags = (*out_flags) | E_SOURCE_EDITING_FLAG_CAN_ENABLE | E_SOURCE_EDITING_FLAG_CAN_DELETE;
+			*out_flags = (*out_flags) | E_SOURCE_EDITING_FLAG_CAN_DELETE;
 		}
 
 		return TRUE;
@@ -1822,8 +1830,6 @@ e_accounts_window_class_init (EAccountsWindowClass *klass)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (klass, sizeof (EAccountsWindowPrivate));
-
 	klass->get_editing_flags = accounts_window_get_editing_flags_default;
 	klass->delete_source = accounts_window_delete_source_default;
 
@@ -2012,7 +2018,7 @@ e_accounts_window_class_init (EAccountsWindowClass *klass)
 static void
 e_accounts_window_init (EAccountsWindow *accounts_window)
 {
-	accounts_window->priv = G_TYPE_INSTANCE_GET_PRIVATE (accounts_window, E_TYPE_ACCOUNTS_WINDOW, EAccountsWindowPrivate);
+	accounts_window->priv = e_accounts_window_get_instance_private (accounts_window);
 
 	accounts_window->priv->references = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, (GDestroyNotify) gtk_tree_row_reference_free);
 }

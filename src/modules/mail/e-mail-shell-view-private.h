@@ -26,6 +26,8 @@
 #include <glib/gi18n.h>
 #include <camel/camel-search-private.h>  /* for camel_search_word */
 
+#include "shell/e-shell-headerbar.h"
+
 #include <mail/e-mail-folder-create-dialog.h>
 #include <mail/e-mail-reader.h>
 #include <mail/e-mail-reader-utils.h>
@@ -47,10 +49,6 @@
 #include "e-mail-shell-content.h"
 #include "e-mail-shell-sidebar.h"
 #include "e-mail-shell-view-actions.h"
-
-#define E_MAIL_SHELL_VIEW_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_SHELL_VIEW, EMailShellViewPrivate))
 
 /* Shorthand, requires a variable named "shell_window". */
 #define ACTION(name) \

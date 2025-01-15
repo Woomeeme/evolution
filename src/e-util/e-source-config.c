@@ -28,10 +28,6 @@
 
 #include "e-source-config.h"
 
-#define E_SOURCE_CONFIG_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_SOURCE_CONFIG, ESourceConfigPrivate))
-
 typedef struct _Candidate Candidate;
 
 struct _ESourceConfigPrivate {
@@ -78,12 +74,9 @@ enum {
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE_WITH_CODE (
-	ESourceConfig,
-	e_source_config,
-	GTK_TYPE_BOX,
-	G_IMPLEMENT_INTERFACE (
-		E_TYPE_EXTENSIBLE, NULL))
+G_DEFINE_TYPE_WITH_CODE (ESourceConfig, e_source_config, GTK_TYPE_BOX,
+	G_ADD_PRIVATE (ESourceConfig)
+	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 static void
 source_config_init_backends (ESourceConfig *config)
@@ -516,15 +509,16 @@ source_config_init_for_editing_source (ESourceConfig *config)
 	g_return_if_fail (backend != NULL);
 
 	dbus_object = e_source_ref_dbus_object (original_source);
-	g_return_if_fail (dbus_object != NULL);
-
-	scratch_source = e_source_new (dbus_object, NULL, NULL);
+	if (dbus_object)
+		scratch_source = e_source_new (dbus_object, NULL, NULL);
+	else
+		scratch_source = g_object_ref (original_source);
 	g_return_if_fail (scratch_source != NULL);
 
 	source_config_add_candidate (config, scratch_source, backend);
 
 	g_object_unref (scratch_source);
-	g_object_unref (dbus_object);
+	g_clear_object (&dbus_object);
 }
 
 static void
@@ -614,23 +608,22 @@ source_config_get_property (GObject *object,
 static void
 source_config_dispose (GObject *object)
 {
-	ESourceConfigPrivate *priv;
+	ESourceConfig *self = E_SOURCE_CONFIG (object);
 
-	priv = E_SOURCE_CONFIG_GET_PRIVATE (object);
-	g_clear_object (&priv->original_source);
-	g_clear_object (&priv->collection_source);
-	g_clear_object (&priv->registry);
-	g_clear_object (&priv->type_label);
-	g_clear_object (&priv->type_combo);
-	g_clear_object (&priv->name_label);
-	g_clear_object (&priv->name_entry);
-	g_clear_object (&priv->backend_box);
-	g_clear_object (&priv->size_group);
+	g_clear_object (&self->priv->original_source);
+	g_clear_object (&self->priv->collection_source);
+	g_clear_object (&self->priv->registry);
+	g_clear_object (&self->priv->type_label);
+	g_clear_object (&self->priv->type_combo);
+	g_clear_object (&self->priv->name_label);
+	g_clear_object (&self->priv->name_entry);
+	g_clear_object (&self->priv->backend_box);
+	g_clear_object (&self->priv->size_group);
 
-	g_hash_table_remove_all (priv->backends);
-	g_ptr_array_set_size (priv->candidates, 0);
+	g_hash_table_remove_all (self->priv->backends);
+	g_ptr_array_set_size (self->priv->candidates, 0);
 
-	g_clear_pointer (&priv->preselect_type, g_free);
+	g_clear_pointer (&self->priv->preselect_type, g_free);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_source_config_parent_class)->dispose (object);
@@ -639,12 +632,10 @@ source_config_dispose (GObject *object)
 static void
 source_config_finalize (GObject *object)
 {
-	ESourceConfigPrivate *priv;
+	ESourceConfig *self = E_SOURCE_CONFIG (object);
 
-	priv = E_SOURCE_CONFIG_GET_PRIVATE (object);
-
-	g_hash_table_destroy (priv->backends);
-	g_ptr_array_free (priv->candidates, TRUE);
+	g_hash_table_destroy (self->priv->backends);
+	g_ptr_array_free (self->priv->candidates, TRUE);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_source_config_parent_class)->finalize (object);
@@ -837,13 +828,8 @@ source_config_resize_window (ESourceConfig *config)
 
 	toplevel = gtk_widget_get_toplevel (GTK_WIDGET (config));
 
-	if (GTK_IS_WINDOW (toplevel)) {
-		GtkWindow *window = GTK_WINDOW (toplevel);
-		GtkAllocation allocation;
-
-		gtk_widget_get_allocation (toplevel, &allocation);
-		gtk_window_resize (window, allocation.width, 1);
-	}
+	if (GTK_IS_WINDOW (toplevel))
+		gtk_window_resize (GTK_WINDOW (toplevel), 1, 1);
 }
 
 static gboolean
@@ -866,8 +852,6 @@ e_source_config_class_init (ESourceConfigClass *class)
 {
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
-
-	g_type_class_add_private (class, sizeof (ESourceConfigPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = source_config_set_property;
@@ -1000,7 +984,7 @@ e_source_config_init (ESourceConfig *config)
 	gtk_orientable_set_orientation (
 		GTK_ORIENTABLE (config), GTK_ORIENTATION_VERTICAL);
 
-	config->priv = E_SOURCE_CONFIG_GET_PRIVATE (config);
+	config->priv = e_source_config_get_instance_private (config);
 	config->priv->candidates = candidates;
 	config->priv->size_group = size_group;
 
@@ -1284,19 +1268,20 @@ source_config_commit_cb (GObject *object,
                          GAsyncResult *result,
                          gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	GError *error = NULL;
 
-	simple = G_SIMPLE_ASYNC_RESULT (user_data);
+	task = G_TASK (user_data);
 
 	e_source_registry_commit_source_finish (
 		E_SOURCE_REGISTRY (object), result, &error);
 
 	if (error != NULL)
-		g_simple_async_result_take_error (simple, error);
+		g_task_return_error (task, g_steal_pointer (&error));
+	else
+		g_task_return_boolean (task, TRUE);
 
-	g_simple_async_result_complete (simple);
-	g_object_unref (simple);
+	g_object_unref (task);
 }
 
 void
@@ -1305,7 +1290,7 @@ e_source_config_commit (ESourceConfig *config,
                         GAsyncReadyCallback callback,
                         gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	ESourceRegistry *registry;
 	Candidate *candidate;
 
@@ -1323,13 +1308,12 @@ e_source_config_commit (ESourceConfig *config,
 		config, signals[COMMIT_CHANGES], 0,
 		candidate->scratch_source);
 
-	simple = g_simple_async_result_new (
-		G_OBJECT (config), callback,
-		user_data, e_source_config_commit);
+	task = g_task_new (config, cancellable, callback, user_data);
+	g_task_set_source_tag (task, e_source_config_commit);
 
 	e_source_registry_commit_source (
 		registry, candidate->scratch_source,
-		cancellable, source_config_commit_cb, simple);
+		cancellable, source_config_commit_cb, g_steal_pointer (&task));
 }
 
 gboolean
@@ -1337,17 +1321,10 @@ e_source_config_commit_finish (ESourceConfig *config,
                                GAsyncResult *result,
                                GError **error)
 {
-	GSimpleAsyncResult *simple;
+	g_return_val_if_fail (g_task_is_valid (result, config), FALSE);
+	g_return_val_if_fail (g_async_result_is_tagged (result, e_source_config_commit), FALSE);
 
-	g_return_val_if_fail (
-		g_simple_async_result_is_valid (
-		result, G_OBJECT (config),
-		e_source_config_commit), FALSE);
-
-	simple = G_SIMPLE_ASYNC_RESULT (result);
-
-	/* Assume success unless a GError is set. */
-	return !g_simple_async_result_propagate_error (simple, error);
+	return g_task_propagate_boolean (G_TASK (result), error);
 }
 
 void
@@ -1390,6 +1367,31 @@ e_source_config_add_refresh_interval (ESourceConfig *config,
 	e_binding_bind_property (
 		extension, "interval-minutes",
 		widget, "interval-minutes",
+		G_BINDING_BIDIRECTIONAL |
+		G_BINDING_SYNC_CREATE);
+}
+
+void
+e_source_config_add_refresh_on_metered_network (ESourceConfig *config,
+						ESource *scratch_source)
+{
+	GtkWidget *widget;
+	ESourceExtension *extension;
+	const gchar *label;
+
+	g_return_if_fail (E_IS_SOURCE_CONFIG (config));
+	g_return_if_fail (E_IS_SOURCE (scratch_source));
+
+	extension = e_source_get_extension (scratch_source, E_SOURCE_EXTENSION_REFRESH);
+
+	label = _("Refresh content on metered network");
+	widget = gtk_check_button_new_with_label (label);
+	e_source_config_insert_widget (config, scratch_source, NULL, widget);
+	gtk_widget_show (widget);
+
+	e_binding_bind_property (
+		extension, "enabled-on-metered-network",
+		widget, "active",
 		G_BINDING_BIDIRECTIONAL |
 		G_BINDING_SYNC_CREATE);
 }
@@ -1563,3 +1565,44 @@ e_source_config_add_user_entry (ESourceConfig *config,
 	return widget;
 }
 
+void
+e_source_config_add_timeout_interval_for_webdav (ESourceConfig *config,
+						 ESource *scratch_source)
+{
+	GtkWidget *widget;
+	GtkWidget *container;
+	ESourceExtension *extension;
+
+	g_return_if_fail (E_IS_SOURCE_CONFIG (config));
+	g_return_if_fail (E_IS_SOURCE (scratch_source));
+
+	extension = e_source_get_extension (scratch_source, E_SOURCE_EXTENSION_WEBDAV_BACKEND);
+
+	widget = gtk_alignment_new (0.0, 0.5, 0.0, 0.0);
+	e_source_config_insert_widget (config, scratch_source, NULL, widget);
+	gtk_widget_show (widget);
+
+	container = widget;
+
+	widget = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	gtk_container_add (GTK_CONTAINER (container), widget);
+	gtk_widget_show (widget);
+
+	container = widget;
+
+	widget = gtk_label_new (_("Connection timeout (in seconds)"));
+	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+	gtk_widget_show (widget);
+
+	widget = gtk_spin_button_new_with_range (0, G_MAXUINT, 1);
+	gtk_spin_button_set_numeric (GTK_SPIN_BUTTON (widget), TRUE);
+	gtk_spin_button_set_update_policy (GTK_SPIN_BUTTON (widget), GTK_UPDATE_IF_VALID);
+	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+	gtk_widget_show (widget);
+
+	e_binding_bind_property (
+		extension, "timeout",
+		widget, "value",
+		G_BINDING_BIDIRECTIONAL |
+		G_BINDING_SYNC_CREATE);
+}

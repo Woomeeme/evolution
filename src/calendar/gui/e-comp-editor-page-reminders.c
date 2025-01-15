@@ -31,6 +31,7 @@
 #include <e-util/e-util.h>
 
 #include "calendar-config.h"
+#include "comp-util.h"
 #include "e-alarm-list.h"
 #include "itip-utils.h"
 
@@ -164,7 +165,7 @@ struct _ECompEditorPageRemindersPrivate {
 	gboolean any_custom_reminder_set;
 };
 
-G_DEFINE_TYPE (ECompEditorPageReminders, e_comp_editor_page_reminders, E_TYPE_COMP_EDITOR_PAGE)
+G_DEFINE_TYPE_WITH_PRIVATE (ECompEditorPageReminders, e_comp_editor_page_reminders, E_TYPE_COMP_EDITOR_PAGE)
 
 static gint
 ecep_reminders_get_alarm_index (ECompEditorPageReminders *page_reminders)
@@ -580,14 +581,16 @@ ecep_reminders_selected_to_widgets (ECompEditorPageReminders *page_reminders)
 		for (link = attendees; link; link = g_slist_next (link)) {
 			ECalComponentAttendee *att = link->data;
 			EDestination *dest;
+			const gchar *att_email;
 
 			dest = e_destination_new ();
 
 			if (att && e_cal_component_attendee_get_cn (att) && e_cal_component_attendee_get_cn (att)[0])
 				e_destination_set_name (dest, e_cal_component_attendee_get_cn (att));
 
-			if (att && e_cal_component_attendee_get_value (att) && e_cal_component_attendee_get_value (att)[0])
-				e_destination_set_email (dest, itip_strip_mailto (e_cal_component_attendee_get_value (att)));
+			att_email = e_cal_util_get_attendee_email (att);
+			if (att_email)
+				e_destination_set_email (dest, att_email);
 
 			e_destination_store_append_destination (destination_store, dest);
 
@@ -781,9 +784,13 @@ ecep_reminders_widgets_to_selected (ECompEditorPageReminders *page_reminders)
 				e_cal_component_alarm_take_description (alarm, description);
 
 				ecep_reminders_remove_needs_description_property (alarm);
+			} else {
+				ecep_reminders_add_needs_description_property (alarm);
 			}
 
 			g_free (text);
+		} else {
+			ecep_reminders_add_needs_description_property (alarm);
 		}
 		break;
 
@@ -831,9 +838,13 @@ ecep_reminders_widgets_to_selected (ECompEditorPageReminders *page_reminders)
 				e_cal_component_alarm_take_description (alarm, description);
 
 				ecep_reminders_remove_needs_description_property (alarm);
+			} else {
+				ecep_reminders_add_needs_description_property (alarm);
 			}
 
 			g_free (text);
+		} else {
+			ecep_reminders_add_needs_description_property (alarm);
 		}
 		} break;
 
@@ -1563,7 +1574,7 @@ ecep_reminders_fill_component (ECompEditorPage *page,
 {
 	ECompEditorPageReminders *page_reminders;
 	ECalComponent *comp;
-	ICalComponent *changed_comp, *alarm;
+	ICalComponent *changed_comp, *alarm_comp;
 	GtkTreeModel *model;
 	GtkTreeIter iter;
 	gboolean valid_iter;
@@ -1643,18 +1654,18 @@ ecep_reminders_fill_component (ECompEditorPage *page,
 		e_cal_component_alarm_free (alarm_copy);
 	}
 
-	while (alarm = i_cal_component_get_first_component (component, I_CAL_VALARM_COMPONENT), alarm) {
-		i_cal_component_remove_component (component, alarm);
-		g_object_unref (alarm);
+	while (alarm_comp = i_cal_component_get_first_component (component, I_CAL_VALARM_COMPONENT), alarm_comp) {
+		i_cal_component_remove_component (component, alarm_comp);
+		g_object_unref (alarm_comp);
 	}
 
 	changed_comp = e_cal_component_get_icalcomponent (comp);
 	if (changed_comp) {
 		/* Move all VALARM components into the right 'component' */
-		while (alarm = i_cal_component_get_first_component (changed_comp, I_CAL_VALARM_COMPONENT), alarm) {
-			i_cal_component_remove_component (changed_comp, alarm);
-			i_cal_component_add_component (component, alarm);
-			g_object_unref (alarm);
+		while (alarm_comp = i_cal_component_get_first_component (changed_comp, I_CAL_VALARM_COMPONENT), alarm_comp) {
+			i_cal_component_remove_component (changed_comp, alarm_comp);
+			i_cal_component_add_component (component, alarm_comp);
+			g_object_unref (alarm_comp);
 		}
 	} else {
 		g_warn_if_reached ();
@@ -1776,12 +1787,8 @@ ecep_reminders_sort_predefined_alarms (ECompEditorPageReminders *page_reminders)
 		/* Just count those filled */
 	}
 
-	nelems -= N_PREDEFINED_ALARMS;
-
-	if (nelems > 1) {
-		g_qsort_with_data (&(page_reminders->priv->predefined_alarms[N_PREDEFINED_ALARMS]), nelems,
-			sizeof (gint), ecep_reminders_compare_predefined_alarm, NULL);
-	}
+	g_qsort_with_data (page_reminders->priv->predefined_alarms, nelems,
+		sizeof (gint), ecep_reminders_compare_predefined_alarm, NULL);
 }
 
 static gboolean
@@ -1794,6 +1801,8 @@ ecep_reminders_fill_alarms_combo (ECompEditorPageReminders *page_reminders,
 
 	g_return_val_if_fail (E_IS_COMP_EDITOR_PAGE_REMINDERS (page_reminders), FALSE);
 	g_return_val_if_fail (GTK_IS_COMBO_BOX_TEXT (page_reminders->priv->alarms_combo), FALSE);
+
+	ecep_reminders_sort_predefined_alarms (page_reminders);
 
 	text_combo = GTK_COMBO_BOX_TEXT (page_reminders->priv->alarms_combo);
 
@@ -1848,12 +1857,17 @@ ecep_reminders_fill_alarms_combo (ECompEditorPageReminders *page_reminders,
 }
 
 static void
-ecep_reminders_add_default_alarm_time (ECompEditorPageReminders *page_reminders)
+ecep_reminders_init_predefined_alarms (ECompEditorPageReminders *page_reminders)
 {
 	EDurationType alarm_units;
 	gint alarm_interval, minutes;
 
 	g_return_if_fail (E_IS_COMP_EDITOR_PAGE_REMINDERS (page_reminders));
+
+	page_reminders->priv->predefined_alarms[0] = ecep_reminders_interval_to_int (0, 0, 15);
+	page_reminders->priv->predefined_alarms[1] = ecep_reminders_interval_to_int (0, 1, 0);
+	page_reminders->priv->predefined_alarms[2] = ecep_reminders_interval_to_int (1, 0, 0);
+	page_reminders->priv->predefined_alarms[3] = -1;
 
 	alarm_interval = calendar_config_get_default_reminder_interval ();
 	alarm_units = calendar_config_get_default_reminder_units ();
@@ -1896,7 +1910,7 @@ ecep_reminders_add_custom_time_add_button_clicked_cb (GtkButton *button,
 		GSettings *settings;
 		GVariant *variant;
 		gboolean any_user_alarm_added = FALSE;
-		gint32 array[N_MAX_PREDEFINED_USER_ALARMS + 1] = { 0 }, narray = 0, ii;
+		gint32 array[N_MAX_PREDEFINED_USER_ALARMS + 1] = { 0 }, narray = 0;
 
 		settings = e_util_ref_settings ("org.gnome.evolution.calendar");
 		variant = g_settings_get_value (settings, "custom-reminders-minutes");
@@ -1925,16 +1939,12 @@ ecep_reminders_add_custom_time_add_button_clicked_cb (GtkButton *button,
 
 		g_object_unref (settings);
 
-		page_reminders->priv->predefined_alarms[N_PREDEFINED_ALARMS] = -1;
-
-		ecep_reminders_add_default_alarm_time (page_reminders);
+		ecep_reminders_init_predefined_alarms (page_reminders);
 
 		for (ii = 0; ii < narray; ii++) {
 			if (ecep_reminders_add_predefined_alarm (page_reminders, array[ii]))
 				any_user_alarm_added = TRUE;
 		}
-
-		ecep_reminders_sort_predefined_alarms (page_reminders);
 
 		page_reminders->priv->any_custom_reminder_set = any_user_alarm_added;
 
@@ -2066,9 +2076,7 @@ ecep_reminders_remove_custom_times_clicked (ECompEditorPageReminders *page_remin
 	g_settings_reset (settings, "custom-reminders-minutes");
 	g_object_unref (settings);
 
-	page_reminders->priv->predefined_alarms[N_PREDEFINED_ALARMS] = -1;
-
-	ecep_reminders_add_default_alarm_time (page_reminders);
+	ecep_reminders_init_predefined_alarms (page_reminders);
 
 	page_reminders->priv->any_custom_reminder_set = FALSE;
 
@@ -2177,12 +2185,7 @@ ecep_reminders_constructed (GObject *object)
 
 	gtk_label_set_mnemonic_widget (GTK_LABEL (label), page_reminders->priv->alarms_combo);
 
-	page_reminders->priv->predefined_alarms[0] = ecep_reminders_interval_to_int (0, 0, 15);
-	page_reminders->priv->predefined_alarms[1] = ecep_reminders_interval_to_int (0, 1, 0);
-	page_reminders->priv->predefined_alarms[2] = ecep_reminders_interval_to_int (1, 0, 0);
-	page_reminders->priv->predefined_alarms[3] = -1;
-
-	ecep_reminders_add_default_alarm_time (page_reminders);
+	ecep_reminders_init_predefined_alarms (page_reminders);
 
 	settings = e_util_ref_settings ("org.gnome.evolution.calendar");
 	variant = g_settings_get_value (settings, "custom-reminders-minutes");
@@ -2209,7 +2212,6 @@ ecep_reminders_constructed (GObject *object)
 
 	g_object_unref (settings);
 
-	ecep_reminders_sort_predefined_alarms (page_reminders);
 	ecep_reminders_fill_alarms_combo (page_reminders, -1);
 
 	gtk_combo_box_set_active (GTK_COMBO_BOX (page_reminders->priv->alarms_combo), 0);
@@ -2223,6 +2225,7 @@ ecep_reminders_constructed (GObject *object)
 		"halign", GTK_ALIGN_FILL,
 		"vexpand", FALSE,
 		"valign", GTK_ALIGN_FILL,
+		"height-request", 100,
 		"margin-start", 12,
 		"margin-bottom", 6,
 		"hscrollbar-policy", GTK_POLICY_AUTOMATIC,
@@ -2533,6 +2536,7 @@ ecep_reminders_constructed (GObject *object)
 		"halign", GTK_ALIGN_FILL,
 		"vexpand", TRUE,
 		"valign", GTK_ALIGN_FILL,
+		"height-request", 100,
 		"hscrollbar-policy", GTK_POLICY_AUTOMATIC,
 		"vscrollbar-policy", GTK_POLICY_AUTOMATIC,
 		"shadow-type", GTK_SHADOW_IN,
@@ -2790,9 +2794,7 @@ ecep_reminders_dispose (GObject *object)
 static void
 e_comp_editor_page_reminders_init (ECompEditorPageReminders *page_reminders)
 {
-	page_reminders->priv = G_TYPE_INSTANCE_GET_PRIVATE (page_reminders,
-		E_TYPE_COMP_EDITOR_PAGE_REMINDERS,
-		ECompEditorPageRemindersPrivate);
+	page_reminders->priv = e_comp_editor_page_reminders_get_instance_private (page_reminders);
 }
 
 static void
@@ -2800,8 +2802,6 @@ e_comp_editor_page_reminders_class_init (ECompEditorPageRemindersClass *klass)
 {
 	ECompEditorPageClass *page_class;
 	GObjectClass *object_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorPageRemindersPrivate));
 
 	page_class = E_COMP_EDITOR_PAGE_CLASS (klass);
 	page_class->sensitize_widgets = ecep_reminders_sensitize_widgets;

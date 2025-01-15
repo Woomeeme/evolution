@@ -28,6 +28,7 @@
 #include "comp-util.h"
 #include "e-cal-model.h"
 #include "e-timezone-entry.h"
+#include "e-estimated-duration-entry.h"
 
 #include "e-comp-editor-property-part.h"
 #include "e-comp-editor-property-parts.h"
@@ -306,40 +307,79 @@ ecepp_location_save_list (GtkEntry *entry)
 }
 
 static gboolean
+ecepp_location_is_known_scheme (const gchar *url)
+{
+	struct _schemas {
+		const gchar *schema;
+		gint len;
+	} schemas[] = {
+		{ "http:", 5 },
+		{ "https:", 6 },
+		{ "www.", 4 },
+		{ "ftp:", 4 },
+		{ "sip:", 4 },
+		{ "tel:", 4 },
+		{ "xmpp:", 5 },
+		{ "map:", 4 }
+	};
+	gint ii;
+
+	if (!url || !*url)
+		return FALSE;
+
+	for (ii = 0; ii < G_N_ELEMENTS (schemas); ii++) {
+		if (g_ascii_strncasecmp (url, schemas[ii].schema, schemas[ii].len) == 0)
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+static gboolean
 ecepp_location_text_to_icon_visible (GBinding *binding,
 				     const GValue *source_value,
 				     GValue *target_value,
 				     gpointer user_data)
 {
+	GObject *object;
 	const gchar *text;
-	gboolean icon_visible = FALSE;
 
 	text = g_value_get_string (source_value);
 
-	if (text && *text) {
-		struct _schemas {
-			const gchar *schema;
-			gint len;
-		} schemas[] = {
-			{ "http:", 5 },
-			{ "https:", 6 },
-			{ "www.", 4 },
-			{ "ftp:", 4 },
-			{ "sip:", 4 },
-			{ "tel:", 4 },
-			{ "xmpp:", 5 }
-		};
-		gint ii;
+	while (text && g_ascii_isspace (*text))
+		text++;
 
-		for (ii = 0; ii < G_N_ELEMENTS (schemas); ii++) {
-			if (g_ascii_strncasecmp (text, schemas[ii].schema, schemas[ii].len) == 0) {
-				icon_visible = TRUE;
-				break;
-			}
-		}
+	g_value_set_boolean (target_value, text && *text);
+
+	object = g_binding_get_target (binding);
+
+	if (E_IS_URL_ENTRY (object)) {
+		GtkEntry *entry = GTK_ENTRY (object);
+
+		if (ecepp_location_is_known_scheme (text))
+			gtk_entry_set_icon_tooltip_text (entry, GTK_ENTRY_ICON_SECONDARY, _("Click here to open the URL"));
+		else
+			gtk_entry_set_icon_tooltip_text (entry, GTK_ENTRY_ICON_SECONDARY, _("Click here to open map"));
 	}
 
-	g_value_set_boolean (target_value, icon_visible);
+	return TRUE;
+}
+
+static gboolean
+ecepp_location_open_url_cb (EUrlEntry *entry,
+			    GtkWindow *parent_window,
+			    const gchar *url,
+			    gpointer user_data)
+{
+	if (!url || !*url)
+		return FALSE;
+
+	if (ecepp_location_is_known_scheme (url)) {
+		/* let the URL be opened in the browser/registered app, using the default handler */
+		return FALSE;
+	}
+
+	e_open_map_uri (parent_window, url);
 
 	return TRUE;
 }
@@ -386,6 +426,9 @@ ecepp_location_create_widgets (ECompEditorPropertyPart *property_part,
 
 	*out_label_widget = gtk_label_new_with_mnemonic (C_("ECompEditor", "_Location:"));
 	gtk_label_set_mnemonic_widget (GTK_LABEL (*out_label_widget), *out_edit_widget);
+
+	g_signal_connect (*out_edit_widget, "open-url",
+		G_CALLBACK (ecepp_location_open_url_cb), NULL);
 
 	g_object_set (G_OBJECT (*out_label_widget),
 		"hexpand", FALSE,
@@ -607,9 +650,19 @@ G_DEFINE_TYPE (ECompEditorPropertyPartDescription, e_comp_editor_property_part_d
 static GtkWidget *
 ecepp_description_get_real_edit_widget (ECompEditorPropertyPartString *part_string)
 {
+	ECompEditorPropertyPartDescription *description_part;
+
 	g_return_val_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DESCRIPTION (part_string), NULL);
 
-	return E_COMP_EDITOR_PROPERTY_PART_DESCRIPTION (part_string)->real_edit_widget;
+	description_part = E_COMP_EDITOR_PROPERTY_PART_DESCRIPTION (part_string);
+
+	if (!description_part->real_edit_widget)
+		return NULL;
+
+	if (E_IS_MARKDOWN_EDITOR (description_part->real_edit_widget))
+		return GTK_WIDGET (e_markdown_editor_get_text_view (E_MARKDOWN_EDITOR (description_part->real_edit_widget)));
+
+	return description_part->real_edit_widget;
 }
 
 static void
@@ -681,13 +734,32 @@ ecepp_description_flip_view_as_cb (GtkLabel *label,
 }
 
 static void
+ecepp_description_changed_cb (GtkWidget *widget,
+			      gpointer user_data)
+{
+	ECompEditorPropertyPartDescription *description_part = user_data;
+
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DESCRIPTION (description_part));
+
+	if (description_part->has_html) {
+		description_part->has_html = FALSE;
+		description_part->mode_html = TRUE;
+		g_clear_pointer (&description_part->alt_desc, g_free);
+
+		ecepp_description_update_view_mode (description_part);
+	}
+
+	e_comp_editor_property_part_emit_changed (E_COMP_EDITOR_PROPERTY_PART (description_part));
+}
+
+static void
 ecepp_description_create_widgets (ECompEditorPropertyPart *property_part,
 				  GtkWidget **out_label_widget,
 				  GtkWidget **out_edit_widget)
 {
 	ECompEditorPropertyPartClass *part_class;
 	ECompEditorPropertyPartDescription *description_part;
-	GtkTextView *text_view;
+	GSettings *settings;
 	GtkWidget *box, *label;
 
 	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DESCRIPTION (property_part));
@@ -702,9 +774,38 @@ ecepp_description_create_widgets (ECompEditorPropertyPart *property_part,
 
 	*out_label_widget = NULL;
 
-	part_class->create_widgets (property_part, out_label_widget, out_edit_widget);
-	g_return_if_fail (*out_label_widget == NULL);
-	g_return_if_fail (*out_edit_widget != NULL);
+	settings = e_util_ref_settings ("org.gnome.evolution.calendar");
+
+	if (g_settings_get_boolean (settings, "use-markdown-editor")) {
+		*out_edit_widget = e_markdown_editor_new ();
+
+		g_object_set (G_OBJECT (*out_edit_widget),
+			"hexpand", FALSE,
+			"halign", GTK_ALIGN_FILL,
+			"vexpand", FALSE,
+			"valign", GTK_ALIGN_START,
+			"visible", TRUE,
+			NULL);
+
+		g_signal_connect_object (*out_edit_widget, "changed", G_CALLBACK (ecepp_description_changed_cb), description_part, 0);
+	} else {
+		GtkTextView *text_view;
+
+		part_class->create_widgets (property_part, out_label_widget, out_edit_widget);
+		g_return_if_fail (*out_label_widget == NULL);
+		g_return_if_fail (*out_edit_widget != NULL);
+
+		text_view = GTK_TEXT_VIEW (gtk_bin_get_child (GTK_BIN (*out_edit_widget)));
+		gtk_text_view_set_wrap_mode (text_view, GTK_WRAP_WORD);
+		gtk_text_view_set_monospace (text_view, TRUE);
+		e_buffer_tagger_connect (text_view);
+		e_spell_text_view_attach (text_view);
+
+		g_signal_connect_object (gtk_text_view_get_buffer (text_view), "changed",
+			G_CALLBACK (ecepp_description_changed_cb), description_part, 0);
+	}
+
+	g_clear_object (&settings);
 
 	description_part->real_edit_widget = *out_edit_widget;
 
@@ -712,12 +813,6 @@ ecepp_description_create_widgets (ECompEditorPropertyPart *property_part,
 	gtk_label_set_mnemonic_widget (GTK_LABEL (label), *out_edit_widget);
 
 	description_part->description_label = label;
-
-	text_view = GTK_TEXT_VIEW (gtk_bin_get_child (GTK_BIN (*out_edit_widget)));
-	gtk_text_view_set_wrap_mode (text_view, GTK_WRAP_WORD);
-	gtk_text_view_set_monospace (text_view, TRUE);
-	e_buffer_tagger_connect (text_view);
-	e_spell_text_view_attach (text_view);
 
 	g_object_set (G_OBJECT (label),
 		"hexpand", FALSE,
@@ -849,7 +944,8 @@ ecepp_description_fill_widget (ECompEditorPropertyPart *property_part,
 	edit_widget = e_comp_editor_property_part_string_get_real_edit_widget (E_COMP_EDITOR_PROPERTY_PART_STRING (property_part));
 	g_return_if_fail (GTK_IS_TEXT_VIEW (edit_widget));
 
-	e_buffer_tagger_update_tags (GTK_TEXT_VIEW (edit_widget));
+	if (!E_IS_MARKDOWN_EDITOR (description_part->real_edit_widget))
+		e_buffer_tagger_update_tags (GTK_TEXT_VIEW (edit_widget));
 
 	buffer = gtk_text_view_get_buffer (GTK_TEXT_VIEW (edit_widget));
 	gtk_text_buffer_get_start_iter (buffer, &text_iter_start);
@@ -873,19 +969,19 @@ ecepp_description_fill_widget (ECompEditorPropertyPart *property_part,
 
 				if (param && i_cal_parameter_get_fmttype (param) &&
 				    g_ascii_strcasecmp (i_cal_parameter_get_fmttype (param), "text/html") == 0) {
-					ICalValue *value;
+					ICalValue *ivalue;
 					const gchar *str = NULL;
 
-					value = i_cal_property_get_value (prop);
+					ivalue = i_cal_property_get_value (prop);
 
-					if (value)
-						str = i_cal_value_get_x (value);
+					if (ivalue)
+						str = i_cal_value_get_x (ivalue);
 
 					if (str && *str) {
 						description_part->alt_desc = g_strdup (str);
 					}
 
-					g_clear_object (&value);
+					g_clear_object (&ivalue);
 				}
 
 				g_clear_object (&param);
@@ -909,6 +1005,11 @@ ecepp_description_fill_component (ECompEditorPropertyPart *property_part,
 				  ICalComponent *component)
 {
 	ECompEditorPropertyPartClass *part_class;
+	ECompEditorPropertyPartDescription *description_part;
+
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_DESCRIPTION (property_part));
+
+	description_part = E_COMP_EDITOR_PROPERTY_PART_DESCRIPTION (property_part);
 
 	part_class = E_COMP_EDITOR_PROPERTY_PART_CLASS (e_comp_editor_property_part_description_parent_class);
 	g_return_if_fail (part_class != NULL);
@@ -918,6 +1019,27 @@ ecepp_description_fill_component (ECompEditorPropertyPart *property_part,
 
 	while (e_cal_util_component_remove_x_property (component, "X-ALT-DESC")) {
 		/* Remove all of them, not only text/html, they are obsolete now */
+	}
+
+	if (E_IS_MARKDOWN_EDITOR (description_part->real_edit_widget)) {
+		gchar *html;
+
+		html = e_markdown_editor_dup_html (E_MARKDOWN_EDITOR (description_part->real_edit_widget));
+
+		if (html && *html) {
+			ICalProperty *prop;
+			ICalParameter *param;
+
+			prop = i_cal_property_new_x (html);
+			i_cal_property_set_x_name (prop, "X-ALT-DESC");
+
+			param = i_cal_parameter_new_fmttype ("text/html");
+			i_cal_property_take_parameter (prop, param);
+
+			i_cal_component_take_property (component, prop);
+		}
+
+		g_free (html);
 	}
 }
 
@@ -1258,6 +1380,9 @@ typedef struct _ECompEditorPropertyPartDtstartClass ECompEditorPropertyPartDtsta
 
 struct _ECompEditorPropertyPartDtstart {
 	ECompEditorPropertyPartDatetimeLabeled parent;
+
+	gint shorten_time;
+	gboolean shorten_end;
 };
 
 struct _ECompEditorPropertyPartDtstartClass {
@@ -1268,27 +1393,127 @@ GType e_comp_editor_property_part_dtstart_get_type (void) G_GNUC_CONST;
 
 G_DEFINE_TYPE (ECompEditorPropertyPartDtstart, e_comp_editor_property_part_dtstart, E_TYPE_COMP_EDITOR_PROPERTY_PART_DATETIME_LABELED)
 
+enum {
+	PROP_DTSTART_0,
+	PROP_DTSTART_SHORTEN_TIME,
+	PROP_DTSTART_SHORTEN_END
+};
+
 static void
 e_comp_editor_property_part_dtstart_init (ECompEditorPropertyPartDtstart *part_dtstart)
 {
+	part_dtstart->shorten_time = 0;
+	part_dtstart->shorten_end = TRUE;
+}
+
+static void
+e_comp_editor_property_part_dtstart_get_property (GObject *object,
+						  guint property_id,
+						  GValue *value,
+						  GParamSpec *pspec)
+{
+	ECompEditorPropertyPartDtstart *part_dtstart = E_COMP_EDITOR_PROPERTY_PART_DTSTART (object);
+
+	g_return_if_fail (part_dtstart != NULL);
+
+	switch (property_id) {
+		case PROP_DTSTART_SHORTEN_TIME:
+			g_value_set_int (value, part_dtstart->shorten_time);
+			return;
+
+		case PROP_DTSTART_SHORTEN_END:
+			g_value_set_boolean (value, part_dtstart->shorten_end);
+			return;
+	}
+
+	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+}
+
+static void
+e_comp_editor_property_part_dtstart_set_property (GObject *object,
+						  guint property_id,
+						  const GValue *value,
+						  GParamSpec *pspec)
+{
+	ECompEditorPropertyPartDtstart *part_dtstart = E_COMP_EDITOR_PROPERTY_PART_DTSTART (object);
+
+	g_return_if_fail (part_dtstart != NULL);
+
+	switch (property_id) {
+		case PROP_DTSTART_SHORTEN_TIME:
+			if (part_dtstart->shorten_time != g_value_get_int (value)) {
+				part_dtstart->shorten_time = g_value_get_int (value);
+
+				if (!part_dtstart->shorten_end) {
+					GtkWidget *edit_widget;
+
+					edit_widget = e_comp_editor_property_part_get_edit_widget (E_COMP_EDITOR_PROPERTY_PART (part_dtstart));
+
+					e_date_edit_set_shorten_time (E_DATE_EDIT (edit_widget), part_dtstart->shorten_time);
+				}
+
+				g_object_notify (object, "shorten-time");
+			}
+			return;
+		case PROP_DTSTART_SHORTEN_END:
+			if (!part_dtstart->shorten_end != !g_value_get_boolean (value)) {
+				GtkWidget *edit_widget;
+
+				part_dtstart->shorten_end = g_value_get_boolean (value);
+
+				edit_widget = e_comp_editor_property_part_get_edit_widget (E_COMP_EDITOR_PROPERTY_PART (part_dtstart));
+
+				if (part_dtstart->shorten_end)
+					e_date_edit_set_shorten_time (E_DATE_EDIT (edit_widget), 0);
+				else
+					e_date_edit_set_shorten_time (E_DATE_EDIT (edit_widget), part_dtstart->shorten_time);
+
+				g_object_notify (object, "shorten-end");
+			}
+			return;
+	}
+
+	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
 }
 
 static void
 e_comp_editor_property_part_dtstart_class_init (ECompEditorPropertyPartDtstartClass *klass)
 {
 	ECompEditorPropertyPartDatetimeClass *part_datetime_class;
+	GObjectClass *object_class;
 
 	part_datetime_class = E_COMP_EDITOR_PROPERTY_PART_DATETIME_CLASS (klass);
 	part_datetime_class->prop_kind = I_CAL_DTSTART_PROPERTY;
 	part_datetime_class->i_cal_new_func = i_cal_property_new_dtstart;
 	part_datetime_class->i_cal_set_func = i_cal_property_set_dtstart;
 	part_datetime_class->i_cal_get_func = i_cal_property_get_dtstart;
+
+	object_class = G_OBJECT_CLASS (klass);
+	object_class->get_property = e_comp_editor_property_part_dtstart_get_property;
+	object_class->set_property = e_comp_editor_property_part_dtstart_set_property;
+
+	g_object_class_install_property (
+		object_class,
+		PROP_DTSTART_SHORTEN_TIME,
+		g_param_spec_int (
+			"shorten-time", NULL, NULL,
+			0, 29, 0,
+			G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+	g_object_class_install_property (
+		object_class,
+		PROP_DTSTART_SHORTEN_END,
+		g_param_spec_boolean (
+			"shorten-end", NULL, NULL,
+			TRUE,
+			G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 }
 
 ECompEditorPropertyPart *
 e_comp_editor_property_part_dtstart_new (const gchar *label,
 					 gboolean date_only,
-					 gboolean allow_no_date_set)
+					 gboolean allow_no_date_set,
+					 gboolean allow_shorten_time)
 {
 	ECompEditorPropertyPart *part;
 
@@ -1299,6 +1524,31 @@ e_comp_editor_property_part_dtstart_new (const gchar *label,
 	e_comp_editor_property_part_datetime_labeled_setup (
 		E_COMP_EDITOR_PROPERTY_PART_DATETIME_LABELED (part),
 		date_only, allow_no_date_set);
+
+	if (allow_shorten_time) {
+		GtkWidget *edit_widget;
+
+		edit_widget = e_comp_editor_property_part_get_edit_widget (part);
+		if (E_IS_DATE_EDIT (edit_widget)) {
+			GSettings *settings;
+
+			e_date_edit_set_shorten_time_end (E_DATE_EDIT (edit_widget), FALSE);
+
+			settings = e_util_ref_settings ("org.gnome.evolution.calendar");
+
+			g_settings_bind (settings, "shorten-time",
+				part, "shorten-time",
+				G_SETTINGS_BIND_GET | G_SETTINGS_BIND_NO_SENSITIVITY);
+
+			g_settings_bind (settings, "shorten-time-end",
+				part, "shorten-end",
+				G_SETTINGS_BIND_GET | G_SETTINGS_BIND_NO_SENSITIVITY);
+
+			g_object_unref (settings);
+		} else {
+			g_warn_if_reached ();
+		}
+	}
 
 	return part;
 }
@@ -1319,6 +1569,9 @@ typedef struct _ECompEditorPropertyPartDtendClass ECompEditorPropertyPartDtendCl
 
 struct _ECompEditorPropertyPartDtend {
 	ECompEditorPropertyPartDatetimeLabeled parent;
+
+	gint shorten_time;
+	gboolean shorten_end;
 };
 
 struct _ECompEditorPropertyPartDtendClass {
@@ -1329,21 +1582,139 @@ GType e_comp_editor_property_part_dtend_get_type (void) G_GNUC_CONST;
 
 G_DEFINE_TYPE (ECompEditorPropertyPartDtend, e_comp_editor_property_part_dtend, E_TYPE_COMP_EDITOR_PROPERTY_PART_DATETIME_LABELED)
 
+enum {
+	PROP_DTEND_0,
+	PROP_DTEND_SHORTEN_TIME,
+	PROP_DTEND_SHORTEN_END
+};
+
+static void
+e_comp_editor_property_part_dtend_fill_component (ECompEditorPropertyPart *property_part,
+						  ICalComponent *component)
+{
+	ECompEditorPropertyPartClass *part_class;
+
+	part_class = E_COMP_EDITOR_PROPERTY_PART_CLASS (e_comp_editor_property_part_dtend_parent_class);
+	g_return_if_fail (part_class != NULL);
+	g_return_if_fail (part_class->fill_component != NULL);
+
+	part_class->fill_component (property_part, component);
+
+	e_cal_util_component_remove_property_by_kind (component, I_CAL_DURATION_PROPERTY, TRUE);
+}
+
 static void
 e_comp_editor_property_part_dtend_init (ECompEditorPropertyPartDtend *part_dtend)
 {
+	part_dtend->shorten_time = 0;
+	part_dtend->shorten_end = FALSE;
+}
+
+static void
+e_comp_editor_property_part_dtend_get_property (GObject *object,
+						guint property_id,
+						GValue *value,
+						GParamSpec *pspec)
+{
+	ECompEditorPropertyPartDtend *part_dtend = E_COMP_EDITOR_PROPERTY_PART_DTEND (object);
+
+	g_return_if_fail (part_dtend != NULL);
+
+	switch (property_id) {
+		case PROP_DTEND_SHORTEN_TIME:
+			g_value_set_int (value, part_dtend->shorten_time);
+			return;
+
+		case PROP_DTEND_SHORTEN_END:
+			g_value_set_boolean (value, part_dtend->shorten_end);
+			return;
+	}
+
+	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+}
+
+static void
+e_comp_editor_property_part_dtend_set_property (GObject *object,
+						guint property_id,
+						const GValue *value,
+						GParamSpec *pspec)
+{
+	ECompEditorPropertyPartDtend *part_dtend = E_COMP_EDITOR_PROPERTY_PART_DTEND (object);
+
+	g_return_if_fail (part_dtend != NULL);
+
+	switch (property_id) {
+		case PROP_DTEND_SHORTEN_TIME:
+			if (part_dtend->shorten_time != g_value_get_int (value)) {
+				part_dtend->shorten_time = g_value_get_int (value);
+
+				if (part_dtend->shorten_end) {
+					GtkWidget *edit_widget;
+
+					edit_widget = e_comp_editor_property_part_get_edit_widget (E_COMP_EDITOR_PROPERTY_PART (part_dtend));
+
+					e_date_edit_set_shorten_time (E_DATE_EDIT (edit_widget), part_dtend->shorten_time);
+				}
+
+				g_object_notify (object, "shorten-time");
+			}
+			return;
+		case PROP_DTEND_SHORTEN_END:
+			if (!part_dtend->shorten_end != !g_value_get_boolean (value)) {
+				GtkWidget *edit_widget;
+
+				part_dtend->shorten_end = g_value_get_boolean (value);
+
+				edit_widget = e_comp_editor_property_part_get_edit_widget (E_COMP_EDITOR_PROPERTY_PART (part_dtend));
+
+				if (part_dtend->shorten_end)
+					e_date_edit_set_shorten_time (E_DATE_EDIT (edit_widget), part_dtend->shorten_time);
+				else
+					e_date_edit_set_shorten_time (E_DATE_EDIT (edit_widget), 0);
+
+				g_object_notify (object, "shorten-end");
+			}
+			return;
+	}
+
+	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
 }
 
 static void
 e_comp_editor_property_part_dtend_class_init (ECompEditorPropertyPartDtendClass *klass)
 {
 	ECompEditorPropertyPartDatetimeClass *part_datetime_class;
+	ECompEditorPropertyPartClass *property_part_class;
+	GObjectClass *object_class;
 
 	part_datetime_class = E_COMP_EDITOR_PROPERTY_PART_DATETIME_CLASS (klass);
 	part_datetime_class->prop_kind = I_CAL_DTEND_PROPERTY;
 	part_datetime_class->i_cal_new_func = i_cal_property_new_dtend;
 	part_datetime_class->i_cal_set_func = i_cal_property_set_dtend;
 	part_datetime_class->i_cal_get_func = i_cal_property_get_dtend;
+
+	property_part_class = E_COMP_EDITOR_PROPERTY_PART_CLASS (klass);
+	property_part_class->fill_component = e_comp_editor_property_part_dtend_fill_component;
+
+	object_class = G_OBJECT_CLASS (klass);
+	object_class->get_property = e_comp_editor_property_part_dtend_get_property;
+	object_class->set_property = e_comp_editor_property_part_dtend_set_property;
+
+	g_object_class_install_property (
+		object_class,
+		PROP_DTEND_SHORTEN_TIME,
+		g_param_spec_int (
+			"shorten-time", NULL, NULL,
+			0, 29, 0,
+			G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+	g_object_class_install_property (
+		object_class,
+		PROP_DTEND_SHORTEN_END,
+		g_param_spec_boolean (
+			"shorten-end", NULL, NULL,
+			TRUE,
+			G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 }
 
 ECompEditorPropertyPart *
@@ -1352,6 +1723,7 @@ e_comp_editor_property_part_dtend_new (const gchar *label,
 				       gboolean allow_no_date_set)
 {
 	ECompEditorPropertyPart *part;
+	GtkWidget *edit_widget;
 
 	part = g_object_new (E_TYPE_COMP_EDITOR_PROPERTY_PART_DTEND,
 		"label", label,
@@ -1360,6 +1732,27 @@ e_comp_editor_property_part_dtend_new (const gchar *label,
 	e_comp_editor_property_part_datetime_labeled_setup (
 		E_COMP_EDITOR_PROPERTY_PART_DATETIME_LABELED (part),
 		date_only, allow_no_date_set);
+
+	edit_widget = e_comp_editor_property_part_get_edit_widget (part);
+	if (E_IS_DATE_EDIT (edit_widget)) {
+		GSettings *settings;
+
+		e_date_edit_set_shorten_time_end (E_DATE_EDIT (edit_widget), TRUE);
+
+		settings = e_util_ref_settings ("org.gnome.evolution.calendar");
+
+		g_settings_bind (settings, "shorten-time",
+			part, "shorten-time",
+			G_SETTINGS_BIND_GET | G_SETTINGS_BIND_NO_SENSITIVITY);
+
+		g_settings_bind (settings, "shorten-time-end",
+			part, "shorten-end",
+			G_SETTINGS_BIND_GET | G_SETTINGS_BIND_NO_SENSITIVITY);
+
+		g_object_unref (settings);
+	} else {
+		g_warn_if_reached ();
+	}
 
 	return part;
 }
@@ -2424,3 +2817,139 @@ e_comp_editor_property_part_color_new (void)
 {
 	return g_object_new (E_TYPE_COMP_EDITOR_PROPERTY_PART_COLOR, NULL);
 }
+
+/* ************************************************************************* */
+
+#define E_TYPE_COMP_EDITOR_PROPERTY_PART_ESTIMATED_DURATION \
+	(e_comp_editor_property_part_estimated_duration_get_type ())
+#define E_COMP_EDITOR_PROPERTY_PART_ESTIMATED_DURATION(obj) \
+	(G_TYPE_CHECK_INSTANCE_CAST \
+	((obj), E_TYPE_COMP_EDITOR_PROPERTY_PART_ESTIMATED_DURATION, ECompEditorPropertyParteEtimatedDuration))
+#define E_IS_COMP_EDITOR_PROPERTY_PART_ESTIMATED_DURATION(obj) \
+	(G_TYPE_CHECK_INSTANCE_TYPE \
+	((obj), E_TYPE_COMP_EDITOR_PROPERTY_PART_ESTIMATED_DURATION))
+
+typedef struct _ECompEditorPropertyPartEstimatedDuration ECompEditorPropertyPartEstimatedDuration;
+typedef struct _ECompEditorPropertyPartEstimatedDurationClass ECompEditorPropertyPartEstimatedDurationClass;
+
+struct _ECompEditorPropertyPartEstimatedDuration {
+	ECompEditorPropertyPart parent;
+};
+
+struct _ECompEditorPropertyPartEstimatedDurationClass {
+	ECompEditorPropertyPartClass parent_class;
+};
+
+GType e_comp_editor_property_part_estimated_duration_get_type (void) G_GNUC_CONST;
+
+G_DEFINE_TYPE (ECompEditorPropertyPartEstimatedDuration, e_comp_editor_property_part_estimated_duration, E_TYPE_COMP_EDITOR_PROPERTY_PART)
+
+static void
+ecepp_estimated_duration_create_widgets (ECompEditorPropertyPart *property_part,
+					 GtkWidget **out_label_widget,
+					 GtkWidget **out_edit_widget)
+{
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_ESTIMATED_DURATION (property_part));
+	g_return_if_fail (out_label_widget != NULL);
+	g_return_if_fail (out_edit_widget != NULL);
+
+	*out_label_widget = gtk_label_new_with_mnemonic (_("Esti_mated duration:"));
+
+	g_object_set (G_OBJECT (*out_label_widget),
+		"hexpand", FALSE,
+		"halign", GTK_ALIGN_END,
+		"vexpand", FALSE,
+		"valign", GTK_ALIGN_CENTER,
+		NULL);
+
+	gtk_widget_show (*out_label_widget);
+
+	*out_edit_widget = e_estimated_duration_entry_new ();
+	gtk_widget_show (*out_edit_widget);
+
+	gtk_label_set_mnemonic_widget (GTK_LABEL (*out_label_widget), *out_edit_widget);
+
+	g_signal_connect_swapped (*out_edit_widget, "changed",
+		G_CALLBACK (e_comp_editor_property_part_emit_changed), property_part);
+}
+
+static void
+ecepp_estimated_duration_fill_widget (ECompEditorPropertyPart *property_part,
+				      ICalComponent *component)
+{
+	GtkWidget *edit_widget;
+	ICalProperty *prop;
+
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_ESTIMATED_DURATION (property_part));
+
+	edit_widget = e_comp_editor_property_part_get_edit_widget (property_part);
+	g_return_if_fail (E_IS_ESTIMATED_DURATION_ENTRY (edit_widget));
+
+	prop = i_cal_component_get_first_property (component, I_CAL_ESTIMATEDDURATION_PROPERTY);
+	if (prop) {
+		ICalDuration *duration = i_cal_property_get_estimatedduration (prop);
+
+		e_estimated_duration_entry_set_value (E_ESTIMATED_DURATION_ENTRY (edit_widget), duration);
+
+		g_clear_object (&duration);
+		g_clear_object (&prop);
+	} else {
+		e_estimated_duration_entry_set_value (E_ESTIMATED_DURATION_ENTRY (edit_widget), NULL);
+	}
+}
+
+static void
+ecepp_estimated_duration_fill_component (ECompEditorPropertyPart *property_part,
+					 ICalComponent *component)
+{
+	GtkWidget *edit_widget;
+	ICalProperty *prop;
+	ICalDuration *duration;
+
+	g_return_if_fail (E_IS_COMP_EDITOR_PROPERTY_PART_ESTIMATED_DURATION (property_part));
+
+	edit_widget = e_comp_editor_property_part_get_edit_widget (property_part);
+	g_return_if_fail (E_IS_ESTIMATED_DURATION_ENTRY (edit_widget));
+
+	duration = e_estimated_duration_entry_get_value (E_ESTIMATED_DURATION_ENTRY (edit_widget));
+
+	prop = i_cal_component_get_first_property (component, I_CAL_ESTIMATEDDURATION_PROPERTY);
+
+	if (duration) {
+		if (prop) {
+			i_cal_property_set_estimatedduration (prop, duration);
+		} else {
+			prop = i_cal_property_new_estimatedduration (duration);
+			i_cal_component_add_property (component, prop);
+		}
+	} else {
+		if (prop)
+			i_cal_component_remove_property (component, prop);
+	}
+
+	g_clear_object (&prop);
+}
+
+static void
+e_comp_editor_property_part_estimated_duration_init (ECompEditorPropertyPartEstimatedDuration *part_estimated_duration)
+{
+}
+
+static void
+e_comp_editor_property_part_estimated_duration_class_init (ECompEditorPropertyPartEstimatedDurationClass *klass)
+{
+	ECompEditorPropertyPartClass *part_class;
+
+	part_class = E_COMP_EDITOR_PROPERTY_PART_CLASS (klass);
+	part_class->create_widgets = ecepp_estimated_duration_create_widgets;
+	part_class->fill_widget = ecepp_estimated_duration_fill_widget;
+	part_class->fill_component = ecepp_estimated_duration_fill_component;
+}
+
+ECompEditorPropertyPart *
+e_comp_editor_property_part_estimated_duration_new (void)
+{
+	return g_object_new (E_TYPE_COMP_EDITOR_PROPERTY_PART_ESTIMATED_DURATION, NULL);
+}
+
+/* ************************************************************************* */

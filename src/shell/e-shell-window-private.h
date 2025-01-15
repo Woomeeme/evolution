@@ -28,17 +28,16 @@
 
 #include <libebackend/libebackend.h>
 
+#include "e-util/e-util.h"
+
 #include "shell/e-shell.h"
 #include "shell/e-shell-content.h"
+#include "shell/e-shell-headerbar.h"
 #include "shell/e-shell-view.h"
 #include "shell/e-shell-searchbar.h"
 #include "shell/e-shell-switcher.h"
 #include "shell/e-shell-window-actions.h"
 #include "shell/e-shell-utils.h"
-
-#define E_SHELL_WINDOW_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_SHELL_WINDOW, EShellWindowPrivate))
 
 /* Shorthand, requires a variable named "shell_window". */
 #define ACTION(name) \
@@ -80,26 +79,20 @@ struct _EShellWindowPrivate {
 	GtkWidget *switcher;
 	GtkWidget *tooltip_label;
 	GtkWidget *status_notebook;
-
-	/* Miscellaneous */
-	GtkWidget *menubar_box;
+	GtkWidget *headerbar;
+	EMenuBar *menu_bar;
 
 	/* Shell signal handlers. */
 	GArray *signal_handler_ids;
 
 	gchar *geometry;
 
-	guint destroyed        : 1;  /* XXX Do we still need this? */
 	guint safe_mode : 1;
-	guint menubar_visible : 1;
 	guint sidebar_visible : 1;
 	guint switcher_visible : 1;
 	guint taskbar_visible : 1;
 	guint toolbar_visible : 1;
 	guint is_main_instance : 1;
-
-	gulong delayed_menubar_show_id;
-	gulong delayed_menubar_hide_id;
 
 	GSList *postponed_alerts; /* EAlert * */
 };

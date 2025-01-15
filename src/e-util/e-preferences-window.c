@@ -36,10 +36,6 @@ enum {
 
 static guint dialog_signals[LAST_SIGNAL];
 
-#define E_PREFERENCES_WINDOW_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_PREFERENCES_WINDOW, EPreferencesWindowPrivate))
-
 struct _EPreferencesWindowPrivate {
 	gboolean   setup;
 	gpointer   shell;
@@ -48,10 +44,7 @@ struct _EPreferencesWindowPrivate {
 	GtkWidget *listbox;
 };
 
-G_DEFINE_TYPE (
-	EPreferencesWindow,
-	e_preferences_window,
-	GTK_TYPE_WINDOW)
+G_DEFINE_TYPE_WITH_PRIVATE (EPreferencesWindow, e_preferences_window, GTK_TYPE_WINDOW)
 
 #define E_TYPE_PREFERENCES_WINDOW_ROW e_preferences_window_row_get_type ()
 G_DECLARE_FINAL_TYPE (EPreferencesWindowRow, e_preferences_window_row, E, PREFERENCES_WINDOW_ROW, GtkListBoxRow)
@@ -201,13 +194,11 @@ e_preferences_window_close (EPreferencesWindow *window)
 static void
 preferences_window_dispose (GObject *object)
 {
-	EPreferencesWindowPrivate *priv;
+	EPreferencesWindow *self = E_PREFERENCES_WINDOW (object);
 
-	priv = E_PREFERENCES_WINDOW_GET_PRIVATE (object);
-
-	if (priv->shell) {
-		g_object_remove_weak_pointer (priv->shell, &priv->shell);
-		priv->shell = NULL;
+	if (self->priv->shell) {
+		g_object_remove_weak_pointer (self->priv->shell, &self->priv->shell);
+		self->priv->shell = NULL;
 	}
 
 	/* Chain up to parent's dispose() method. */
@@ -219,8 +210,6 @@ e_preferences_window_class_init (EPreferencesWindowClass *class)
 {
 	GObjectClass *object_class;
 	GtkBindingSet *binding_set;
-
-	g_type_class_add_private (class, sizeof (EPreferencesWindowPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->dispose = preferences_window_dispose;
@@ -250,19 +239,22 @@ e_preferences_window_class_init (EPreferencesWindowClass *class)
 static void
 e_preferences_window_init (EPreferencesWindow *window)
 {
-	GtkWidget *header;
+	GtkWidget *header = NULL;
 	GtkWidget *widget;
 	GtkWidget *hbox;
+	GtkWidget *vbox;
 
-	window->priv = E_PREFERENCES_WINDOW_GET_PRIVATE (window);
+	window->priv = e_preferences_window_get_instance_private (window);
 
-	widget = gtk_header_bar_new ();
-	g_object_set (G_OBJECT (widget),
-		"show-close-button", TRUE,
-		"visible", TRUE,
-		NULL);
-	gtk_window_set_titlebar (GTK_WINDOW (window), widget);
-	header = widget;
+	if (e_util_get_use_header_bar ()) {
+		widget = gtk_header_bar_new ();
+		g_object_set (G_OBJECT (widget),
+			"show-close-button", TRUE,
+			"visible", TRUE,
+			NULL);
+		gtk_window_set_titlebar (GTK_WINDOW (window), widget);
+		header = widget;
+	}
 
 	widget = gtk_stack_new ();
 	gtk_widget_show (widget);
@@ -288,21 +280,61 @@ e_preferences_window_init (EPreferencesWindow *window)
 		NULL);
 	gtk_container_add (GTK_CONTAINER (widget), window->priv->listbox);
 
+	vbox = g_object_new (GTK_TYPE_BOX,
+		"orientation", GTK_ORIENTATION_VERTICAL,
+		"visible", TRUE,
+		NULL);
 	hbox = g_object_new (GTK_TYPE_BOX,
 		"orientation", GTK_ORIENTATION_HORIZONTAL,
 		"visible", TRUE,
 		NULL);
-	gtk_container_add (GTK_CONTAINER (window), hbox);
+	gtk_container_add (GTK_CONTAINER (window), vbox);
+	gtk_container_add (GTK_CONTAINER (vbox), hbox);
 	gtk_container_add (GTK_CONTAINER (hbox), widget);
 	gtk_container_add (GTK_CONTAINER (hbox), window->priv->stack);
 
-	widget = gtk_button_new_from_icon_name ("help-browser", GTK_ICON_SIZE_LARGE_TOOLBAR);
+	widget = gtk_button_new_from_icon_name ("help-browser", GTK_ICON_SIZE_BUTTON);
 	gtk_widget_set_tooltip_text (widget, _("Help"));
 	gtk_widget_show (widget);
 	g_signal_connect_swapped (
 		widget, "clicked",
 		G_CALLBACK (preferences_window_help_clicked_cb), window);
-	gtk_header_bar_pack_end (GTK_HEADER_BAR (header), widget);
+	if (header) {
+		gtk_header_bar_pack_end (GTK_HEADER_BAR (header), widget);
+	} else {
+		GtkAccelGroup *accel_group;
+		GtkWidget *bbox;
+
+		bbox = gtk_button_box_new (GTK_ORIENTATION_HORIZONTAL);
+		g_object_set (bbox,
+			"layout-style", GTK_BUTTONBOX_END,
+			"visible", TRUE,
+			"margin-start", 6,
+			"margin-end", 6,
+			"margin-top", 6,
+			"margin-bottom", 6,
+			NULL);
+		gtk_button_box_set_layout (GTK_BUTTON_BOX (bbox), GTK_BUTTONBOX_END);
+		gtk_container_add (GTK_CONTAINER (vbox), bbox);
+
+		gtk_box_pack_start (GTK_BOX (bbox), widget, FALSE, FALSE, 0);
+		gtk_button_box_set_child_secondary (GTK_BUTTON_BOX (bbox), widget, TRUE);
+
+		widget = e_dialog_button_new_with_icon ("window-close", _("_Close"));
+		g_signal_connect_swapped (
+			widget, "clicked",
+			G_CALLBACK (gtk_widget_hide), window);
+		gtk_widget_set_can_default (widget, TRUE);
+		gtk_box_pack_start (GTK_BOX (bbox), widget, FALSE, FALSE, 0);
+		accel_group = gtk_accel_group_new ();
+		gtk_widget_add_accelerator (
+			widget, "activate", accel_group,
+			GDK_KEY_Escape, (GdkModifierType) 0,
+			GTK_ACCEL_VISIBLE);
+		gtk_window_add_accel_group (GTK_WINDOW (window), accel_group);
+		gtk_widget_grab_default (widget);
+		gtk_widget_show (widget);
+	}
 
 	gtk_window_set_title (GTK_WINDOW (window), _("Evolution Preferences"));
 	gtk_window_set_resizable (GTK_WINDOW (window), TRUE);
@@ -375,6 +407,8 @@ e_preferences_window_show_page (EPreferencesWindow *window,
 			break;
 		}
 	}
+
+	g_list_free (children);
 }
 
 /*
@@ -383,15 +417,12 @@ e_preferences_window_show_page (EPreferencesWindow *window,
 void
 e_preferences_window_setup (EPreferencesWindow *window)
 {
-	EPreferencesWindowPrivate *priv;
 	GList *children, *list;
 	GSList *slist_children = NULL;
 
 	g_return_if_fail (E_IS_PREFERENCES_WINDOW (window));
 
-	priv = E_PREFERENCES_WINDOW_GET_PRIVATE (window);
-
-	if (priv->setup)
+	if (window->priv->setup)
 		return;
 
 	children = gtk_container_get_children (GTK_CONTAINER (window->priv->listbox));
@@ -410,12 +441,13 @@ e_preferences_window_setup (EPreferencesWindow *window)
 				NULL);
 			gtk_container_add (GTK_CONTAINER (scrolled), content);
 			gtk_widget_show (content);
-			gtk_stack_add_named (GTK_STACK (priv->stack), scrolled, child->page_name);
+			gtk_stack_add_named (GTK_STACK (window->priv->stack), scrolled, child->page_name);
 			slist_children = g_slist_prepend (slist_children, scrolled);
 		}
 	}
 
 	e_util_resize_window_for_screen (GTK_WINDOW (window), -1, -1, slist_children);
 	g_slist_free (slist_children);
-	priv->setup = TRUE;
+	g_list_free (children);
+	window->priv->setup = TRUE;
 }

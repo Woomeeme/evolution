@@ -86,6 +86,7 @@ void		e_attachment_add_to_multipart	(EAttachment *attachment,
 						 const gchar *default_charset);
 void		e_attachment_cancel		(EAttachment *attachment);
 gboolean	e_attachment_is_mail_note	(EAttachment *attachment);
+gboolean	e_attachment_is_uri		(EAttachment *attachment);
 gboolean	e_attachment_get_can_show	(EAttachment *attachment);
 void		e_attachment_set_can_show	(EAttachment *attachment,
 						 gboolean can_show);
@@ -131,6 +132,12 @@ GList *		e_attachment_list_apps		(EAttachment *attachment);
 GAppInfo *	e_attachment_ref_default_app	(EAttachment *attachment);
 void		e_attachment_update_store_columns
 						(EAttachment *attachment);
+gboolean	e_attachment_check_file_changed	(EAttachment *attachment,
+						 gboolean *out_file_exists,
+						 GCancellable *cancellable);
+void		e_attachment_set_may_reload	(EAttachment *attachment,
+						 gboolean may_reload);
+gboolean	e_attachment_get_may_reload	(EAttachment *attachment);
 
 /* Asynchronous Operations */
 void		e_attachment_load_async		(EAttachment *attachment,

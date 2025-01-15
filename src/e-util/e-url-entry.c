@@ -24,21 +24,25 @@
 
 #include "e-misc-utils.h"
 
-#define E_URL_ENTRY_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_URL_ENTRY, EUrlEntryPrivate))
-
 #define ICON_POSITION GTK_ENTRY_ICON_SECONDARY
+
+struct _EUrlEntryPrivate {
+	gboolean dummy;
+};
 
 enum {
 	PROP_0,
 	PROP_ICON_VISIBLE
 };
 
-G_DEFINE_TYPE (
-	EUrlEntry,
-	e_url_entry,
-	GTK_TYPE_ENTRY)
+enum {
+	OPEN_URL,
+	LAST_SIGNAL
+};
+
+static guint signals[LAST_SIGNAL];
+
+G_DEFINE_TYPE_WITH_PRIVATE (EUrlEntry, e_url_entry, GTK_TYPE_ENTRY)
 
 static gboolean
 url_entry_text_to_sensitive (GBinding *binding,
@@ -70,21 +74,28 @@ url_entry_icon_release_cb (GtkEntry *entry,
                            GdkEvent *event)
 {
 	gpointer toplevel;
+	const gchar *text;
+
+	if (icon_position != ICON_POSITION)
+		return;
 
 	toplevel = gtk_widget_get_toplevel (GTK_WIDGET (entry));
 	toplevel = gtk_widget_is_toplevel (toplevel) ? toplevel : NULL;
 
-	if (icon_position == ICON_POSITION) {
-		const gchar *text;
+	text = gtk_entry_get_text (entry);
+	g_return_if_fail (text != NULL);
 
-		text = gtk_entry_get_text (entry);
-		g_return_if_fail (text != NULL);
+	/* Skip leading whitespace. */
+	while (g_ascii_isspace (*text))
+		text++;
 
-		/* Skip leading whitespace. */
-		while (g_ascii_isspace (*text))
-			text++;
+	if (text && *text) {
+		gboolean handled = FALSE;
 
-		e_show_uri (toplevel, text);
+		g_signal_emit (entry, signals[OPEN_URL], 0, toplevel, text, &handled);
+
+		if (!handled)
+			e_show_uri (toplevel, text);
 	}
 }
 
@@ -142,12 +153,25 @@ e_url_entry_class_init (EUrlEntryClass *class)
 			FALSE,
 			G_PARAM_READWRITE |
 			G_PARAM_STATIC_STRINGS));
+
+	signals[OPEN_URL] = g_signal_new (
+		"open-url",
+		G_TYPE_FROM_CLASS (class),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		0,
+		g_signal_accumulator_true_handled, NULL,
+		NULL,
+		G_TYPE_BOOLEAN, 2,
+		GTK_TYPE_WINDOW,
+		G_TYPE_STRING);
 }
 
 static void
 e_url_entry_init (EUrlEntry *url_entry)
 {
 	GtkEntry *entry;
+
+	url_entry->priv = e_url_entry_get_instance_private (url_entry);
 
 	entry = GTK_ENTRY (url_entry);
 

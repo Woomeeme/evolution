@@ -61,6 +61,7 @@ struct _AsyncContext {
 	gchar *message_uid;
 
 	gboolean use_sent_folder;
+	gboolean request_dsn;
 };
 
 static void
@@ -566,6 +567,8 @@ mail_session_send_to_thread (GSimpleAsyncResult *simple,
 	if (provider->flags & CAMEL_PROVIDER_DISABLE_SENT_FOLDER)
 		copy_to_sent = FALSE;
 
+	camel_transport_set_request_dsn (CAMEL_TRANSPORT (context->transport), context->request_dsn);
+
 	camel_transport_send_to_sync (
 		CAMEL_TRANSPORT (context->transport),
 		context->message, context->from,
@@ -598,32 +601,32 @@ mail_session_send_to_thread (GSimpleAsyncResult *simple,
 skip_send:
 	/* Post the message to requested folders. */
 	for (ii = 0; ii < context->post_to_uris->len; ii++) {
-		CamelFolder *folder;
+		CamelFolder *post_folder;
 		const gchar *folder_uri;
 
 		folder_uri = g_ptr_array_index (context->post_to_uris, ii);
 
-		folder = e_mail_session_uri_to_folder_sync (
+		post_folder = e_mail_session_uri_to_folder_sync (
 			session, folder_uri, 0, cancellable, &error);
 
 		if (error != NULL) {
-			g_warn_if_fail (folder == NULL);
+			g_warn_if_fail (post_folder == NULL);
 			mail_tool_restore_xevolution_headers (context->message, context->xev_headers);
 			g_simple_async_result_take_error (simple, error);
 			return;
 		}
 
-		g_return_if_fail (CAMEL_IS_FOLDER (folder));
+		g_return_if_fail (CAMEL_IS_FOLDER (post_folder));
 
-		camel_operation_push_message (cancellable, _("Posting message to “%s”"), camel_folder_get_full_name (folder));
+		camel_operation_push_message (cancellable, _("Posting message to “%s”"), camel_folder_get_full_display_name (post_folder));
 
 		camel_folder_append_message_sync (
-			folder, context->message, context->info,
+			post_folder, context->message, context->info,
 			NULL, cancellable, &error);
 
 		camel_operation_pop_message (cancellable);
 
-		g_object_unref (folder);
+		g_object_unref (post_folder);
 
 		if (error != NULL) {
 			mail_tool_restore_xevolution_headers (context->message, context->xev_headers);
@@ -642,10 +645,11 @@ skip_send:
 	/* Run filters on the outgoing message. */
 	if (context->driver != NULL) {
 		CamelMessageFlags message_flags;
+		const gchar *transport_uid = camel_service_get_uid (context->transport);
 
 		camel_filter_driver_filter_message (
 			context->driver, context->message, context->info,
-			NULL, NULL, NULL, "", cancellable, &error);
+			NULL, NULL, transport_uid, transport_uid, cancellable, &error);
 
 		if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
 			goto exit;
@@ -686,7 +690,7 @@ skip_send:
 
 	/* Append the message. */
 	if (folder != NULL) {
-		camel_operation_push_message (cancellable, _("Storing sent message to “%s”"), camel_folder_get_full_name (folder));
+		camel_operation_push_message (cancellable, _("Storing sent message to “%s”"), camel_folder_get_full_display_name (folder));
 
 		camel_folder_append_message_sync (
 			folder, context->message,
@@ -721,7 +725,7 @@ skip_send:
 
 		g_clear_error (&error);
 
-		camel_operation_push_message (cancellable, _("Storing sent message to “%s”"), camel_folder_get_full_name (local_sent_folder));
+		camel_operation_push_message (cancellable, _("Storing sent message to “%s”"), camel_folder_get_full_display_name (local_sent_folder));
 
 		camel_folder_append_message_sync (
 			local_sent_folder, context->message,
@@ -816,6 +820,7 @@ e_mail_session_send_to (EMailSession *session,
 	GPtrArray *post_to_uris;
 	CamelNameValueArray *xev_headers;
 	const gchar *resent_from;
+	gboolean request_dsn;
 	guint ii, len;
 	GError *error = NULL;
 
@@ -826,6 +831,8 @@ e_mail_session_send_to (EMailSession *session,
 
 	if (!camel_medium_get_header (medium, "X-Evolution-Is-Redirect"))
 		camel_medium_set_header (medium, "User-Agent", USER_AGENT);
+
+	request_dsn = g_strcmp0 (camel_medium_get_header (medium, "X-Evolution-Request-DSN"), "1") == 0;
 
 	/* Do this before removing "X-Evolution" headers. */
 	transport = e_mail_session_ref_transport_for_message (
@@ -913,6 +920,7 @@ e_mail_session_send_to (EMailSession *session,
 	context->from = from;
 	context->recipients = recipients;
 	context->info = info;
+	context->request_dsn = request_dsn;
 	context->xev_headers = xev_headers;
 	context->post_to_uris = post_to_uris;
 	context->transport = transport;
@@ -1029,9 +1037,6 @@ mail_session_ref_origin_folder (EMailSession *session,
 	header_value = camel_medium_get_header (medium, header_name);
 
 	if (header_value == NULL)
-		return NULL;
-
-	if (strstr (header_value, "FORWARDED") != NULL)
 		return NULL;
 
 	/* Check that a "X-Evolution-Source-Message" header is present. */

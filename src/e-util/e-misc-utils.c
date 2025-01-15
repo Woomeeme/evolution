@@ -288,7 +288,7 @@ e_show_uri (GtkWindow *parent,
 }
 
 static gboolean
-e_misc_utils_is_help_package_installed (void)
+e_misc_utils_is_help_package_installed (GAppInfo **out_yelp_info)
 {
 	gboolean is_installed;
 	gchar *path;
@@ -302,13 +302,29 @@ e_misc_utils_is_help_package_installed (void)
 	g_free (path);
 
 	if (is_installed) {
-		GAppInfo *help_handler;
+		GAppInfo *yelp_info = NULL;
+		GList *app_infos, *link;
 
-		help_handler = g_app_info_get_default_for_uri_scheme ("help");
+		app_infos = g_app_info_get_all_for_type ("x-scheme-handler/help");
 
-		is_installed = help_handler && g_app_info_get_commandline (help_handler);
+		for (link = app_infos; link; link = g_list_next (link)) {
+			GAppInfo *app_info = link->data;
+			const gchar *executable;
 
-		g_clear_object (&help_handler);
+			executable = g_app_info_get_executable (app_info);
+
+			if (executable && camel_strstrcase (executable, "yelp")) {
+				yelp_info = app_info;
+				break;
+			}
+		}
+
+		is_installed = yelp_info && g_app_info_get_commandline (yelp_info);
+
+		if (is_installed)
+			*out_yelp_info = g_object_ref (yelp_info);
+
+		g_list_free_full (app_infos, g_object_unref);
 	}
 
 	return is_installed;
@@ -328,19 +344,17 @@ void
 e_display_help (GtkWindow *parent,
                 const gchar *link_id)
 {
+	GAppInfo *yelp_info = NULL;
 	GString *uri;
 	GtkWidget *dialog;
 	GdkScreen *screen = NULL;
 	GError *error = NULL;
 	guint32 timestamp;
 
-	if (e_misc_utils_is_help_package_installed ()) {
+	if (e_misc_utils_is_help_package_installed (&yelp_info)) {
 		uri = g_string_new ("help:" PACKAGE);
 	} else {
-		uri = g_string_new ("https://help.gnome.org/users/" PACKAGE "/");
-		/*  Use '/stable/' until https://bugzilla.gnome.org/show_bug.cgi?id=785522 is fixed */
-		g_string_append (uri, "stable/");
-		/* g_string_append_printf (uri, "%d.%d", EDS_MAJOR_VERSION, EDS_MINOR_VERSION); */
+		uri = g_string_new ("https://gnome.pages.gitlab.gnome.org/evolution/help");
 	}
 
 	timestamp = gtk_get_current_event_time ();
@@ -353,8 +367,32 @@ e_display_help (GtkWindow *parent,
 		g_string_append (uri, link_id);
 	}
 
-	if (gtk_show_uri (screen, uri->str, timestamp, &error))
+	if (yelp_info) {
+		GAppLaunchContext *context = NULL;
+		GList *uris;
+		gboolean success;
+
+		uris = g_list_prepend (NULL, uri->str);
+
+		if (parent && screen) {
+			GdkAppLaunchContext *gdk_context;
+
+			gdk_context = gdk_display_get_app_launch_context (gdk_screen_get_display (screen));
+
+			if (gdk_context)
+				context = G_APP_LAUNCH_CONTEXT (gdk_context);
+		}
+
+		success = g_app_info_launch_uris (yelp_info, uris, context, &error);
+
+		g_list_free (uris);
+		g_clear_object (&context);
+
+		if (success)
+			goto exit;
+	} else if (gtk_show_uri (screen, uri->str, timestamp, &error)) {
 		goto exit;
+	}
 
 	dialog = gtk_message_dialog_new_with_markup (
 		parent, GTK_DIALOG_DESTROY_WITH_PARENT,
@@ -372,6 +410,7 @@ e_display_help (GtkWindow *parent,
 
 exit:
 	g_string_free (uri, TRUE);
+	g_clear_object (&yelp_info);
 }
 
 /**
@@ -1656,6 +1695,21 @@ e_utils_shade_color (const GdkRGBA *a,
 	b->alpha = a->alpha;
 }
 
+gdouble
+e_utils_get_color_brightness (const GdkRGBA *rgba)
+{
+	gdouble brightness;
+
+	g_return_val_if_fail (rgba != NULL, 0.0);
+
+	brightness =
+		(0.2109 * 255.0 * rgba->red) +
+		(0.5870 * 255.0 * rgba->green) +
+		(0.1021 * 255.0 * rgba->blue);
+
+	return brightness;
+}
+
 GdkRGBA
 e_utils_get_text_color_for_background (const GdkRGBA *bg_rgba)
 {
@@ -1664,10 +1718,7 @@ e_utils_get_text_color_for_background (const GdkRGBA *bg_rgba)
 
 	g_return_val_if_fail (bg_rgba != NULL, text_rgba);
 
-	brightness =
-		(0.2109 * 255.0 * bg_rgba->red) +
-		(0.5870 * 255.0 * bg_rgba->green) +
-		(0.1021 * 255.0 * bg_rgba->blue);
+	brightness = e_utils_get_color_brightness (bg_rgba);
 
 	if (brightness <= 140.0) {
 		text_rgba.red = 1.0;
@@ -2851,6 +2902,102 @@ e_binding_transform_text_non_null (GBinding *binding,
 }
 
 /**
+ * e_binding_transform_text_to_uri:
+ * @binding: a #GBinding
+ * @source_value: a #GValue of type #G_TYPE_STRING
+ * @target_value: a #GValue of boxed #GUri
+ * @not_used: not used
+ *
+ * Transforms a URI string into a #GUri. It expects the source
+ * object to be an #ESourceExtension descendant, then it adds
+ * also the user name from its #ESourceAuthentication extension.
+ *
+ * Returns: %TRUE
+ *
+ **/
+gboolean
+e_binding_transform_text_to_uri (GBinding *binding,
+				 const GValue *source_value,
+				 GValue *target_value,
+				 gpointer not_used)
+{
+	GUri *uri;
+	GObject *source_binding;
+	const gchar *text;
+
+	text = g_value_get_string (source_value);
+	uri = g_uri_parse (text, SOUP_HTTP_URI_FLAGS, NULL);
+
+	if (!uri)
+		uri = g_uri_build (G_URI_FLAGS_NONE, "http", NULL, NULL, -1, "", NULL, NULL);
+
+	source_binding = g_binding_get_source (binding);
+
+	if (E_IS_SOURCE_EXTENSION (source_binding)) {
+		ESource *source = NULL;
+		ESourceAuthentication *extension;
+		const gchar *user;
+
+		source = e_source_extension_ref_source (E_SOURCE_EXTENSION (source_binding));
+		if (e_source_has_extension (source, E_SOURCE_EXTENSION_AUTHENTICATION)) {
+			extension = e_source_get_extension (source, E_SOURCE_EXTENSION_AUTHENTICATION);
+			user = e_source_authentication_get_user (extension);
+
+			e_util_change_uri_component (&uri, SOUP_URI_USER, user);
+		}
+
+		g_clear_object (&source);
+	}
+
+	g_value_take_boxed (target_value, uri);
+
+	return TRUE;
+}
+
+/**
+ * e_binding_transform_uri_to_text:
+ * @binding: a #GBinding
+ * @source_value: a #GValue of boxed #GUri
+ * @target_value: a #GValue of type #G_TYPE_STRING
+ * @not_used: not used
+ *
+ * Transforms a #GUri into a string.
+ *
+ * Returns: %TRUE
+ *
+ **/
+gboolean
+e_binding_transform_uri_to_text (GBinding *binding,
+				 const GValue *source_value,
+				 GValue *target_value,
+				 gpointer not_used)
+{
+	GUri *uri;
+	gchar *text;
+
+	uri = g_value_get_boxed (source_value);
+
+	if (g_uri_get_host (uri)) {
+		text = g_uri_to_string_partial (uri, G_URI_HIDE_USERINFO | G_URI_HIDE_PASSWORD);
+	} else {
+		GObject *target;
+
+		text = NULL;
+		target = g_binding_get_target (binding);
+		g_object_get (target, g_binding_get_target_property (binding), &text, NULL);
+
+		if (!text || !*text) {
+			g_free (text);
+			text = g_uri_to_string_partial (uri, G_URI_HIDE_USERINFO | G_URI_HIDE_PASSWORD);
+		}
+	}
+
+	g_value_take_string (target_value, text);
+
+	return TRUE;
+}
+
+/**
  * e_binding_bind_object_text_property:
  * @source: the source #GObject
  * @source_property: the text property on the source to bind
@@ -3365,80 +3512,6 @@ e_util_prompt_user (GtkWindow *parent,
 	return button == GTK_RESPONSE_YES;
 }
 
-typedef struct _EUtilSimpleAsyncResultThreadData {
-	GSimpleAsyncResult *simple;
-	GSimpleAsyncThreadFunc func;
-	GCancellable *cancellable;
-} EUtilSimpleAsyncResultThreadData;
-
-static void
-e_util_simple_async_result_thread (gpointer data,
-				   gpointer user_data)
-{
-	EUtilSimpleAsyncResultThreadData *thread_data = data;
-	GError *error = NULL;
-
-	g_return_if_fail (thread_data != NULL);
-	g_return_if_fail (G_IS_SIMPLE_ASYNC_RESULT (thread_data->simple));
-	g_return_if_fail (thread_data->func != NULL);
-
-	if (g_cancellable_set_error_if_cancelled (thread_data->cancellable, &error)) {
-		g_simple_async_result_take_error (thread_data->simple, error);
-	} else {
-		thread_data->func (thread_data->simple,
-			g_async_result_get_source_object (G_ASYNC_RESULT (thread_data->simple)),
-			thread_data->cancellable);
-	}
-
-	g_simple_async_result_complete_in_idle (thread_data->simple);
-
-	g_clear_object (&thread_data->simple);
-	g_clear_object (&thread_data->cancellable);
-	g_slice_free (EUtilSimpleAsyncResultThreadData, thread_data);
-}
-
-/**
- * e_util_run_simple_async_result_in_thread:
- * @simple: a #GSimpleAsyncResult
- * @func: a #GSimpleAsyncThreadFunc to execute in the thread
- * @cancellable: an optional #GCancellable, or %NULL
- *
- * Similar to g_simple_async_result_run_in_thread(), except
- * it doesn't use GTask internally, thus doesn't block the GTask
- * thread pool with possibly long job.
- *
- * It doesn't behave exactly the same as the g_simple_async_result_run_in_thread(),
- * the @cancellable checking is not done before the finish.
- *
- * Since: 3.18
- **/
-void
-e_util_run_simple_async_result_in_thread (GSimpleAsyncResult *simple,
-					  GSimpleAsyncThreadFunc func,
-					  GCancellable *cancellable)
-{
-	static GThreadPool *thread_pool = NULL;
-	static GMutex thread_pool_mutex;
-	EUtilSimpleAsyncResultThreadData *thread_data;
-
-	g_return_if_fail (G_IS_SIMPLE_ASYNC_RESULT (simple));
-	g_return_if_fail (func != NULL);
-
-	g_mutex_lock (&thread_pool_mutex);
-
-	if (!thread_pool)
-		thread_pool = g_thread_pool_new (e_util_simple_async_result_thread, NULL, 20, FALSE, NULL);
-
-	thread_data = g_slice_new0 (EUtilSimpleAsyncResultThreadData);
-	thread_data->simple = g_object_ref (simple);
-	thread_data->func = func;
-	thread_data->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
-
-	g_thread_pool_push (thread_pool, thread_data, NULL);
-
-	g_mutex_unlock (&thread_pool_mutex);
-}
-
 /**
  * e_util_is_running_gnome:
  *
@@ -3671,24 +3744,38 @@ e_util_check_gtk_bindings_in_key_press_event_cb (GtkWidget *widget,
 	if (!focused)
 		return FALSE;
 
+	if (GTK_IS_ENTRY (focused) &&
+	    gtk_entry_im_context_filter_keypress (GTK_ENTRY (focused), (GdkEventKey *) event))
+		return TRUE;
+
+	if (GTK_IS_TEXT_VIEW (focused) &&
+	    gtk_text_view_im_context_filter_keypress (GTK_TEXT_VIEW (focused), (GdkEventKey *) event))
+		return TRUE;
+
 	if (gtk_bindings_activate_event (G_OBJECT (focused), key_event))
 		return TRUE;
 
-	if (WEBKIT_IS_WEB_VIEW (focused) &&
-	    (key_event->state & (GDK_CONTROL_MASK | GDK_MOD1_MASK)) != 0) {
+	if ((key_event->state & (GDK_CONTROL_MASK | GDK_MOD1_MASK)) != 0 &&
+	    WEBKIT_IS_WEB_VIEW (focused)) {
 		GtkWidget *text_view;
 		gboolean may_use;
 
 		/* WebKit uses GtkTextView to process key bindings. Do the same. */
-		text_view = gtk_text_view_new ();
+		text_view = g_object_get_data (G_OBJECT (focused), "evo-tmp-text-view-for-gtk-bindings");
+		if (!text_view) {
+			/* Remember the text view, to not create & destroy it on every key press with modifiers */
+			text_view = gtk_text_view_new ();
 
-		/* Stop emissing for clipboard signals, to not populate the text_view */
-		g_signal_connect (text_view, "copy-clipboard", G_CALLBACK (e_util_stop_signal_emission_cb), (gpointer) "copy-clipboard");
-		g_signal_connect (text_view, "cut-clipboard", G_CALLBACK (e_util_stop_signal_emission_cb), (gpointer) "cut-clipboard");
-		g_signal_connect (text_view, "paste-clipboard", G_CALLBACK (e_util_stop_signal_emission_cb), (gpointer) "paste-clipboard");
+			g_object_set_data_full (G_OBJECT (focused), "evo-tmp-text-view-for-gtk-bindings",
+				g_object_ref_sink (text_view), (GDestroyNotify) gtk_widget_destroy);
+
+			/* Stop emission for clipboard signals, to not populate the text_view */
+			g_signal_connect (text_view, "copy-clipboard", G_CALLBACK (e_util_stop_signal_emission_cb), (gpointer) "copy-clipboard");
+			g_signal_connect (text_view, "cut-clipboard", G_CALLBACK (e_util_stop_signal_emission_cb), (gpointer) "cut-clipboard");
+			g_signal_connect (text_view, "paste-clipboard", G_CALLBACK (e_util_stop_signal_emission_cb), (gpointer) "paste-clipboard");
+		}
 
 		may_use = gtk_bindings_activate_event (G_OBJECT (text_view), key_event);
-		gtk_widget_destroy (text_view);
 
 		if (may_use) {
 			gboolean result = FALSE;
@@ -3935,6 +4022,7 @@ e_util_resize_window_for_screen (GtkWindow *window,
  * e_util_query_ldap_root_dse_sync:
  * @host: an LDAP server host name
  * @port: an LDAP server port
+ * @security: an %ESourceLDAPSecurity to use for the connection
  * @out_root_dse: (out) (transfer full): NULL-terminated array of the server root DSE-s, or %NULL on error
  * @cancellable: optional #GCancellable object, or %NULL
  * @error: return location for a #GError, or %NULL
@@ -3954,6 +4042,7 @@ e_util_resize_window_for_screen (GtkWindow *window,
 gboolean
 e_util_query_ldap_root_dse_sync (const gchar *host,
 				 guint16 port,
+				 ESourceLDAPSecurity security,
 				 gchar ***out_root_dse,
 				 GCancellable *cancellable,
 				 GError **error)
@@ -3962,7 +4051,7 @@ e_util_query_ldap_root_dse_sync (const gchar *host,
 	G_LOCK_DEFINE_STATIC (ldap);
 	LDAP *ldap = NULL;
 	LDAPMessage *result = NULL;
-	struct timeval timeout;
+	struct timeval timeout = { 0, };
 	gchar **values = NULL, **root_dse;
 	gint ldap_error;
 	gint option;
@@ -3976,7 +4065,7 @@ e_util_query_ldap_root_dse_sync (const gchar *host,
 
 	*out_root_dse = NULL;
 
-	timeout.tv_sec = 60;
+	timeout.tv_sec = 5;
 	timeout.tv_usec = 0;
 
 	G_LOCK (ldap);
@@ -4002,6 +4091,58 @@ e_util_query_ldap_root_dse_sync (const gchar *host,
 			_("Failed to set protocol version to LDAPv3 (%d): %s"), ldap_error,
 			ldap_err2string (ldap_error) ? ldap_err2string (ldap_error) : _("Unknown error"));
 		goto exit;
+	}
+
+	ldap_error = ldap_set_option (ldap, LDAP_OPT_NETWORK_TIMEOUT, &timeout);
+	if (ldap_error != LDAP_OPT_SUCCESS) {
+		g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_INITIALIZED,
+			_("Failed to set connection timeout option (%d): %s"), ldap_error,
+			ldap_err2string (ldap_error) ? ldap_err2string (ldap_error) : _("Unknown error"));
+		goto exit;
+	}
+
+	ldap_error = ldap_set_option (ldap, LDAP_OPT_TIMEOUT, &timeout);
+	if (ldap_error != LDAP_OPT_SUCCESS) {
+		g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_INITIALIZED,
+			_("Failed to set connection timeout option (%d): %s"), ldap_error,
+			ldap_err2string (ldap_error) ? ldap_err2string (ldap_error) : _("Unknown error"));
+		goto exit;
+	}
+
+	if (g_cancellable_set_error_if_cancelled (cancellable, error))
+		goto exit;
+
+	if (security == E_SOURCE_LDAP_SECURITY_LDAPS) {
+#ifdef SUNLDAP
+		if (ldap_error == LDAP_SUCCESS) {
+			ldap_set_option (ldap, LDAP_OPT_RECONNECT, LDAP_OPT_ON );
+		}
+#else
+#if defined (LDAP_OPT_X_TLS_HARD) && defined (LDAP_OPT_X_TLS)
+		gint tls_level = LDAP_OPT_X_TLS_HARD;
+		ldap_set_option (ldap, LDAP_OPT_X_TLS, &tls_level);
+
+		/* setup this on the global option set */
+		tls_level = LDAP_OPT_X_TLS_ALLOW;
+		ldap_set_option (NULL, LDAP_OPT_X_TLS_REQUIRE_CERT, &tls_level);
+#elif defined (G_OS_WIN32)
+		ldap_set_option (ldap, LDAP_OPT_SSL, LDAP_OPT_ON);
+#endif
+#endif
+	} else if (security == E_SOURCE_LDAP_SECURITY_STARTTLS) {
+#ifdef SUNLDAP
+		if (ldap_error == LDAP_SUCCESS) {
+			ldap_set_option (ldap, LDAP_OPT_RECONNECT, LDAP_OPT_ON);
+		}
+#else
+		ldap_error = ldap_start_tls_s (ldap, NULL, NULL);
+#endif
+		if (ldap_error != LDAP_SUCCESS) {
+			g_set_error (error, G_IO_ERROR, G_IO_ERROR_CONNECTION_REFUSED,
+				_("Failed to use STARTTLS (%d): %s"), ldap_error,
+				ldap_err2string (ldap_error) ? ldap_err2string (ldap_error) : _("Unknown error"));
+			goto exit;
+		}
 	}
 
 	if (g_cancellable_set_error_if_cancelled (cancellable, error))
@@ -4075,6 +4216,8 @@ e_util_query_ldap_root_dse_sync (const gchar *host,
 #endif
 }
 
+G_LOCK_DEFINE_STATIC (global_tables_lock);
+static GHashTable *pixbufs_table = NULL; /* gchar *filename ~> GdkPixbuf * */
 static GHashTable *iso_639_table = NULL;
 static GHashTable *iso_3166_table = NULL;
 
@@ -4420,12 +4563,55 @@ e_util_get_language_name (const gchar *language_tag)
 void
 e_misc_util_free_global_memory (void)
 {
+	G_LOCK (global_tables_lock);
 	g_clear_pointer (&iso_639_table, g_hash_table_destroy);
 	g_clear_pointer (&iso_3166_table, g_hash_table_destroy);
+	g_clear_pointer (&pixbufs_table, g_hash_table_destroy);
+	G_UNLOCK (global_tables_lock);
 
 	e_util_cleanup_settings ();
 	e_spell_checker_free_global_memory ();
 	e_simple_async_result_free_global_memory ();
+}
+
+/**
+ * e_misc_util_ref_pixbuf:
+ * @filename: a pixbuf file name to load
+ * @error: return location to store a #GError on failure, or %NULL
+ *
+ * Loads @filename as a #GdkPixbuf and cached it in case it's needed
+ * again, without a need to load it repeatedly.
+ *
+ * Returns: (transfer full) (nullable): a #GdkPixbuf loaded from the @filename, or %NULL on error
+ *
+ * Since: 3.50
+ **/
+GdkPixbuf *
+e_misc_util_ref_pixbuf (const gchar *filename,
+			GError **error)
+{
+	GdkPixbuf *pixbuf;
+
+	g_return_val_if_fail (filename != NULL, NULL);
+
+	G_LOCK (global_tables_lock);
+
+	if (!pixbufs_table)
+		pixbufs_table = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_object_unref);
+
+	pixbuf = g_hash_table_lookup (pixbufs_table, filename);
+	if (pixbuf) {
+		g_object_ref (pixbuf);
+	} else {
+		pixbuf = gdk_pixbuf_new_from_file (filename, error);
+
+		if (pixbuf)
+			g_hash_table_insert (pixbufs_table, g_strdup (filename), g_object_ref (pixbuf));
+	}
+
+	G_UNLOCK (global_tables_lock);
+
+	return pixbuf;
 }
 
 /**
@@ -4483,6 +4669,33 @@ e_util_markup_append_escaped (GString *buffer,
 	va_start (va, format);
 	escaped = g_markup_vprintf_escaped (format, va);
 	va_end (va);
+
+	g_string_append (buffer, escaped);
+
+	g_free (escaped);
+}
+
+/**
+ * e_util_markup_append_escaped_text:
+ * @buffer: a #GString buffer to append escaped text to
+ * @text: a text to escape and append to the buffer
+ *
+ * Markup-escapes @text and appends it to @buffer.
+ *
+ * Since: 3.46
+ **/
+void
+e_util_markup_append_escaped_text (GString *buffer,
+				   const gchar *text)
+{
+	gchar *escaped;
+
+	g_return_if_fail (buffer != NULL);
+
+	if (!text || !*text)
+		return;
+
+	escaped = g_markup_escape_text (text, -1);
 
 	g_string_append (buffer, escaped);
 
@@ -4557,21 +4770,21 @@ e_util_get_uri_tooltip (const gchar *uri)
 		message = g_string_new (_("Click to hide/unhide addresses"));
 	else if (g_str_has_prefix (uri, "mail:")) {
 		const gchar *fragment;
-		SoupURI *soup_uri;
+		GUri *guri;
 
-		soup_uri = soup_uri_new (uri);
-		if (!soup_uri)
+		guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+		if (!guri)
 			goto exit;
 
 		message = g_string_new (NULL);
-		fragment = soup_uri_get_fragment (soup_uri);
+		fragment = g_uri_get_fragment (guri);
 
 		if (fragment && *fragment)
 			g_string_append_printf (message, _("Go to the section %s of the message"), fragment);
 		else
 			g_string_append (message, _("Go to the beginning of the message"));
 
-		soup_uri_free (soup_uri);
+		g_uri_unref (guri);
 	} else {
 		message = g_string_new (NULL);
 
@@ -4588,11 +4801,29 @@ e_util_get_uri_tooltip (const gchar *uri)
 	camel_address_decode (CAMEL_ADDRESS (address), curl->path);
 	camel_internet_address_sanitize_ascii_domain (address);
 	who = camel_address_format (CAMEL_ADDRESS (address));
+
+	if (!who && g_str_has_prefix (uri, "mailto:") && curl->query && *curl->query) {
+		GHashTable *query;
+
+		query = soup_form_decode (curl->query);
+		if (query) {
+			const gchar *to = g_hash_table_lookup (query, "to");
+			if (to && *to) {
+				camel_address_decode (CAMEL_ADDRESS (address), to);
+				camel_internet_address_sanitize_ascii_domain (address);
+				who = camel_address_format (CAMEL_ADDRESS (address));
+			}
+			g_hash_table_destroy (query);
+		}
+	}
+
 	g_object_unref (address);
 	camel_url_free (curl);
 
-	if (!who)
+	if (!who) {
 		who = g_strdup (strchr (uri, ':') + 1);
+		camel_url_decode (who);
+	}
 
 	message = g_string_new (NULL);
 
@@ -4701,4 +4932,236 @@ e_util_make_safe_filename (gchar *filename)
 	}
 
 	g_free (illegal_chars);
+}
+
+gboolean
+e_util_setup_toolbar_icon_size (GtkToolbar *toolbar,
+				GtkIconSize default_size)
+{
+	GSettings *settings;
+	EToolbarIconSize icon_size;
+
+	g_return_val_if_fail (GTK_IS_TOOLBAR (toolbar), FALSE);
+
+	settings = e_util_ref_settings ("org.gnome.evolution.shell");
+	icon_size = g_settings_get_enum (settings, "toolbar-icon-size");
+	g_object_unref (settings);
+
+	if (icon_size == E_TOOLBAR_ICON_SIZE_SMALL)
+		gtk_toolbar_set_icon_size (toolbar, GTK_ICON_SIZE_SMALL_TOOLBAR);
+	else if (icon_size == E_TOOLBAR_ICON_SIZE_LARGE)
+		gtk_toolbar_set_icon_size (toolbar, GTK_ICON_SIZE_LARGE_TOOLBAR);
+	else if (default_size != GTK_ICON_SIZE_INVALID && e_util_get_use_header_bar ())
+		gtk_toolbar_set_icon_size (toolbar, default_size);
+
+	return icon_size == E_TOOLBAR_ICON_SIZE_SMALL ||
+	       icon_size == E_TOOLBAR_ICON_SIZE_LARGE;
+}
+
+gboolean
+e_util_get_use_header_bar (void)
+{
+	static gchar use_header_bar = -1;
+
+	if (use_header_bar == -1) {
+		GSettings *settings;
+
+		settings = e_util_ref_settings ("org.gnome.evolution.shell");
+		use_header_bar = g_settings_get_boolean (settings, "use-header-bar") ? 1 : 0;
+		g_object_unref (settings);
+	}
+
+	return use_header_bar != 0;
+}
+
+void
+e_open_map_uri (GtkWindow *parent,
+		const gchar *location)
+{
+	#define GOOGLE_MAP_PREFIX "https://maps.google.com?q="
+	#define OPENSTREETMAP_PREFIX "https://www.openstreetmap.org/search?query="
+
+	GSettings *settings;
+	gboolean open_map_prefer_local;
+	gchar *open_map_target;
+	gchar *uri;
+	const gchar *prefix = NULL;
+
+	g_return_if_fail (location != NULL);
+
+	settings = e_util_ref_settings ("org.gnome.evolution.addressbook");
+	open_map_target = g_settings_get_string (settings, "open-map-target");
+	open_map_prefer_local = g_settings_get_boolean (settings, "open-map-prefer-local");
+	g_object_unref (settings);
+
+	/* Cannot check what apps are installed in the system when running in a Flatpak sandbox */
+	if (open_map_prefer_local && !e_util_is_running_flatpak ()) {
+		GAppInfo *app_info;
+
+		app_info = g_app_info_get_default_for_uri_scheme ("maps");
+		if (app_info) {
+			prefix = "maps:q=";
+			g_object_unref (app_info);
+		}
+	}
+
+	if (!prefix) {
+		if (open_map_target && g_ascii_strcasecmp (open_map_target, "google") == 0) {
+			prefix = GOOGLE_MAP_PREFIX;
+		} else {
+			prefix = OPENSTREETMAP_PREFIX;
+		}
+	}
+
+	g_free (open_map_target);
+
+	uri = g_strconcat (prefix, location, NULL);
+	e_show_uri (parent, uri);
+	g_free (uri);
+}
+
+static gboolean
+e_util_links_similar (const gchar *href1,
+		      const gchar *href2)
+{
+	gsize href1_len, href2_len;
+	gboolean similar;
+
+	if (!href1 || !*href1 || !href2 || !*href2)
+		return FALSE;
+
+	if (g_ascii_strcasecmp (href1, href2) == 0)
+		return TRUE;
+
+	href1_len = strlen (href1);
+	href2_len = strlen (href2);
+
+	similar = (href1_len + 1 == href2_len &&
+		g_str_has_prefix (href2, href1) &&
+		href2[href2_len - 1] == '/') ||
+	       (href1_len == href2_len + 1 &&
+		g_str_has_prefix (href1, href2) &&
+		href1[href1_len - 1] == '/');
+
+	if (!similar && (strchr (href1, '%') || strchr (href2, '%'))) {
+		gchar *decoded_href1, *decoded_href2;
+
+		decoded_href1 = g_uri_unescape_string (href1, NULL);
+		decoded_href2 = g_uri_unescape_string (href2, NULL);
+
+		if (decoded_href1 && decoded_href2) {
+			similar = g_ascii_strcasecmp (decoded_href1, decoded_href2) == 0;
+
+			if (!similar) {
+				href1_len = strlen (decoded_href1);
+				href2_len = strlen (decoded_href2);
+
+				similar = (href1_len + 1 == href2_len &&
+					g_str_has_prefix (decoded_href2, decoded_href1) &&
+					decoded_href2[href2_len - 1] == '/') ||
+				       (href1_len == href2_len + 1 &&
+					g_str_has_prefix (decoded_href1, decoded_href2) &&
+					decoded_href1[href1_len - 1] == '/');
+			}
+		}
+
+		g_free (decoded_href1);
+		g_free (decoded_href2);
+	}
+
+	return similar;
+}
+
+static gboolean
+e_util_is_supported_scheme (const gchar *href,
+			    guint *out_scheme_len)
+{
+	const gchar *schemes[] = { "http:", "https:" };
+	guint ii;
+
+	for (ii = 0; ii < G_N_ELEMENTS (schemes); ii++) {
+		const gchar *scheme = schemes[ii];
+		guint scheme_len = strlen (scheme);
+
+		if (g_ascii_strncasecmp (href, scheme, scheme_len) == 0) {
+			if (out_scheme_len)
+				*out_scheme_len = scheme_len;
+
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
+static const gchar *
+e_util_skip_scheme (const gchar *href)
+{
+	guint scheme_len = 0;
+
+	if (!href || !*href)
+		return href;
+
+	if (e_util_is_supported_scheme (href, &scheme_len)) {
+		href += scheme_len;
+
+		if (g_str_has_prefix (href, "//"))
+			href += 2;
+
+		return href;
+	}
+
+	return href;
+}
+
+/**
+ * e_util_link_requires_reference:
+ * @href: link href, aka URL
+ * @text: link text
+ *
+ * Checks whether the link's @href and the @text differ in a way that
+ * they require a reference when converting it from HTML to text. Some
+ * protocols can be completely ignored.
+ *
+ * Returns: whether requires the reference
+ *
+ * Since: 3.52
+ **/
+gboolean
+e_util_link_requires_reference (const gchar *href,
+				const gchar *text)
+{
+	gboolean similar;
+
+	if (!href || !*href || !text || !*text)
+		return FALSE;
+
+	if (!e_util_is_supported_scheme (href, NULL))
+		return FALSE;
+
+	similar = e_util_links_similar (href, text);
+
+	if (!similar)
+		similar = e_util_links_similar (e_util_skip_scheme (href), e_util_skip_scheme (text));
+
+	return !similar;
+}
+
+/**
+ * e_util_call_malloc_trim_limited:
+ *
+ * Calls e_util_call_malloc_trim(), but not more often than once per 30 minutes.
+ *
+ * Since: 3.52
+ **/
+void
+e_util_call_malloc_trim_limited (void)
+{
+	static gint64 last_called = 0;
+	gint64 now = g_get_real_time ();
+
+	if (now >= last_called + (30 * 60 * G_USEC_PER_SEC)) {
+		last_called = now;
+		e_util_call_malloc_trim ();
+	}
 }

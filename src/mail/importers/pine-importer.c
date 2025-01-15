@@ -88,7 +88,7 @@ pine_supported (EImport *ei,
  * <address> is rfc822 address, or alias address.
  * if rfc822 address includes a phrase, then that overrides <fullname>
  * 
- * FIXME: we dont handle aliases in lists.
+ * FIXME: we don't handle aliases in lists.
  */
 
 static void
@@ -197,7 +197,7 @@ import_contacts (void)
 		ESource *source;
 
 		source = E_SOURCE (list->data);
-		client = e_book_client_connect_sync (source, 30, NULL, &error);
+		client = e_book_client_connect_sync (source, E_DEFAULT_WAIT_FOR_CONNECTED_SECONDS, NULL, &error);
 	} else {
 		/* No address books exist. */
 		g_warning ("%s: No address books exist.", G_STRFUNC);

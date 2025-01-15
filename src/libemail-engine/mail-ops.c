@@ -133,7 +133,7 @@ em_filter_folder_element_exec (struct _filter_mail_msg *m,
 	if (m->destination)
 		camel_folder_thaw (m->destination);
 
-	/* this may thaw/unref source folders, do it here so we dont do
+	/* this may thaw/unref source folders, do it here so we don't do
 	 * it in the main thread see also fetch_mail_fetch () below */
 	g_object_unref (m->driver);
 	m->driver = NULL;
@@ -447,6 +447,8 @@ exit:
 	}
 
 	g_object_unref (session);
+
+	e_util_call_malloc_trim_limited ();
 }
 
 static void
@@ -589,6 +591,7 @@ mail_send_message (struct _send_queue_msg *m,
 	GError *local_error = NULL;
 	gboolean did_connect = FALSE;
 	gboolean sent_message_saved = FALSE;
+	gboolean request_dsn;
 
 	message = camel_folder_get_message_sync (
 		queue, uid, cancellable, error);
@@ -597,6 +600,8 @@ mail_send_message (struct _send_queue_msg *m,
 
 	if (!camel_medium_get_header (CAMEL_MEDIUM (message), "X-Evolution-Is-Redirect"))
 		camel_medium_set_header (CAMEL_MEDIUM (message), "User-Agent", USER_AGENT);
+
+	request_dsn = g_strcmp0 (camel_medium_get_header (CAMEL_MEDIUM (message), "X-Evolution-Request-DSN"), "1") == 0;
 
 	/* Do this before removing "X-Evolution" headers. */
 	service = e_mail_session_ref_transport_for_message (
@@ -676,6 +681,8 @@ mail_send_message (struct _send_queue_msg *m,
 		/* expand, or remove empty, group addresses */
 		em_utils_expand_groups (CAMEL_INTERNET_ADDRESS (recipients));
 
+		camel_transport_set_request_dsn (CAMEL_TRANSPORT (service), request_dsn);
+
 		if (!camel_transport_send_to_sync (
 			CAMEL_TRANSPORT (service), message,
 			from, recipients, &sent_message_saved, cancellable, error))
@@ -683,7 +690,7 @@ mail_send_message (struct _send_queue_msg *m,
 	}
 
 	/* Now check for posting, failures are ignored */
-	info = camel_message_info_new (NULL);
+	info = camel_message_info_new_from_headers (NULL, camel_medium_get_headers (CAMEL_MEDIUM (message)));
 	camel_message_info_set_size (info, camel_data_wrapper_calculate_size_sync (CAMEL_DATA_WRAPPER (message), cancellable, NULL));
 	camel_message_info_set_flags (info, CAMEL_MESSAGE_SEEN |
 		(camel_mime_message_has_attachment (message) ? CAMEL_MESSAGE_ATTACHMENTS : 0), ~0);
@@ -702,7 +709,7 @@ mail_send_message (struct _send_queue_msg *m,
 		folder = e_mail_session_uri_to_folder_sync (
 			m->session, uri, 0, cancellable, &local_error);
 		if (folder != NULL) {
-			camel_operation_push_message (cancellable, _("Posting message to “%s”"), camel_folder_get_full_name (folder));
+			camel_operation_push_message (cancellable, _("Posting message to “%s”"), camel_folder_get_full_display_name (folder));
 
 			camel_folder_append_message_sync (
 				folder, message, info, NULL, cancellable, &local_error);
@@ -719,9 +726,12 @@ mail_send_message (struct _send_queue_msg *m,
 	mail_tool_restore_xevolution_headers (message, xev_headers);
 
 	if (local_error == NULL && driver) {
+		const gchar *transport_uid = service ? camel_service_get_uid (service) : NULL;
+
 		camel_filter_driver_filter_message (
 			driver, message, info, NULL, NULL,
-			NULL, "", cancellable, &local_error);
+			transport_uid, transport_uid ? transport_uid : "",
+			cancellable, &local_error);
 
 		if (local_error != NULL) {
 			if (g_error_matches (local_error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
@@ -766,7 +776,7 @@ mail_send_message (struct _send_queue_msg *m,
 			((folder != NULL) && (local_error == NULL)));
 
 		if (local_error == NULL) {
-			camel_operation_push_message (cancellable, _("Storing sent message to “%s”"), camel_folder_get_full_name (folder));
+			camel_operation_push_message (cancellable, _("Storing sent message to “%s”"), camel_folder_get_full_display_name (folder));
 
 			camel_folder_append_message_sync (
 				folder, message, info, NULL,
@@ -801,7 +811,7 @@ mail_send_message (struct _send_queue_msg *m,
 			g_clear_error (&local_error);
 			folder = g_object_ref (local_sent_folder);
 
-			camel_operation_push_message (cancellable, _("Storing sent message to “%s”"), camel_folder_get_full_name (folder));
+			camel_operation_push_message (cancellable, _("Storing sent message to “%s”"), camel_folder_get_full_display_name (folder));
 
 			camel_folder_append_message_sync (
 				folder, message, info, NULL,
@@ -1333,7 +1343,7 @@ sync_folder_desc (struct _sync_folder_msg *m)
 {
 	return g_strdup_printf (
 		_("Storing folder “%s”"),
-		camel_folder_get_full_name (m->folder));
+		camel_folder_get_full_display_name (m->folder));
 }
 
 static void
@@ -1635,7 +1645,7 @@ static gchar *
 process_folder_changes_desc (struct _process_folder_changes_msg *m)
 {
 	return g_strdup_printf (
-		_("Processing folder changes in “%s”"), camel_folder_get_full_name (m->folder));
+		_("Processing folder changes in “%s”"), camel_folder_get_full_display_name (m->folder));
 }
 
 static void

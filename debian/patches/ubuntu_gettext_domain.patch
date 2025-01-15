@@ -10,7 +10,7 @@ Bug: https://bugzilla.gnome.org/784877
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 2339e4f..2a1ba7f 100644
+index dd6f505..ffcefaa 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -35,7 +35,7 @@ else(_is_devel_version EQUAL 1)

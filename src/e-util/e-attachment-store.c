@@ -34,10 +34,6 @@
 #include "e-mktemp.h"
 #include "e-misc-utils.h"
 
-#define E_ATTACHMENT_STORE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_ATTACHMENT_STORE, EAttachmentStorePrivate))
-
 struct _EAttachmentStorePrivate {
 	GHashTable *attachment_index;
 
@@ -59,10 +55,7 @@ enum {
 
 static gulong signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE (
-	EAttachmentStore,
-	e_attachment_store,
-	GTK_TYPE_LIST_STORE)
+G_DEFINE_TYPE_WITH_PRIVATE (EAttachmentStore, e_attachment_store, GTK_TYPE_LIST_STORE)
 
 static void
 attachment_store_update_file_info_cb (EAttachment *attachment,
@@ -245,11 +238,9 @@ attachment_store_dispose (GObject *object)
 static void
 attachment_store_finalize (GObject *object)
 {
-	EAttachmentStorePrivate *priv;
+	EAttachmentStore *self = E_ATTACHMENT_STORE (object);
 
-	priv = E_ATTACHMENT_STORE_GET_PRIVATE (object);
-
-	g_hash_table_destroy (priv->attachment_index);
+	g_hash_table_destroy (self->priv->attachment_index);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_attachment_store_parent_class)->finalize (object);
@@ -259,8 +250,6 @@ static void
 e_attachment_store_class_init (EAttachmentStoreClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EAttachmentStorePrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->get_property = attachment_store_get_property;
@@ -335,7 +324,7 @@ e_attachment_store_init (EAttachmentStore *store)
 		(GDestroyNotify) g_object_unref,
 		(GDestroyNotify) gtk_tree_row_reference_free);
 
-	store->priv = E_ATTACHMENT_STORE_GET_PRIVATE (store);
+	store->priv = e_attachment_store_get_instance_private (store);
 	store->priv->attachment_index = attachment_index;
 
 	types[column++] = E_TYPE_ATTACHMENT;	/* COLUMN_ATTACHMENT */
@@ -680,11 +669,8 @@ e_attachment_store_run_load_dialog (EAttachmentStore *store,
 	gtk_file_chooser_set_select_multiple (file_chooser, TRUE);
 
 	if (dialog) {
-#ifdef HAVE_AUTOAR
-		gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_CLOSE);
-#else
 		gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_ACCEPT);
-#endif
+
 		gtk_window_set_icon_name (GTK_WINDOW (dialog), "mail-attachment");
 
 		preview = GTK_IMAGE (gtk_image_new ());
@@ -1560,7 +1546,7 @@ attachment_store_move_file (SaveContext *save_context,
 	 * we get a spurious G_IO_ERROR_WOULD_MERGE error and the
 	 * user has to try saving attachments again. */
 	tmpl = g_strdup_printf (PACKAGE "-%s-XXXXXX", g_get_user_name ());
-	path = e_mktemp (tmpl);
+	path = e_mkdtemp (tmpl);
 	g_free (tmpl);
 
 	save_context->trash_directory = g_file_new_for_path (path);

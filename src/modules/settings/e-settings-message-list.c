@@ -57,11 +57,6 @@ settings_message_list_constructed (GObject *object)
 		G_SETTINGS_BIND_GET);
 
 	g_settings_bind (
-		settings, "show-subject-above-sender",
-		message_list, "show-subject-above-sender",
-		G_SETTINGS_BIND_GET);
-
-	g_settings_bind (
 		settings, "thread-latest",
 		message_list, "thread-latest",
 		G_SETTINGS_BIND_GET);
@@ -79,6 +74,11 @@ settings_message_list_constructed (GObject *object)
 	g_settings_bind (
 		settings, "thread-compress",
 		message_list, "thread-compress",
+		G_SETTINGS_BIND_GET);
+
+	g_settings_bind (
+		settings, "thread-flat",
+		message_list, "thread-flat",
 		G_SETTINGS_BIND_GET);
 
 	/* This setting only controls the initial message list

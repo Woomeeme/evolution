@@ -33,6 +33,7 @@ struct _EFileRequestPrivate {
 static void e_file_request_content_request_init (EContentRequestInterface *iface);
 
 G_DEFINE_TYPE_WITH_CODE (EFileRequest, e_file_request, G_TYPE_OBJECT,
+	G_ADD_PRIVATE (EFileRequest)
 	G_IMPLEMENT_INTERFACE (E_TYPE_CONTENT_REQUEST, e_file_request_content_request_init))
 
 static gboolean
@@ -60,7 +61,7 @@ e_file_request_process_sync (EContentRequest *request,
 	GFileInfo *info;
 	goffset total_size;
 	gchar *filename = NULL, *path;
-	SoupURI *suri;
+	GUri *guri;
 
 	g_return_val_if_fail (E_IS_FILE_REQUEST (request), FALSE);
 	g_return_val_if_fail (uri != NULL, FALSE);
@@ -68,14 +69,14 @@ e_file_request_process_sync (EContentRequest *request,
 	if (g_cancellable_set_error_if_cancelled (cancellable, error))
 		return FALSE;
 
-	suri = soup_uri_new (uri);
-	g_return_val_if_fail (suri != NULL, FALSE);
+	guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+	g_return_val_if_fail (guri != NULL, FALSE);
 
-	path = soup_uri_decode (suri->path ? suri->path : "");
+	path = g_uri_unescape_string (g_uri_get_path (guri) ? g_uri_get_path (guri) : "", "/");
 
-	if (g_strcmp0 (suri->host, "$EVOLUTION_WEBKITDATADIR") == 0) {
+	if (g_strcmp0 (g_uri_get_host (guri), "$EVOLUTION_WEBKITDATADIR") == 0) {
 		filename = g_build_filename (EVOLUTION_WEBKITDATADIR, path, NULL);
-	} else if (g_strcmp0 (suri->host, "$EVOLUTION_IMAGESDIR") == 0) {
+	} else if (g_strcmp0 (g_uri_get_host (guri), "$EVOLUTION_IMAGESDIR") == 0) {
 		filename = g_build_filename (EVOLUTION_IMAGESDIR, path, NULL);
 	}
 
@@ -114,7 +115,7 @@ e_file_request_process_sync (EContentRequest *request,
 	}
 
 	g_object_unref (file);
-	soup_uri_free (suri);
+	g_uri_unref (guri);
 	g_free (filename);
 	g_free (path);
 
@@ -131,13 +132,12 @@ e_file_request_content_request_init (EContentRequestInterface *iface)
 static void
 e_file_request_class_init (EFileRequestClass *class)
 {
-	g_type_class_add_private (class, sizeof (EFileRequestPrivate));
 }
 
 static void
 e_file_request_init (EFileRequest *request)
 {
-	request->priv = G_TYPE_INSTANCE_GET_PRIVATE (request, E_TYPE_FILE_REQUEST, EFileRequestPrivate);
+	request->priv = e_file_request_get_instance_private (request);
 }
 
 EContentRequest *

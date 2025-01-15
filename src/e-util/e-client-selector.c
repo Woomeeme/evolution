@@ -32,10 +32,6 @@
 
 #include "e-client-selector.h"
 
-#define E_CLIENT_SELECTOR_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CLIENT_SELECTOR, EClientSelectorPrivate))
-
 typedef struct _AsyncContext AsyncContext;
 
 struct _EClientSelectorPrivate {
@@ -56,10 +52,7 @@ enum {
 	PROP_CLIENT_CACHE
 };
 
-G_DEFINE_TYPE (
-	EClientSelector,
-	e_client_selector,
-	E_TYPE_SOURCE_SELECTOR)
+G_DEFINE_TYPE_WITH_PRIVATE (EClientSelector, e_client_selector, E_TYPE_SOURCE_SELECTOR)
 
 enum {
 	CONNECTION_STATUS_UNKNOWN	= 0,
@@ -310,6 +303,47 @@ client_selector_can_reach_cb (GObject *source_object,
 	async_context_free (async_context);
 }
 
+static gboolean
+client_selector_drag_motion (GtkWidget *widget,
+			     GdkDragContext *context,
+			     gint x,
+			     gint y,
+			     guint time_)
+{
+	GtkTreePath *path;
+
+	/* Chain up to parent's method, which sets the action too. */
+	if (!GTK_WIDGET_CLASS (e_client_selector_parent_class)->drag_motion (widget, context, x, y, time_))
+		return FALSE;
+
+	if (!gdk_drag_context_get_selected_action (context))
+		return TRUE;
+
+	gtk_tree_view_get_drag_dest_row (GTK_TREE_VIEW (widget), &path, NULL);
+
+	if (path) {
+		ESource *source;
+
+		source = e_source_selector_ref_source_by_path (E_SOURCE_SELECTOR (widget), path);
+		if (source) {
+			EClient *client = e_client_selector_ref_cached_client (E_CLIENT_SELECTOR (widget), source);
+
+			if (client) {
+				/* Cannot drop into a read-only client */
+				if (e_client_is_readonly (client))
+					gdk_drag_status (context, 0, time_);
+
+				g_object_unref (client);
+			}
+		}
+
+		g_clear_object (&source);
+		gtk_tree_path_free (path);
+	}
+
+	return TRUE;
+}
+
 static void
 client_selector_set_client_cache (EClientSelector *selector,
                                   EClientCache *client_cache)
@@ -358,32 +392,30 @@ client_selector_get_property (GObject *object,
 static void
 client_selector_dispose (GObject *object)
 {
-	EClientSelectorPrivate *priv;
+	EClientSelector *self = E_CLIENT_SELECTOR (object);
 
-	priv = E_CLIENT_SELECTOR_GET_PRIVATE (object);
-
-	if (priv->backend_died_handler_id > 0) {
+	if (self->priv->backend_died_handler_id > 0) {
 		g_signal_handler_disconnect (
-			priv->client_cache,
-			priv->backend_died_handler_id);
-		priv->backend_died_handler_id = 0;
+			self->priv->client_cache,
+			self->priv->backend_died_handler_id);
+		self->priv->backend_died_handler_id = 0;
 	}
 
-	if (priv->client_created_handler_id > 0) {
+	if (self->priv->client_created_handler_id > 0) {
 		g_signal_handler_disconnect (
-			priv->client_cache,
-			priv->client_created_handler_id);
-		priv->client_created_handler_id = 0;
+			self->priv->client_cache,
+			self->priv->client_created_handler_id);
+		self->priv->client_created_handler_id = 0;
 	}
 
-	if (priv->client_notify_online_handler_id > 0) {
+	if (self->priv->client_notify_online_handler_id > 0) {
 		g_signal_handler_disconnect (
-			priv->client_cache,
-			priv->client_notify_online_handler_id);
-		priv->client_notify_online_handler_id = 0;
+			self->priv->client_cache,
+			self->priv->client_notify_online_handler_id);
+		self->priv->client_notify_online_handler_id = 0;
 	}
 
-	g_clear_object (&priv->client_cache);
+	g_clear_object (&self->priv->client_cache);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_client_selector_parent_class)->dispose (object);
@@ -532,14 +564,16 @@ static void
 e_client_selector_class_init (EClientSelectorClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EClientSelectorPrivate));
+	GtkWidgetClass *widget_class;
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = client_selector_set_property;
 	object_class->get_property = client_selector_get_property;
 	object_class->dispose = client_selector_dispose;
 	object_class->constructed = client_selector_constructed;
+
+	widget_class = GTK_WIDGET_CLASS (class);
+	widget_class->drag_motion = client_selector_drag_motion;
 
 	/**
 	 * EClientSelector:client-cache:
@@ -562,7 +596,7 @@ e_client_selector_class_init (EClientSelectorClass *class)
 static void
 e_client_selector_init (EClientSelector *selector)
 {
-	selector->priv = E_CLIENT_SELECTOR_GET_PRIVATE (selector);
+	selector->priv = e_client_selector_get_instance_private (selector);
 }
 
 /**
@@ -693,10 +727,10 @@ client_selector_get_client_done_cb (GObject *source_object,
                                     gpointer user_data)
 {
 	EClient *client;
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	GError *error = NULL;
 
-	simple = G_SIMPLE_ASYNC_RESULT (user_data);
+	task = G_TASK (user_data);
 
 	client = e_client_cache_get_client_finish (
 		E_CLIENT_CACHE (source_object), result, &error);
@@ -706,19 +740,12 @@ client_selector_get_client_done_cb (GObject *source_object,
 		((client != NULL) && (error == NULL)) ||
 		((client == NULL) && (error != NULL)));
 
-	if (client != NULL) {
-		g_simple_async_result_set_op_res_gpointer (
-			simple, g_object_ref (client),
-			(GDestroyNotify) g_object_unref);
-		g_object_unref (client);
-	}
+	if (client != NULL)
+		g_task_return_pointer (task, g_steal_pointer (&client), g_object_unref);
+	else
+		g_task_return_error (task, g_steal_pointer (&error));
 
-	if (error != NULL)
-		g_simple_async_result_take_error (simple, error);
-
-	g_simple_async_result_complete (simple);
-
-	g_object_unref (simple);
+	g_object_unref (task);
 }
 
 /**
@@ -765,18 +792,15 @@ e_client_selector_get_client (EClientSelector *selector,
                               GAsyncReadyCallback callback,
                               gpointer user_data)
 {
-	GSimpleAsyncResult *simple;
+	GTask *task;
 	EClientCache *client_cache;
 	const gchar *extension_name;
 
 	g_return_if_fail (E_IS_CLIENT_SELECTOR (selector));
 	g_return_if_fail (E_IS_SOURCE (source));
 
-	simple = g_simple_async_result_new (
-		G_OBJECT (selector), callback,
-		user_data, e_client_selector_get_client);
-
-	g_simple_async_result_set_check_cancellable (simple, cancellable);
+	task = g_task_new (selector, cancellable, callback, user_data);
+	g_task_set_source_tag (task, e_client_selector_get_client);
 
 	extension_name = e_source_selector_get_extension_name (
 		E_SOURCE_SELECTOR (selector));
@@ -790,10 +814,9 @@ e_client_selector_get_client (EClientSelector *selector,
 		client_cache, source,
 		extension_name, wait_for_connected_seconds, cancellable,
 		client_selector_get_client_done_cb,
-		g_object_ref (simple));
+		g_steal_pointer (&task));
 
 	g_object_unref (client_cache);
-	g_object_unref (simple);
 }
 
 /**
@@ -815,23 +838,10 @@ e_client_selector_get_client_finish (EClientSelector *selector,
                                      GAsyncResult *result,
                                      GError **error)
 {
-	GSimpleAsyncResult *simple;
-	EClient *client;
+	g_return_val_if_fail (g_task_is_valid (result, selector), NULL);
+	g_return_val_if_fail (g_async_result_is_tagged (result, e_client_selector_get_client), NULL);
 
-	g_return_val_if_fail (
-		g_simple_async_result_is_valid (
-		result, G_OBJECT (selector),
-		e_client_selector_get_client), NULL);
-
-	simple = G_SIMPLE_ASYNC_RESULT (result);
-	client = g_simple_async_result_get_op_res_gpointer (simple);
-
-	if (g_simple_async_result_propagate_error (simple, error))
-		return NULL;
-
-	g_return_val_if_fail (client != NULL, NULL);
-
-	return g_object_ref (client);
+	return g_task_propagate_pointer (G_TASK (result), error);
 }
 
 /**

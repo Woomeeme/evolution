@@ -24,6 +24,7 @@
 #include <libedataserverui/libedataserverui.h>
 #include <libecal/libecal.h>
 
+#include "comp-util.h"
 #include "e-cal-data-model.h"
 #include "e-cal-data-model-subscriber.h"
 #include "e-cal-dialogs.h"
@@ -77,6 +78,7 @@ enum {
 static void e_to_do_pane_cal_data_model_subscriber_init (ECalDataModelSubscriberInterface *iface);
 
 G_DEFINE_TYPE_WITH_CODE (EToDoPane, e_to_do_pane, GTK_TYPE_GRID,
+	G_ADD_PRIVATE (EToDoPane)
 	G_IMPLEMENT_INTERFACE (E_TYPE_CAL_DATA_MODEL_SUBSCRIBER, e_to_do_pane_cal_data_model_subscriber_init))
 
 enum {
@@ -198,8 +200,30 @@ etdp_itt_to_zone (ICalTime *itt,
 		zone = i_cal_timezone_get_utc_timezone ();
 	}
 
-	if (zone)
+	if (zone) {
 		i_cal_time_convert_timezone (itt, zone, default_zone);
+		i_cal_time_set_timezone (itt, default_zone);
+	}
+}
+
+static gboolean
+etdp_task_is_overdue (ICalTime *itt,
+		      guint today_date_mark)
+{
+	gboolean is_overdue;
+
+	if (!i_cal_time_is_date (itt))
+		return etdp_create_date_mark (itt) < today_date_mark;
+
+	/* The DATE value means it's overdue at the beginning of the day */
+	i_cal_time_adjust (itt, -1, 0, 0, 0);
+
+	is_overdue = etdp_create_date_mark (itt) < today_date_mark;
+
+	/* Restore the original date */
+	i_cal_time_adjust (itt, 1, 0, 0, 0);
+
+	return is_overdue;
 }
 
 static gchar *
@@ -222,7 +246,7 @@ etdp_date_time_to_string (const ECalComponentDateTime *dt,
 
 	etdp_itt_to_zone (*out_itt, e_cal_component_datetime_get_tzid (dt), client, default_zone);
 
-	is_overdue = is_task && etdp_create_date_mark (*out_itt) < today_date_mark;
+	is_overdue = is_task && etdp_task_is_overdue (*out_itt, today_date_mark);
 
 	if (i_cal_time_is_date (*out_itt) && !is_overdue)
 		return NULL;
@@ -344,6 +368,7 @@ etdp_get_component_data (EToDoPane *to_do_pane,
 	const gchar *prefix, *location, *description, *uid_str, *rid_str;
 	gboolean task_has_due_date = TRUE, is_cancelled = FALSE; /* ignored for events, thus like being set */
 	ICalPropertyStatus status;
+	ICalProperty *prop;
 	gchar *comp_summary;
 	GString *tooltip;
 
@@ -391,6 +416,7 @@ etdp_get_component_data (EToDoPane *to_do_pane,
 		prefix = "1";
 
 		dtstart = e_cal_component_get_dtstart (comp);
+		/* Do not use etdp_get_task_due() here, to show the set date in the GUI */
 		dt = e_cal_component_get_due (comp);
 		completed = e_cal_component_get_completed (comp);
 
@@ -575,7 +601,8 @@ etdp_get_component_data (EToDoPane *to_do_pane,
 
 	e_cal_component_id_free (id);
 
-	description = i_cal_component_get_description (icomp);
+	prop = e_cal_util_component_find_property_for_locale (icomp, I_CAL_DESCRIPTION_PROPERTY, NULL);
+	description = prop ? i_cal_property_get_description (prop) : NULL;
 	if (description && *description && g_utf8_validate (description, -1, NULL)) {
 		gchar *tmp = NULL;
 		glong len;
@@ -598,6 +625,8 @@ etdp_get_component_data (EToDoPane *to_do_pane,
 		g_free (tmp);
 	}
 
+	g_clear_object (&prop);
+
 	*out_date_mark = etdp_create_date_mark (itt);
 	*out_tooltip = g_string_free (tooltip, FALSE);
 
@@ -616,6 +645,26 @@ etdp_get_fgcolor_for_bgcolor (const GdkRGBA *bgcolor)
 		fgcolor = e_utils_get_text_color_for_background (bgcolor);
 
 	return fgcolor;
+}
+
+static ECalComponentDateTime *
+etdp_get_task_due (ECalComponent *comp)
+{
+	ECalComponentDateTime *dt;
+
+	dt = e_cal_component_get_due (comp);
+
+	if (dt && e_cal_component_datetime_get_value (dt)) {
+		ICalTime *itt;
+
+		itt = e_cal_component_datetime_get_value (dt);
+		if (i_cal_time_is_date (itt)) {
+			/* The DATE value means it's overdue at the beginning of the day */
+			i_cal_time_adjust (itt, -1, 0, 0, 0);
+		}
+	}
+
+	return dt;
 }
 
 static GSList * /* GtkTreePath * */
@@ -637,7 +686,7 @@ etdp_get_component_root_paths (EToDoPane *to_do_pane,
 	g_return_val_if_fail (E_IS_CAL_COMPONENT (comp), NULL);
 
 	if (e_cal_component_get_vtype (comp) == E_CAL_COMPONENT_TODO) {
-		dt = e_cal_component_get_due (comp);
+		dt = etdp_get_task_due (comp);
 
 		if (dt && e_cal_component_datetime_get_value (dt)) {
 			itt = e_cal_component_datetime_get_value (dt);
@@ -804,7 +853,6 @@ etdp_merge_with_root_paths (EToDoPane *to_do_pane,
 		}
 
 		if (!found) {
-			GtkTreeIter parent;
 			GtkTreePath *path;
 
 			g_warn_if_fail (gtk_tree_model_get_iter (model, &parent, root_path));
@@ -888,7 +936,7 @@ etdp_get_comp_colors (EToDoPane *to_do_pane,
 	    to_do_pane->priv->overdue_color) {
 		ECalComponentDateTime *dt;
 
-		dt = e_cal_component_get_due (comp);
+		dt = etdp_get_task_due (comp);
 
 		if (dt && e_cal_component_datetime_get_value (dt)) {
 			ICalTimezone *default_zone;
@@ -902,8 +950,9 @@ etdp_get_comp_colors (EToDoPane *to_do_pane,
 			etdp_itt_to_zone (itt, e_cal_component_datetime_get_tzid (dt), client, default_zone);
 
 			now = i_cal_time_new_current_with_zone (default_zone);
+			i_cal_time_set_timezone (now, default_zone);
 
-			if ((is_date && i_cal_time_compare_date_only (itt, now) < 0) ||
+			if ((is_date && i_cal_time_compare_date_only_tz (itt, now, default_zone) < 0) ||
 			    (!is_date && i_cal_time_compare (itt, now) <= 0)) {
 				bgcolor = to_do_pane->priv->overdue_color;
 			} else if (out_nearest_due) {
@@ -1022,14 +1071,14 @@ etdp_add_component (EToDoPane *to_do_pane,
 			if (itip_organizer_is_user (registry, comp, client)) {
 				icon_name = "stock_task-assigned-to";
 			} else {
-				GSList *attendees = NULL, *link;
+				GSList *attendees = NULL;
 
 				attendees = e_cal_component_get_attendees (comp);
 				for (link = attendees; link; link = g_slist_next (link)) {
 					ECalComponentAttendee *ca = link->data;
 					const gchar *text;
 
-					text = itip_strip_mailto (e_cal_component_attendee_get_value (ca));
+					text = e_cal_util_get_attendee_email (ca);
 					if (itip_address_is_user (registry, text)) {
 						if (e_cal_component_attendee_get_delegatedto (ca))
 							icon_name = "stock_task-assigned-to";
@@ -1099,7 +1148,8 @@ etdp_got_client_cb (GObject *source_object,
 		    GAsyncResult *result,
 		    gpointer user_data)
 {
-	EToDoPane *to_do_pane = user_data;
+	GWeakRef *weakref = user_data;
+	EToDoPane *to_do_pane;
 	EClient *client;
 	GError *error = NULL;
 
@@ -1107,10 +1157,19 @@ etdp_got_client_cb (GObject *source_object,
 
 	if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
 		g_clear_error (&error);
+		e_weak_ref_free (weakref);
 		return;
 	}
 
-	g_return_if_fail (E_IS_TO_DO_PANE (to_do_pane));
+	to_do_pane = g_weak_ref_get (weakref);
+
+	e_weak_ref_free (weakref);
+
+	if (!to_do_pane) {
+		g_clear_object (&client);
+		g_clear_error (&error);
+		return;
+	}
 
 	if (client && gtk_widget_get_visible (GTK_WIDGET (to_do_pane))) {
 		ECalClient *cal_client = E_CAL_CLIENT (client);
@@ -1150,6 +1209,7 @@ etdp_got_client_cb (GObject *source_object,
 		/* Ignore errors */
 	}
 
+	g_clear_object (&to_do_pane);
 	g_clear_object (&client);
 	g_clear_error (&error);
 }
@@ -1193,7 +1253,7 @@ e_to_do_pane_watcher_appeared_cb (ESourceRegistryWatcher *watcher,
 	g_return_if_fail (extension_name != NULL);
 
 	e_client_cache_get_client (to_do_pane->priv->client_cache, source, extension_name,
-		(guint32) -1, to_do_pane->priv->cancellable, etdp_got_client_cb, to_do_pane);
+		(guint32) -1, to_do_pane->priv->cancellable, etdp_got_client_cb, e_weak_ref_new (to_do_pane));
 }
 
 static void
@@ -1481,6 +1541,7 @@ etdp_check_time_changed (EToDoPane *to_do_pane,
 
 	zone = e_cal_data_model_get_timezone (to_do_pane->priv->events_data_model);
 	itt = i_cal_time_new_current_with_zone (zone);
+	i_cal_time_set_timezone (itt, zone);
 	new_today = etdp_create_date_mark (itt);
 
 	if (force_update || new_today != to_do_pane->priv->last_today) {
@@ -1500,13 +1561,23 @@ etdp_check_time_changed (EToDoPane *to_do_pane,
 		iso_end = isodate_from_time_t (tt_end);
 		if (to_do_pane->priv->show_no_duedate_tasks) {
 			if (to_do_pane->priv->show_completed_tasks) {
-				tasks_filter = g_strdup ("#t");
+				tasks_filter = g_strdup_printf (
+					"(or"
+					   " (not (has-due?))"
+					   " (due-in-time-range? (make-time \"%s\") (make-time \"%s\"))"
+					")",
+					iso_begin_all, iso_end);
 			} else {
-				tasks_filter = g_strdup (
+				tasks_filter = g_strdup_printf (
 					"(and"
-					" (not (is-completed?))"
-					" (not (contains? \"status\" \"CANCELLED\"))"
-					")");
+					 " (not (is-completed?))"
+					 " (not (contains? \"status\" \"CANCELLED\"))"
+					 " (or"
+					   " (not (has-due?))"
+					   " (due-in-time-range? (make-time \"%s\") (make-time \"%s\"))"
+					  ")"
+					")",
+					iso_begin_all, iso_end);
 			}
 		} else if (to_do_pane->priv->show_completed_tasks) {
 			tasks_filter = g_strdup_printf (
@@ -1920,6 +1991,7 @@ etdp_new_common (EToDoPane *to_do_pane,
 				time_divisions_secs = g_settings_get_int (settings, "time-divisions") * 60;
 				zone = e_cal_data_model_get_timezone (to_do_pane->priv->events_data_model);
 				now = i_cal_time_new_current_with_zone (zone);
+				i_cal_time_set_timezone (now, zone);
 
 				i_cal_time_set_year (now, date_mark / 10000);
 				i_cal_time_set_month (now, (date_mark / 100) % 100);
@@ -2025,6 +2097,7 @@ typedef struct _RemoveOperationData {
 	gchar *uid;
 	gchar *rid;
 	ECalObjModType mod;
+	ECalOperationFlags op_flags;
 } RemoveOperationData;
 
 static void
@@ -2050,7 +2123,7 @@ etdp_remove_component_thread (EAlertSinkThreadJobData *job_data,
 
 	g_return_if_fail (rod != NULL);
 
-	e_cal_client_remove_object_sync (rod->client, rod->uid, rod->rid, rod->mod, E_CAL_OPERATION_FLAG_NONE, cancellable, error);
+	e_cal_client_remove_object_sync (rod->client, rod->uid, rod->rid, rod->mod, rod->op_flags, cancellable, error);
 }
 
 static void
@@ -2063,6 +2136,8 @@ etdp_delete_common (EToDoPane *to_do_pane,
 	g_return_if_fail (E_IS_TO_DO_PANE (to_do_pane));
 
 	if (etdp_get_tree_view_selected_one (to_do_pane, &client, &comp) && client && comp) {
+		ECalOperationFlags op_flags = E_CAL_OPERATION_FLAG_NONE;
+		ESourceRegistry *registry;
 		const gchar *description;
 		const gchar *alert_ident;
 		gchar *display_name;
@@ -2080,6 +2155,27 @@ etdp_delete_common (EToDoPane *to_do_pane,
 			g_clear_object (&comp);
 			return;
 		}
+
+		registry = e_client_cache_ref_registry (to_do_pane->priv->client_cache);
+
+		if (itip_has_any_attendees (comp)) {
+			gboolean organizer_is_user;
+
+			organizer_is_user = itip_organizer_is_user (registry, comp, client);
+
+			if (organizer_is_user ||
+			    itip_sentby_is_user (registry, comp, client) ||
+			    (e_cal_client_check_save_schedules (client) && itip_attendee_is_user (registry, comp, client))) {
+				GtkWindow *parent_window;
+
+				parent_window = (GtkWindow *) gtk_widget_get_toplevel (GTK_WIDGET (to_do_pane));
+
+				if (!e_cal_dialogs_cancel_component (parent_window, client, comp, FALSE, organizer_is_user))
+					op_flags = E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE;
+			}
+		}
+
+		g_clear_object (&registry);
 
 		switch (e_cal_client_get_source_type (client)) {
 			case E_CAL_CLIENT_SOURCE_TYPE_EVENTS:
@@ -2107,6 +2203,7 @@ etdp_delete_common (EToDoPane *to_do_pane,
 		rod->uid = g_strdup (e_cal_component_id_get_uid (id));
 		rod->rid = mod == E_CAL_OBJ_MOD_ALL ? NULL : g_strdup (e_cal_component_id_get_rid (id));
 		rod->mod = mod;
+		rod->op_flags = op_flags;
 
 		source = e_client_get_source (E_CLIENT (client));
 		display_name = e_util_get_source_full_name (e_source_registry_watcher_get_registry (to_do_pane->priv->watcher), source);
@@ -2156,6 +2253,76 @@ etdp_delete_series_cb (GtkMenuItem *item,
 	g_return_if_fail (E_IS_TO_DO_PANE (to_do_pane));
 
 	etdp_delete_common (to_do_pane, E_CAL_OBJ_MOD_ALL);
+}
+
+typedef struct _MarkCompleteData {
+	ECalClient *client;
+	ECalComponent *comp;
+} MarkCompleteData;
+
+static void
+mark_complete_data_free (gpointer ptr)
+{
+	MarkCompleteData *mcd = ptr;
+
+	if (mcd) {
+		g_clear_object (&mcd->client);
+		g_clear_object (&mcd->comp);
+		g_free (mcd);
+	}
+}
+
+static void
+etdp_mark_task_complete_thread (EAlertSinkThreadJobData *job_data,
+				gpointer user_data,
+				GCancellable *cancellable,
+				GError **error)
+{
+	MarkCompleteData *mcd = user_data;
+	ICalComponent *icomp;
+
+	g_return_if_fail (mcd != NULL);
+
+	icomp = e_cal_component_get_icalcomponent (mcd->comp);
+
+	if (e_cal_util_mark_task_complete_sync (icomp, -1, mcd->client, cancellable, error))
+		e_cal_client_modify_object_sync (mcd->client, icomp, E_CAL_OBJ_MOD_ALL, E_CAL_OPERATION_FLAG_NONE, cancellable, error);
+}
+
+static void
+etdp_mark_task_as_complete_cb (GtkMenuItem *item,
+			       gpointer user_data)
+{
+	EToDoPane *to_do_pane = user_data;
+	ECalClient *client = NULL;
+	ECalComponent *comp = NULL;
+
+	g_return_if_fail (E_IS_TO_DO_PANE (to_do_pane));
+
+	if (etdp_get_tree_view_selected_one (to_do_pane, &client, &comp) && client && comp) {
+		ESource *source;
+		GCancellable *cancellable;
+		MarkCompleteData *mcd;
+		gchar *display_name;
+
+		source = e_client_get_source (E_CLIENT (client));
+		display_name = e_util_get_source_full_name (e_source_registry_watcher_get_registry (to_do_pane->priv->watcher), source);
+
+		mcd = g_new0 (MarkCompleteData, 1);
+		mcd->client = g_steal_pointer (&client);
+		mcd->comp = g_steal_pointer (&comp);
+
+		/* It doesn't matter which data-model is picked, because it's used
+		   only for thread creation and manipulation, not for its content. */
+		cancellable = e_cal_data_model_submit_thread_job (to_do_pane->priv->tasks_data_model, _("Marking a task as complete"),
+			"calendar:failed-modify-task", display_name, etdp_mark_task_complete_thread, mcd, mark_complete_data_free);
+
+		g_clear_object (&cancellable);
+		g_free (display_name);
+	}
+
+	g_clear_object (&client);
+	g_clear_object (&comp);
 }
 
 static void
@@ -2230,45 +2397,56 @@ etdp_fill_popup_menu (EToDoPane *to_do_pane,
 		gtk_widget_show (item);
 		gtk_menu_shell_append (menu_shell, item);
 
+		if (e_cal_component_get_vtype (comp) == E_CAL_COMPONENT_TODO &&
+		    !e_cal_util_component_has_property (e_cal_component_get_icalcomponent (comp), I_CAL_COMPLETED_PROPERTY)) {
+			item = gtk_menu_item_new_with_mnemonic (_("Mark Task as _Complete"));
+			g_signal_connect (item, "activate",
+				G_CALLBACK (etdp_mark_task_as_complete_cb), to_do_pane);
+			gtk_widget_show (item);
+			gtk_menu_shell_append (menu_shell, item);
+		}
+
 		item = gtk_separator_menu_item_new ();
 		gtk_widget_show (item);
 		gtk_menu_shell_append (menu_shell, item);
 
-		if (e_cal_component_get_vtype (comp) == E_CAL_COMPONENT_EVENT &&
-		    e_cal_component_is_instance (comp)) {
-			item = gtk_image_menu_item_new_with_mnemonic (_("_Delete This Instance…"));
-			gtk_image_menu_item_set_image (GTK_IMAGE_MENU_ITEM (item),
-				gtk_image_new_from_icon_name ("edit-delete", GTK_ICON_SIZE_MENU));
-			g_signal_connect (item, "activate",
-				G_CALLBACK (etdp_delete_selected_cb), to_do_pane);
-			gtk_widget_show (item);
-			gtk_menu_shell_append (menu_shell, item);
-
-			if (!e_client_check_capability (E_CLIENT (client), E_CAL_STATIC_CAPABILITY_NO_THISANDFUTURE)) {
-				item = gtk_image_menu_item_new_with_mnemonic (_("Delete This and F_uture Occurrences…"));
+		if (!e_client_is_readonly (E_CLIENT (client))) {
+			if (e_cal_component_get_vtype (comp) == E_CAL_COMPONENT_EVENT &&
+			    e_cal_component_is_instance (comp)) {
+				item = gtk_image_menu_item_new_with_mnemonic (_("_Delete This Instance…"));
 				gtk_image_menu_item_set_image (GTK_IMAGE_MENU_ITEM (item),
 					gtk_image_new_from_icon_name ("edit-delete", GTK_ICON_SIZE_MENU));
 				g_signal_connect (item, "activate",
-					G_CALLBACK (etdp_delete_this_and_future_cb), to_do_pane);
+					G_CALLBACK (etdp_delete_selected_cb), to_do_pane);
+				gtk_widget_show (item);
+				gtk_menu_shell_append (menu_shell, item);
+
+				if (!e_client_check_capability (E_CLIENT (client), E_CAL_STATIC_CAPABILITY_NO_THISANDFUTURE)) {
+					item = gtk_image_menu_item_new_with_mnemonic (_("Delete This and F_uture Occurrences…"));
+					gtk_image_menu_item_set_image (GTK_IMAGE_MENU_ITEM (item),
+						gtk_image_new_from_icon_name ("edit-delete", GTK_ICON_SIZE_MENU));
+					g_signal_connect (item, "activate",
+						G_CALLBACK (etdp_delete_this_and_future_cb), to_do_pane);
+					gtk_widget_show (item);
+					gtk_menu_shell_append (menu_shell, item);
+				}
+
+				item = gtk_image_menu_item_new_with_mnemonic (_("D_elete All Instances…"));
+				gtk_image_menu_item_set_image (GTK_IMAGE_MENU_ITEM (item),
+					gtk_image_new_from_icon_name ("edit-delete", GTK_ICON_SIZE_MENU));
+				g_signal_connect (item, "activate",
+					G_CALLBACK (etdp_delete_series_cb), to_do_pane);
+				gtk_widget_show (item);
+				gtk_menu_shell_append (menu_shell, item);
+			} else {
+				item = gtk_image_menu_item_new_with_mnemonic (_("_Delete…"));
+				gtk_image_menu_item_set_image (GTK_IMAGE_MENU_ITEM (item),
+					gtk_image_new_from_icon_name ("edit-delete", GTK_ICON_SIZE_MENU));
+				g_signal_connect (item, "activate",
+					G_CALLBACK (etdp_delete_series_cb), to_do_pane);
 				gtk_widget_show (item);
 				gtk_menu_shell_append (menu_shell, item);
 			}
-
-			item = gtk_image_menu_item_new_with_mnemonic (_("D_elete All Instances…"));
-			gtk_image_menu_item_set_image (GTK_IMAGE_MENU_ITEM (item),
-				gtk_image_new_from_icon_name ("edit-delete", GTK_ICON_SIZE_MENU));
-			g_signal_connect (item, "activate",
-				G_CALLBACK (etdp_delete_series_cb), to_do_pane);
-			gtk_widget_show (item);
-			gtk_menu_shell_append (menu_shell, item);
-		} else {
-			item = gtk_image_menu_item_new_with_mnemonic (_("_Delete…"));
-			gtk_image_menu_item_set_image (GTK_IMAGE_MENU_ITEM (item),
-				gtk_image_new_from_icon_name ("edit-delete", GTK_ICON_SIZE_MENU));
-			g_signal_connect (item, "activate",
-				G_CALLBACK (etdp_delete_series_cb), to_do_pane);
-			gtk_widget_show (item);
-			gtk_menu_shell_append (menu_shell, item);
 		}
 	}
 
@@ -2793,7 +2971,7 @@ e_to_do_pane_finalize (GObject *object)
 static void
 e_to_do_pane_init (EToDoPane *to_do_pane)
 {
-	to_do_pane->priv = G_TYPE_INSTANCE_GET_PRIVATE (to_do_pane, E_TYPE_TO_DO_PANE, EToDoPanePrivate);
+	to_do_pane->priv = e_to_do_pane_get_instance_private (to_do_pane);
 	to_do_pane->priv->cancellable = g_cancellable_new ();
 	to_do_pane->priv->roots = g_ptr_array_new ();
 
@@ -2813,7 +2991,7 @@ e_to_do_pane_class_init (EToDoPaneClass *klass)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (klass, sizeof (EToDoPanePrivate));
+	gtk_widget_class_set_css_name (GTK_WIDGET_CLASS (klass), "EToDoPane");
 
 	object_class = G_OBJECT_CLASS (klass);
 	object_class->set_property = e_to_do_pane_set_property;

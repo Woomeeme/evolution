@@ -25,13 +25,14 @@
 #include <glib/gi18n.h>
 #include <gdk/gdkkeysyms.h>
 
-#include "e-attachment-dialog.h"
 #include "e-attachment-handler-image.h"
+#include "e-attachment-popover.h"
 #include "e-misc-utils.h"
 #include "e-selection.h"
 
 enum {
 	UPDATE_ACTIONS,
+	BEFORE_PROPERTIES_POPUP,
 	LAST_SIGNAL
 };
 
@@ -45,6 +46,7 @@ static const gchar *ui =
 "<ui>"
 "  <popup name='context'>"
 "    <menuitem action='cancel'/>"
+"    <menuitem action='reload'/>"
 "    <menuitem action='save-as'/>"
 "    <menuitem action='remove'/>"
 "    <menuitem action='properties'/>"
@@ -54,6 +56,7 @@ static const gchar *ui =
 "    <placeholder name='custom-actions'/>"
 "    <separator/>"
 "    <menuitem action='add'/>"
+"    <menuitem action='add-uri'/>"
 "    <separator/>"
 "    <placeholder name='open-actions'/>"
 "    <menuitem action='open-with'/>"
@@ -68,6 +71,21 @@ G_DEFINE_INTERFACE (
 	GTK_TYPE_WIDGET)
 
 static void
+call_attachment_load_handle_error (GObject *source_object,
+				   GAsyncResult *result,
+				   gpointer user_data)
+{
+	GtkWindow *window = user_data;
+
+	g_return_if_fail (E_IS_ATTACHMENT (source_object));
+	g_return_if_fail (!window || GTK_IS_WINDOW (window));
+
+	e_attachment_load_handle_error (E_ATTACHMENT (source_object), result, window);
+
+	g_clear_object (&window);
+}
+
+static void
 action_add_cb (GtkAction *action,
                EAttachmentView *view)
 {
@@ -79,6 +97,103 @@ action_add_cb (GtkAction *action,
 
 	store = e_attachment_view_get_store (view);
 	e_attachment_store_run_load_dialog (store, parent);
+}
+
+/* (transfer none) */
+static EAttachmentPopover *
+e_attachment_view_get_attachment_popover (EAttachmentView *view)
+{
+	EAttachmentViewPrivate *priv;
+	GtkWidget *widget = GTK_WIDGET (view);
+	GdkRectangle rect;
+
+	priv = e_attachment_view_get_private (view);
+
+	if (!priv->attachment_popover) {
+		priv->attachment_popover = GTK_POPOVER (e_attachment_popover_new (widget, NULL));
+
+		/* Assume when URI-s are allowed the disposition (relevant for mail only) is not allowed */
+		e_attachment_popover_set_allow_disposition (E_ATTACHMENT_POPOVER (priv->attachment_popover),
+			!e_attachment_view_get_allow_uri (view));
+	} else if (gtk_popover_get_relative_to (priv->attachment_popover) != widget) {
+		gtk_popover_set_relative_to (priv->attachment_popover, widget);
+	}
+
+	/* reset the pointing-to point to the middle of the 'view' widget */
+	gtk_widget_get_allocation (widget, &rect);
+
+	rect.x = rect.width / 2;
+	rect.y = rect.height / 2;
+	rect.width = 1;
+	rect.height = 1;
+
+	gtk_popover_set_pointing_to (priv->attachment_popover, &rect);
+
+	e_attachment_popover_set_changes_saved (E_ATTACHMENT_POPOVER (priv->attachment_popover), FALSE);
+
+	g_signal_handlers_disconnect_by_data (priv->attachment_popover, view);
+
+	return E_ATTACHMENT_POPOVER (priv->attachment_popover);
+}
+
+static void
+attachment_add_uri_popover_closed_cb (EAttachmentPopover *popover,
+				      gpointer user_data)
+{
+	EAttachmentView *view = user_data;
+
+	if (e_attachment_popover_get_changes_saved (popover)) {
+		EAttachmentStore *store;
+
+		store = e_attachment_view_get_store (view);
+		e_attachment_store_add_attachment (store, e_attachment_popover_get_attachment (popover));
+	}
+}
+
+static void
+attachment_popover_popup (EAttachmentView *view,
+			  EAttachmentPopover *popover,
+			  gboolean is_new_attachment)
+{
+	gboolean handled = FALSE;
+
+	g_signal_emit (view, signals[BEFORE_PROPERTIES_POPUP], 0, popover, is_new_attachment, &handled);
+
+	e_attachment_popover_popup (popover);
+}
+
+static void
+action_add_uri_cb (GtkAction *action,
+		   EAttachmentView *view)
+{
+	EAttachmentPopover *popover;
+	EAttachment *attachment;
+	GFileInfo *file_info;
+	GIcon *icon;
+
+	file_info = g_file_info_new ();
+	g_file_info_set_content_type (file_info, "application/octet-stream");
+
+	icon = g_themed_icon_new ("emblem-web");
+	g_file_info_set_icon (file_info, icon);
+	g_clear_object (&icon);
+
+	attachment = e_attachment_new_for_uri ("https://");
+
+	e_attachment_set_file_info (attachment, file_info);
+
+	g_clear_object (&file_info);
+
+	popover = e_attachment_view_get_attachment_popover (view);
+
+	e_attachment_popover_set_attachment (popover, attachment);
+
+	g_signal_connect_object (popover, "closed",
+		G_CALLBACK (attachment_add_uri_popover_closed_cb), view, 0);
+
+	attachment_popover_popup (view, popover, TRUE);
+
+	g_clear_object (&attachment);
 }
 
 static void
@@ -176,23 +291,54 @@ action_properties_cb (GtkAction *action,
                       EAttachmentView *view)
 {
 	EAttachment *attachment;
-	GtkWidget *dialog;
+	EAttachmentPopover *popover;
 	GList *list;
-	gpointer parent;
 
 	list = e_attachment_view_get_selected_attachments (view);
 	g_return_if_fail (g_list_length (list) == 1);
 	attachment = list->data;
 
+	popover = e_attachment_view_get_attachment_popover (view);
+
+	e_attachment_popover_set_attachment (popover, attachment);
+
+	attachment_popover_popup (view, popover, FALSE);
+
+	g_list_free_full (list, g_object_unref);
+}
+
+static void
+action_reload_cb (GtkAction *action,
+		  EAttachmentView *view)
+{
+	GList *list, *link;
+	gpointer parent;
+
+	g_return_if_fail (E_IS_ATTACHMENT_VIEW (view));
+
 	parent = gtk_widget_get_toplevel (GTK_WIDGET (view));
 	parent = gtk_widget_is_toplevel (parent) ? parent : NULL;
 
-	dialog = e_attachment_dialog_new (parent, attachment);
-	gtk_dialog_run (GTK_DIALOG (dialog));
-	gtk_widget_destroy (dialog);
+	list = e_attachment_view_get_selected_attachments (view);
 
-	g_list_foreach (list, (GFunc) g_object_unref, NULL);
-	g_list_free (list);
+	for (link = list; link; link = g_list_next (link)) {
+		EAttachment *attachment = link->data;
+		GFile *file;
+
+		if (e_attachment_is_uri (attachment))
+			continue;
+
+		file = e_attachment_ref_file (attachment);
+		if (file) {
+			e_attachment_load_async (
+				attachment, (GAsyncReadyCallback)
+				call_attachment_load_handle_error, parent ? g_object_ref (parent) : NULL);
+
+			g_clear_object (&file);
+		}
+	}
+
+	g_list_free_full (list, g_object_unref);
 }
 
 static void
@@ -245,9 +391,11 @@ action_save_all_cb (GtkAction *action,
 	for (iter = list; iter != NULL; iter = iter->next) {
 		EAttachment *attachment = iter->data;
 
-		e_attachment_save_async (
-			attachment, destination, (GAsyncReadyCallback)
-			call_attachment_save_handle_error, parent ? g_object_ref (parent) : NULL);
+		if (!e_attachment_is_uri (attachment)) {
+			e_attachment_save_async (
+				attachment, destination, (GAsyncReadyCallback)
+				call_attachment_save_handle_error, parent ? g_object_ref (parent) : NULL);
+		}
 	}
 
 	g_object_unref (destination);
@@ -282,9 +430,11 @@ action_save_as_cb (GtkAction *action,
 	for (iter = list; iter != NULL; iter = iter->next) {
 		EAttachment *attachment = iter->data;
 
-		e_attachment_save_async (
-			attachment, destination, (GAsyncReadyCallback)
-			call_attachment_save_handle_error, parent ? g_object_ref (parent) : NULL);
+		if (!e_attachment_is_uri (attachment)) {
+			e_attachment_save_async (
+				attachment, destination, (GAsyncReadyCallback)
+				call_attachment_save_handle_error, parent ? g_object_ref (parent) : NULL);
+		}
 	}
 
 	g_object_unref (destination);
@@ -343,12 +493,26 @@ static GtkActionEntry editable_entries[] = {
 	  N_("Attach a file"),
 	  G_CALLBACK (action_add_cb) },
 
+	{ "add-uri",
+	  "emblem-web",
+	  N_("Add _URI…"),
+	  NULL,
+	  N_("Attach a URI"),
+	  G_CALLBACK (action_add_uri_cb) },
+
 	{ "properties",
 	  "document-properties",
 	  N_("_Properties"),
 	  NULL,
 	  NULL,  /* XXX Add a tooltip! */
 	  G_CALLBACK (action_properties_cb) },
+
+	{ "reload",
+	  "view-refresh",
+	  N_("Re_load"),
+	  NULL,
+	  N_("Reload attachment content"),
+	  G_CALLBACK (action_reload_cb) },
 
 	{ "remove",
 	  "list-remove",
@@ -359,55 +523,17 @@ static GtkActionEntry editable_entries[] = {
 };
 
 static void
-call_attachment_load_handle_error (GObject *source_object,
-				   GAsyncResult *result,
-				   gpointer user_data)
+attachment_view_handle_uri_with_title (EAttachmentView *view,
+				       GdkDragContext *drag_context,
+				       const gchar *uri_with_title,
+				       guint time)
 {
-	GtkWindow *window = user_data;
-
-	g_return_if_fail (E_IS_ATTACHMENT (source_object));
-	g_return_if_fail (!window || GTK_IS_WINDOW (window));
-
-	e_attachment_load_handle_error (E_ATTACHMENT (source_object), result, window);
-
-	g_clear_object (&window);
-}
-
-static void
-attachment_view_netscape_url (EAttachmentView *view,
-                              GdkDragContext *drag_context,
-                              gint x,
-                              gint y,
-                              GtkSelectionData *selection_data,
-                              guint info,
-                              guint time)
-{
-	static GdkAtom atom = GDK_NONE;
 	EAttachmentStore *store;
 	EAttachment *attachment;
-	const gchar *data;
 	gpointer parent;
-	gchar *copied_data;
 	gchar **strv;
-	gint length;
 
-	if (G_UNLIKELY (atom == GDK_NONE))
-		atom = gdk_atom_intern_static_string ("_NETSCAPE_URL");
-
-	if (gtk_selection_data_get_target (selection_data) != atom)
-		return;
-
-	g_signal_stop_emission_by_name (view, "drag-data-received");
-
-	/* _NETSCAPE_URL is represented as "URI\nTITLE" */
-
-	data = (const gchar *) gtk_selection_data_get_data (selection_data);
-	length = gtk_selection_data_get_length (selection_data);
-
-	copied_data = g_strndup (data, length);
-	strv = g_strsplit (copied_data, "\n", 2);
-	g_free (copied_data);
-
+	strv = g_strsplit (uri_with_title, "\n", 2);
 	store = e_attachment_view_get_store (view);
 
 	parent = gtk_widget_get_toplevel (GTK_WIDGET (view));
@@ -423,6 +549,37 @@ attachment_view_netscape_url (EAttachmentView *view,
 	g_strfreev (strv);
 
 	gtk_drag_finish (drag_context, TRUE, FALSE, time);
+}
+
+static void
+attachment_view_netscape_url (EAttachmentView *view,
+                              GdkDragContext *drag_context,
+                              gint x,
+                              gint y,
+                              GtkSelectionData *selection_data,
+                              guint info,
+                              guint time)
+{
+	static GdkAtom atom = GDK_NONE;
+	const gchar *data;
+	gchar *copied_data;
+	gint length;
+
+	if (G_UNLIKELY (atom == GDK_NONE))
+		atom = gdk_atom_intern_static_string ("_NETSCAPE_URL");
+
+	if (gtk_selection_data_get_target (selection_data) != atom)
+		return;
+
+	g_signal_stop_emission_by_name (view, "drag-data-received");
+
+	/* _NETSCAPE_URL is represented as "URI\nTITLE" */
+	data = (const gchar *) gtk_selection_data_get_data (selection_data);
+	length = gtk_selection_data_get_length (selection_data);
+
+	copied_data = g_strndup (data, length);
+	attachment_view_handle_uri_with_title (view, drag_context, copied_data, time);
+	g_free (copied_data);
 }
 
 static void
@@ -693,6 +850,39 @@ attachment_view_uris (EAttachmentView *view,
 }
 
 static void
+attachment_view_text_x_moz_url (EAttachmentView *view,
+				GdkDragContext *drag_context,
+				gint x,
+				gint y,
+				GtkSelectionData *selection_data,
+				guint info,
+				guint time)
+{
+	static GdkAtom atom = GDK_NONE;
+	gchar *uri_with_title = NULL;
+	const guchar *raw_data;
+	gint len;
+
+	if (G_UNLIKELY (atom == GDK_NONE))
+		atom = gdk_atom_intern_static_string ("text/x-moz-url");
+
+	if (gtk_selection_data_get_target (selection_data) != atom)
+		return;
+
+	g_signal_stop_emission_by_name (view, "drag-data-received");
+
+	/* text/x-moz-url is represented as "URI\nTITLE" in UTF-16 */
+	raw_data = gtk_selection_data_get_data_with_length (selection_data, &len);
+	if (raw_data)
+		uri_with_title = g_utf16_to_utf8 ((const gunichar2 *) raw_data, len, NULL, NULL, NULL);
+
+	if (uri_with_title)
+		attachment_view_handle_uri_with_title (view, drag_context, uri_with_title, time);
+
+	g_free (uri_with_title);
+}
+
+static void
 attachment_view_update_actions (EAttachmentView *view)
 {
 	EAttachmentViewPrivate *priv;
@@ -702,19 +892,38 @@ attachment_view_update_actions (EAttachmentView *view)
 	GList *list, *iter;
 	guint n_selected;
 	gboolean busy = FALSE;
+	gboolean may_reload = FALSE;
+	gboolean is_uri = FALSE;
 
 	g_return_if_fail (E_IS_ATTACHMENT_VIEW (view));
 
 	priv = e_attachment_view_get_private (view);
 
 	list = e_attachment_view_get_selected_attachments (view);
-	n_selected = g_list_length (list);
+	n_selected = 0;
+
+	for (iter = list; iter && (!busy || !may_reload); iter = g_list_next (iter)) {
+		EAttachment *attach = iter->data;
+
+		n_selected++;
+
+		if (e_attachment_get_may_reload (attach) &&
+		    !e_attachment_is_uri (attach)) {
+			may_reload = TRUE;
+			busy |= e_attachment_get_loading (attach);
+			busy |= e_attachment_get_saving (attach);
+		}
+	}
 
 	if (n_selected == 1) {
 		attachment = g_object_ref (list->data);
 
-		busy |= e_attachment_get_loading (attachment);
-		busy |= e_attachment_get_saving (attachment);
+		is_uri = e_attachment_is_uri (attachment);
+
+		if (!is_uri) {
+			busy |= e_attachment_get_loading (attachment);
+			busy |= e_attachment_get_saving (attachment);
+		}
 	} else
 		attachment = NULL;
 
@@ -729,11 +938,18 @@ attachment_view_update_actions (EAttachmentView *view)
 	action = e_attachment_view_get_action (view, "properties");
 	gtk_action_set_visible (action, !busy && n_selected == 1);
 
+	action = e_attachment_view_get_action (view, "reload");
+	gtk_action_set_visible (action, may_reload && !is_uri);
+	gtk_action_set_sensitive (action, !busy);
+
 	action = e_attachment_view_get_action (view, "remove");
 	gtk_action_set_visible (action, !busy && n_selected > 0);
 
 	action = e_attachment_view_get_action (view, "save-as");
-	gtk_action_set_visible (action, !busy && n_selected > 0);
+	gtk_action_set_visible (action, !busy && !is_uri && n_selected > 0);
+
+	action = e_attachment_view_get_action (view, "add-uri");
+	gtk_action_set_visible (action, priv->allow_uri);
 
 	/* Clear out the "openwith" action group. */
 	gtk_ui_manager_remove_ui (priv->ui_manager, priv->merge_id);
@@ -753,7 +969,6 @@ attachment_view_update_actions (EAttachmentView *view)
 
 	for (iter = list; iter != NULL; iter = iter->next) {
 		GAppInfo *app_info = iter->data;
-		GtkAction *action;
 		GIcon *app_icon;
 		const gchar *app_id;
 		const gchar *app_name;
@@ -844,15 +1059,29 @@ attachment_view_init_drag_dest (EAttachmentView *view)
 	gtk_target_list_add_uri_targets (target_list, 0);
 	e_target_list_add_calendar_targets (target_list, 0);
 	e_target_list_add_directory_targets (target_list, 0);
+	gtk_target_list_add (target_list, gdk_atom_intern_static_string ("text/x-moz-url"), 0, 0);
 
 	priv->target_list = target_list;
 	priv->drag_actions = GDK_ACTION_COPY;
+}
+
+static gboolean
+attachment_view_before_properties_popup (EAttachmentView *view,
+					 GtkPopover *properties_popover,
+					 gboolean is_new_attachment)
+{
+	e_attachment_view_position_popover (view, properties_popover,
+		e_attachment_popover_get_attachment (E_ATTACHMENT_POPOVER (properties_popover)));
+
+	/* let the other handlers be called */
+	return FALSE;
 }
 
 static void
 e_attachment_view_default_init (EAttachmentViewInterface *iface)
 {
 	iface->update_actions = attachment_view_update_actions;
+	iface->before_properties_popup = attachment_view_before_properties_popup;
 
 	g_object_interface_install_property (
 		iface,
@@ -873,6 +1102,16 @@ e_attachment_view_default_init (EAttachmentViewInterface *iface)
 			G_PARAM_READWRITE |
 			G_PARAM_CONSTRUCT));
 
+	g_object_interface_install_property (
+		iface,
+		g_param_spec_boolean (
+			"allow-uri",
+			"Allow Uri",
+			NULL,
+			FALSE,
+			G_PARAM_READWRITE |
+			G_PARAM_STATIC_STRINGS));
+
 	signals[UPDATE_ACTIONS] = g_signal_new (
 		"update-actions",
 		G_TYPE_FROM_INTERFACE (iface),
@@ -881,6 +1120,17 @@ e_attachment_view_default_init (EAttachmentViewInterface *iface)
 		NULL, NULL,
 		g_cclosure_marshal_VOID__VOID,
 		G_TYPE_NONE, 0);
+
+	signals[BEFORE_PROPERTIES_POPUP] = g_signal_new (
+		"before-properties-popup",
+		G_TYPE_FROM_INTERFACE (iface),
+		G_SIGNAL_RUN_FIRST | G_SIGNAL_ACTION,
+		G_STRUCT_OFFSET (EAttachmentViewInterface, before_properties_popup),
+		g_signal_accumulator_true_handled, NULL,
+		NULL,
+		G_TYPE_BOOLEAN, 2,
+		GTK_TYPE_POPOVER,
+		G_TYPE_BOOLEAN);
 
 	/* Register known handler types. */
 	g_type_ensure (E_TYPE_ATTACHMENT_HANDLER_IMAGE);
@@ -951,6 +1201,10 @@ e_attachment_view_init (EAttachmentView *view)
 	g_signal_connect (
 		view, "drag-data-received",
 		G_CALLBACK (attachment_view_uris), NULL);
+
+	g_signal_connect (
+		view, "drag-data-received",
+		G_CALLBACK (attachment_view_text_x_moz_url), NULL);
 }
 
 void
@@ -1061,6 +1315,33 @@ e_attachment_view_set_dragging (EAttachmentView *view,
 	priv->dragging = dragging;
 
 	g_object_notify (G_OBJECT (view), "dragging");
+}
+
+gboolean
+e_attachment_view_get_allow_uri (EAttachmentView *view)
+{
+	EAttachmentViewPrivate *priv;
+
+	g_return_val_if_fail (E_IS_ATTACHMENT_VIEW (view), FALSE);
+
+	priv = e_attachment_view_get_private (view);
+
+	return priv->allow_uri;
+}
+
+void
+e_attachment_view_set_allow_uri (EAttachmentView *view,
+				 gboolean allow_uri)
+{
+	EAttachmentViewPrivate *priv;
+
+	g_return_if_fail (E_IS_ATTACHMENT_VIEW (view));
+
+	priv = e_attachment_view_get_private (view);
+
+	priv->allow_uri = allow_uri;
+
+	g_object_notify (G_OBJECT (view), "allow-uri");
 }
 
 GtkTargetList *
@@ -1674,6 +1955,13 @@ e_attachment_view_drag_data_get (EAttachmentView *view,
 	g_return_if_fail (GDK_IS_DRAG_CONTEXT (context));
 	g_return_if_fail (selection != NULL);
 
+	status.uris = g_object_get_data (G_OBJECT (context), "evo-attach-urilist");
+
+	if (status.uris) {
+		gtk_selection_data_set_uris (selection, status.uris);
+		return;
+	}
+
 	status.uris = NULL;
 	status.done = FALSE;
 
@@ -1690,13 +1978,15 @@ e_attachment_view_drag_data_get (EAttachmentView *view,
 	/* We can't return until we have results, so crank
 	 * the main loop until the callback gets triggered. */
 	while (!status.done)
-		if (gtk_main_iteration ())
-			break;
+		g_main_context_iteration (NULL, TRUE);
 
-	if (status.uris != NULL)
+	if (status.uris) {
 		gtk_selection_data_set_uris (selection, status.uris);
 
-	g_strfreev (status.uris);
+		/* Remember it, to not regenerate it, when the target widget asks for the data again */
+		g_object_set_data_full (G_OBJECT (context), "evo-attach-urilist",
+			status.uris, (GDestroyNotify) g_strfreev);
+	}
 }
 
 void
@@ -1926,4 +2216,48 @@ e_attachment_view_update_actions (EAttachmentView *view)
 	g_return_if_fail (E_IS_ATTACHMENT_VIEW (view));
 
 	g_signal_emit (view, signals[UPDATE_ACTIONS], 0);
+}
+
+void
+e_attachment_view_position_popover (EAttachmentView *view,
+				    GtkPopover *popover,
+				    EAttachment *attachment)
+{
+	EAttachmentStore *store;
+	GtkWidget *relative_to;
+	GdkRectangle rect;
+	GtkTreeIter iter;
+
+	g_return_if_fail (E_IS_ATTACHMENT_VIEW (view));
+	g_return_if_fail (GTK_IS_POPOVER (popover));
+
+	relative_to = GTK_WIDGET (view);
+	gtk_widget_get_allocation (relative_to, &rect);
+
+	store = e_attachment_view_get_store (view);
+
+	if (attachment && e_attachment_store_find_attachment_iter (store, attachment, &iter)) {
+		GtkTreePath *path;
+
+		path = gtk_tree_model_get_path (GTK_TREE_MODEL (store), &iter);
+		if (path) {
+			if (GTK_IS_ICON_VIEW (view)) {
+				gtk_icon_view_get_cell_rect (GTK_ICON_VIEW (view), path, NULL, &rect);
+			} else if (GTK_IS_TREE_VIEW (view)) {
+				GtkTreeView *tree_view = GTK_TREE_VIEW (view);
+
+				gtk_tree_view_get_cell_area (tree_view, path, NULL, &rect);
+				gtk_tree_view_convert_bin_window_to_widget_coords (tree_view, rect.x, rect.y, &rect.x, &rect.y);
+
+				rect.width = gtk_widget_get_allocated_width (GTK_WIDGET (tree_view));
+			} else {
+				g_warn_if_reached ();
+			}
+
+			gtk_tree_path_free (path);
+		}
+	}
+
+	gtk_popover_set_relative_to (popover, relative_to);
+	gtk_popover_set_pointing_to (popover, &rect);
 }

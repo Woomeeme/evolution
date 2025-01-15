@@ -38,7 +38,7 @@ static void
 emfe_show_html (GtkWindow *parent,
 		const gchar *html)
 {
-	GtkWidget *dialog, *widget, *container;
+	GtkWidget *dialog, *widget, *container, *searchbar;
 
 	dialog = gtk_dialog_new_with_buttons (_("Description of Filters"), parent,
 		GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
@@ -70,6 +70,14 @@ emfe_show_html (GtkWindow *parent,
 		"editable", FALSE,
 		NULL);
 	gtk_container_add (GTK_CONTAINER (container), widget);
+
+	container = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
+	searchbar = e_search_bar_new (E_WEB_VIEW (widget));
+	g_object_set (G_OBJECT (searchbar),
+		"can-hide", FALSE,
+		"visible", TRUE,
+		NULL);
+	gtk_container_add (GTK_CONTAINER (container), searchbar);
 
 	e_web_view_load_string (E_WEB_VIEW (widget), html);
 
@@ -139,13 +147,13 @@ emfe_describe_filters_cb (GtkWidget *button,
 
 		account = g_strdup (em_filter_rule_get_account_uid (EM_FILTER_RULE (rule)));
 		if (account && *account) {
-			ESource *source;
+			ESource *esource;
 
-			source = e_source_registry_ref_source (registry, account);
-			if (source) {
+			esource = e_source_registry_ref_source (registry, account);
+			if (esource) {
 				g_free (account);
-				account = e_source_dup_display_name (source);
-				g_object_unref (source);
+				account = e_source_dup_display_name (esource);
+				g_object_unref (esource);
 			}
 		} else {
 			g_free (account);

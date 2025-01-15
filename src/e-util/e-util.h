@@ -33,11 +33,11 @@
 #include <e-util/e-alert-sink.h>
 #include <e-util/e-alert.h>
 #include <e-util/e-attachment-bar.h>
-#include <e-util/e-attachment-dialog.h>
 #include <e-util/e-attachment-handler-image.h>
 #include <e-util/e-attachment-handler.h>
 #include <e-util/e-attachment-icon-view.h>
 #include <e-util/e-attachment-paned.h>
+#include <e-util/e-attachment-popover.h>
 #include <e-util/e-attachment-store.h>
 #include <e-util/e-attachment-tree-view.h>
 #include <e-util/e-attachment-view.h>
@@ -83,6 +83,7 @@
 #include <e-util/e-collection-account-wizard.h>
 #include <e-util/e-color-chooser-widget.h>
 #include <e-util/e-color-combo.h>
+#include <e-util/e-color-scheme-watcher.h>
 #include <e-util/e-config.h>
 #include <e-util/e-config-lookup.h>
 #include <e-util/e-config-lookup-result.h>
@@ -119,6 +120,8 @@
 #include <e-util/e-filter-part.h>
 #include <e-util/e-filter-rule.h>
 #include <e-util/e-focus-tracker.h>
+#include <e-util/e-headerbar.h>
+#include <e-util/e-headerbar-button.h>
 #ifndef E_UTIL_INCLUDE_WITHOUT_WEBKIT
 #include <e-util/e-html-editor-actions.h>
 #include <e-util/e-html-editor-cell-dialog.h>
@@ -126,7 +129,7 @@
 #include <e-util/e-html-editor-find-dialog.h>
 #include <e-util/e-html-editor-hrule-dialog.h>
 #include <e-util/e-html-editor-image-dialog.h>
-#include <e-util/e-html-editor-link-dialog.h>
+#include <e-util/e-html-editor-link-popover.h>
 #include <e-util/e-html-editor-page-dialog.h>
 #include <e-util/e-html-editor-paragraph-dialog.h>
 #include <e-util/e-html-editor-replace-dialog.h>
@@ -152,10 +155,14 @@
 #include <e-util/e-mail-signature-script-dialog.h>
 #include <e-util/e-mail-signature-tree-view.h>
 #include <e-util/e-map.h>
+#include <e-util/e-markdown-editor.h>
+#include <e-util/e-markdown-utils.h>
+#include <e-util/e-menu-bar.h>
 #include <e-util/e-menu-tool-action.h>
 #include <e-util/e-menu-tool-button.h>
 #include <e-util/e-misc-utils.h>
 #include <e-util/e-mktemp.h>
+#include <e-util/e-month-widget.h>
 #include <e-util/e-name-selector-dialog.h>
 #include <e-util/e-name-selector-entry.h>
 #include <e-util/e-name-selector-list.h>

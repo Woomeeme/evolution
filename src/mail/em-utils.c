@@ -44,6 +44,7 @@
 
 #include <em-format/e-mail-parser.h>
 #include <em-format/e-mail-formatter-quote.h>
+#include "em-format/e-mail-formatter-utils.h"
 
 #include "e-mail-printer.h"
 #include "e-mail-tag-editor.h"
@@ -909,6 +910,32 @@ em_utils_selection_get_uidlist (GtkSelectionData *selection_data,
 	em_utils_selection_uidlist_foreach_sync	(selection_data, session, uidlist_move_uids_cb, &uld, cancellable, error);
 }
 
+static gchar *
+em_utils_build_export_basename_internal (const gchar *subject,
+					 time_t reftime,
+					 const gchar *extension)
+{
+	gchar *basename;
+	struct tm *ts;
+	gchar datetmp[15];
+
+	if (reftime <= 0)
+		reftime = time (NULL);
+
+	ts = localtime (&reftime);
+	strftime (datetmp, sizeof (datetmp), "%Y%m%d%H%M%S", ts);
+
+	if (subject == NULL || *subject == '\0')
+		subject = "Untitled Message";
+
+	if (extension == NULL)
+		extension = "";
+
+	basename = g_strdup_printf ("%s_%s%s", datetmp, subject, extension);
+
+	return basename;
+}
+
 /**
  * em_utils_build_export_basename:
  * @folder: a #CamelFolder where the message belongs
@@ -928,16 +955,12 @@ em_utils_build_export_basename (CamelFolder *folder,
                                 const gchar *extension)
 {
 	CamelMessageInfo *info;
-	gchar *basename;
 	const gchar *subject = NULL;
-	struct tm *ts;
-	time_t reftime;
-	gchar datetmp[15];
+	gchar *basename;
+	time_t reftime = 0;
 
 	g_return_val_if_fail (CAMEL_IS_FOLDER (folder), NULL);
 	g_return_val_if_fail (uid != NULL, NULL);
-
-	reftime = time (NULL);
 
 	/* Try to get the drop filename from the message or folder. */
 	info = camel_folder_get_message_info (folder, uid);
@@ -946,16 +969,7 @@ em_utils_build_export_basename (CamelFolder *folder,
 		reftime = camel_message_info_get_date_sent (info);
 	}
 
-	ts = localtime (&reftime);
-	strftime (datetmp, sizeof (datetmp), "%Y%m%d%H%M%S", ts);
-
-	if (subject == NULL || *subject == '\0')
-		subject = "Untitled Message";
-
-	if (extension == NULL)
-		extension = "";
-
-	basename = g_strdup_printf ("%s_%s%s", datetmp, subject, extension);
+	basename = em_utils_build_export_basename_internal (subject, reftime, extension);
 
 	g_clear_object (&info);
 
@@ -964,6 +978,7 @@ em_utils_build_export_basename (CamelFolder *folder,
 
 /**
  * em_utils_selection_set_urilist:
+ * @context:
  * @data:
  * @folder:
  * @uids:
@@ -973,7 +988,8 @@ em_utils_build_export_basename (CamelFolder *folder,
  * up when the application quits.
  **/
 void
-em_utils_selection_set_urilist (GtkSelectionData *data,
+em_utils_selection_set_urilist (GdkDragContext *context,
+				GtkSelectionData *data,
                                 CamelFolder *folder,
                                 GPtrArray *uids)
 {
@@ -992,6 +1008,20 @@ em_utils_selection_set_urilist (GtkSelectionData *data,
 	/* can be 0 with empty folders */
 	if (!uids->len)
 		return;
+
+	/* Use cached value from the last call, if exists */
+	tmpdir = g_object_get_data (G_OBJECT (context), "evo-urilist");
+	if (tmpdir) {
+		GdkAtom type;
+
+		type = gtk_selection_data_get_target (data);
+		gtk_selection_data_set (
+			data, type, 8,
+			(guchar *) tmpdir,
+			strlen (tmpdir));
+
+		return;
+	}
 
 	tmpdir = e_mkdtemp ("drag-n-drop-XXXXXX");
 	if (tmpdir == NULL)
@@ -1052,7 +1082,9 @@ em_utils_selection_set_urilist (GtkSelectionData *data,
 					data, type, 8,
 					(guchar *) uri_crlf,
 					strlen (uri_crlf));
-				g_free (uri_crlf);
+
+				/* Remember it, to not regenerate it, when the target widget asks for the data again */
+				g_object_set_data_full (G_OBJECT (context), "evo-urilist", uri_crlf, g_free);
 			}
 			g_object_unref (fstream);
 		} else
@@ -1102,7 +1134,12 @@ em_utils_selection_set_urilist (GtkSelectionData *data,
 			g_free (filename);
 		}
 
-		gtk_selection_data_set_uris (data, uris);
+		if (gtk_selection_data_set_uris (data, uris)) {
+			/* Remember it, to not regenerate it, when the target widget asks for the data again */
+			g_object_set_data_full (G_OBJECT (context), "evo-urilist",
+				g_strndup ((const gchar *) gtk_selection_data_get_data (data), gtk_selection_data_get_length (data)),
+				g_free);
+		}
 
 		g_strfreev (uris);
 	}
@@ -2086,4 +2123,368 @@ em_utils_find_message_window (EMailFormatterMode display_mode,
 	}
 
 	return NULL;
+}
+
+/**
+ * em_utils_import_pgp_key:
+ * @parent: a #GtkWindow parent for a dialog
+ * @session: (nullable): a #CamelSession
+ * @keydata: key data to import
+ * @keydata_size: size of the @keydata, in bytes
+ * @error: return location for a #GError, or %NULL
+ *
+ * Asks the user whether he/she wants to import the provided OpenPGP key
+ * and tries to import it.
+ *
+ * Returns: whether the import succeeded
+ *
+ * Since: 3.50
+ **/
+gboolean
+em_utils_import_pgp_key (GtkWindow *parent,
+			 CamelSession *session,
+			 const guint8 *keydata,
+			 gsize keydata_size,
+			 GError **error)
+{
+	struct _trust_options {
+		const gchar *label;
+		CamelGpgTrust trust;
+		GtkToggleButton *button;
+	} trust_options[] = {
+		{ NC_("trust", "_Unknown"),		CAMEL_GPG_TRUST_UNKNOWN,	NULL },
+		{ NC_("trust", "_Never trust"),		CAMEL_GPG_TRUST_NEVER,		NULL },
+		{ NC_("trust", "Trust _marginally"),	CAMEL_GPG_TRUST_MARGINAL,	NULL },
+		{ NC_("trust", "Trust _fully"),		CAMEL_GPG_TRUST_FULL,		NULL },
+		{ NC_("trust", "Trust _ultimately"),	CAMEL_GPG_TRUST_ULTIMATE,	NULL }
+	};
+	EAlert *alert;
+	CamelGpgContext *gpgctx;
+	GSList *key_infos = NULL, *link;
+	GtkWidget *dialog;
+	GtkWidget *widget;
+	GtkWidget *container;
+	guint ii;
+	gboolean success = FALSE;
+
+	if (session)
+		g_return_val_if_fail (CAMEL_IS_SESSION (session), FALSE);
+	g_return_val_if_fail (keydata != NULL, FALSE);
+	g_return_val_if_fail (keydata_size > 0, FALSE);
+
+	gpgctx = CAMEL_GPG_CONTEXT (camel_gpg_context_new (session));
+
+	if (!camel_gpg_context_get_key_data_info_sync (gpgctx, keydata, keydata_size, 0, &key_infos, NULL, error)) {
+		g_clear_object (&gpgctx);
+		return FALSE;
+	}
+
+	alert = e_alert_new ("mail:ask-import-pgp-key", NULL);
+	dialog = e_alert_dialog_new (parent, alert);
+	g_object_unref (alert);
+
+	container = e_alert_dialog_get_content_area (E_ALERT_DIALOG (dialog));
+	widget = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+	container = widget;
+
+	for (link = key_infos; link; link = g_slist_next (link)) {
+		CamelGpgKeyInfo *nfo = link->data;
+
+		if (nfo && camel_gpg_key_info_get_id (nfo)) {
+			GSList *user_ids;
+			gchar *tmp;
+
+			tmp = g_strdup_printf (_("Key ID: %s"), camel_gpg_key_info_get_id (nfo));
+			widget = gtk_label_new (tmp);
+			g_object_set (widget,
+				"halign", GTK_ALIGN_START,
+				"margin-top", link == key_infos ? 0 : 12,
+				"selectable", TRUE,
+				"xalign", 0.0,
+				NULL);
+			gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+			g_free (tmp);
+
+			tmp = g_strdup_printf (_("Fingerprint: %s"), camel_gpg_key_info_get_fingerprint (nfo));
+			widget = gtk_label_new (tmp);
+			g_object_set (widget,
+				"halign", GTK_ALIGN_START,
+				"margin-start", 12,
+				"selectable", TRUE,
+				"xalign", 0.0,
+				NULL);
+			gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+			g_free (tmp);
+
+			if (camel_gpg_key_info_get_creation_date (nfo) > 0) {
+				gchar *fmt;
+
+				fmt = e_datetime_format_format ("mail", "table", DTFormatKindDateTime, (time_t) camel_gpg_key_info_get_creation_date (nfo));
+				if (fmt) {
+					tmp = g_strdup_printf (_("Created: %s"), fmt);
+					widget = gtk_label_new (tmp);
+					g_object_set (widget,
+						"halign", GTK_ALIGN_START,
+						"margin-start", 12,
+						"selectable", TRUE,
+						"xalign", 0.0,
+						NULL);
+					gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+					g_free (tmp);
+					g_free (fmt);
+				}
+			}
+
+			user_ids = camel_gpg_key_info_get_user_ids (nfo);
+			if (user_ids) {
+				GSList *id_link;
+				GString *ids;
+
+				ids = g_string_new ("");
+
+				for (id_link = user_ids; id_link; id_link = g_slist_next (id_link)) {
+					const gchar *id = id_link->data;
+
+					if (id && *id) {
+						if (ids->len > 0)
+							g_string_append (ids, ", ");
+						g_string_append (ids, id);
+					}
+				}
+
+				if (ids->len > 0) {
+					tmp = g_strdup_printf (_("User ID: %s"), ids->str);
+					widget = gtk_label_new (tmp);
+					g_object_set (widget,
+						"halign", GTK_ALIGN_START,
+						"margin-start", 12,
+						"selectable", TRUE,
+						"max-width-chars", 80,
+						"width-chars", 80,
+						"wrap", TRUE,
+						"wrap-mode", PANGO_WRAP_WORD_CHAR,
+						"xalign", 0.0,
+						NULL);
+					gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+					g_free (tmp);
+				}
+
+				g_string_free (ids, TRUE);
+			}
+		}
+	}
+
+	widget = gtk_label_new (_("Set trust level for the key:"));
+	gtk_widget_set_halign (widget, GTK_ALIGN_START);
+	gtk_widget_set_margin_top (widget, 12);
+	gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+
+	for (ii = 0; ii < G_N_ELEMENTS (trust_options); ii++) {
+		widget = gtk_radio_button_new_with_mnemonic_from_widget (GTK_RADIO_BUTTON (trust_options[0].button),
+			g_dpgettext2 (GETTEXT_PACKAGE, "trust", trust_options[ii].label));
+		gtk_widget_set_margin_start (widget, 12);
+		gtk_box_pack_start (GTK_BOX (container), widget, FALSE, FALSE, 0);
+
+		trust_options[ii].button = GTK_TOGGLE_BUTTON (widget);
+	}
+
+	/* Preselect the 'full' trust level, thus the key can be used to encrypt messages */
+	g_warn_if_fail (ii > 3);
+	g_warn_if_fail (trust_options[3].trust == CAMEL_GPG_TRUST_FULL);
+	gtk_toggle_button_set_active (trust_options[3].button, TRUE);
+
+	gtk_widget_show_all (container);
+
+	if (gtk_dialog_run (GTK_DIALOG (dialog)) == GTK_RESPONSE_YES) {
+		CamelGpgTrust trust = CAMEL_GPG_TRUST_NONE;
+
+		for (ii = 0; ii < G_N_ELEMENTS (trust_options); ii++) {
+			if (gtk_toggle_button_get_active (trust_options[ii].button)) {
+				trust = trust_options[ii].trust;
+				break;
+			}
+		}
+
+		success = camel_gpg_context_import_key_sync (gpgctx, keydata, keydata_size, 0, NULL, error);
+		if (success) {
+			for (link = key_infos; link && success; link = g_slist_next (link)) {
+				CamelGpgKeyInfo *nfo = link->data;
+
+				if (nfo && camel_gpg_key_info_get_id (nfo)) {
+					success = camel_gpg_context_set_key_trust_sync (gpgctx,
+						camel_gpg_key_info_get_id (nfo), trust, NULL, error);
+				}
+			}
+		}
+	} else {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_CANCELLED, _("Operation was cancelled"));
+	}
+
+	g_slist_free_full (key_infos, (GDestroyNotify) camel_gpg_key_info_free);
+	gtk_widget_destroy (dialog);
+	g_clear_object (&gpgctx);
+
+	return success;
+}
+
+typedef struct _PrintData {
+	GSList *hidden_parts; /* EMailPart * */
+	GAsyncReadyCallback callback;
+	gpointer user_data;
+} PrintData;
+
+static void
+print_data_free (gpointer ptr)
+{
+	PrintData *pd = ptr;
+
+	if (pd) {
+		GSList *link;
+
+		for (link = pd->hidden_parts; link; link = g_slist_next (link)) {
+			EMailPart *part = link->data;
+
+			part->is_hidden = FALSE;
+		}
+
+		g_slist_free_full (pd->hidden_parts, g_object_unref);
+		g_free (pd);
+	}
+}
+
+static void
+em_utils_print_part_list_done_cb (GObject *source_object,
+				  GAsyncResult *result,
+				  gpointer user_data)
+{
+	PrintData *pd = user_data;
+
+	g_return_if_fail (pd != NULL);
+
+	if (pd->callback)
+		pd->callback (source_object, result, pd->user_data);
+
+	print_data_free (pd);
+}
+
+void
+em_utils_print_part_list (EMailPartList *part_list,
+			  EMailDisplay *mail_display,
+			  GtkPrintOperationAction print_action,
+			  GCancellable *cancellable,
+			  GAsyncReadyCallback callback,
+			  gpointer user_data)
+{
+	EMailFormatter *formatter;
+	EMailPrinter *printer;
+	EMailRemoteContent *remote_content;
+	PrintData *pd;
+	gchar *export_basename;
+
+	g_return_if_fail (E_IS_MAIL_PART_LIST (part_list));
+	g_return_if_fail (E_IS_MAIL_DISPLAY (mail_display));
+
+	pd = g_new0 (PrintData, 1);
+	pd->callback = callback;
+	pd->user_data = user_data;
+
+	formatter = e_mail_display_get_formatter (mail_display);
+	remote_content = e_mail_display_ref_remote_content (mail_display);
+
+	if (e_mail_display_get_skip_insecure_parts (mail_display)) {
+		GList *head, *link;
+		GHashTable *secured_message_ids;
+		GQueue queue = G_QUEUE_INIT;
+
+		e_mail_part_list_queue_parts (part_list, NULL, &queue);
+
+		head = g_queue_peek_head_link (&queue);
+		secured_message_ids = e_mail_formatter_utils_extract_secured_message_ids (head);
+
+		if (secured_message_ids) {
+			gboolean has_encrypted_part = FALSE;
+
+			for (link = head; link != NULL; link = g_list_next (link)) {
+				EMailPart *part = E_MAIL_PART (link->data);
+
+				if (!e_mail_formatter_utils_consider_as_secured_part (part, secured_message_ids))
+					continue;
+
+				if (!e_mail_part_has_validity (part)) {
+					if (!part->is_hidden) {
+						part->is_hidden = TRUE;
+						pd->hidden_parts = g_slist_prepend (pd->hidden_parts, g_object_ref (part));
+					}
+					continue;
+				}
+
+				if (e_mail_part_get_validity (part, E_MAIL_PART_VALIDITY_ENCRYPTED)) {
+					/* consider the second and following encrypted parts as evil */
+					if (has_encrypted_part) {
+						if (!part->is_hidden) {
+							part->is_hidden = TRUE;
+							pd->hidden_parts = g_slist_prepend (pd->hidden_parts, g_object_ref (part));
+						}
+					} else {
+						has_encrypted_part = TRUE;
+					}
+				}
+			}
+		}
+
+		while (!g_queue_is_empty (&queue))
+			g_object_unref (g_queue_pop_head (&queue));
+
+		g_clear_pointer (&secured_message_ids, g_hash_table_destroy);
+	}
+
+	printer = e_mail_printer_new (part_list, remote_content);
+	if (e_mail_part_list_get_folder (part_list)) {
+		export_basename = em_utils_build_export_basename (
+			e_mail_part_list_get_folder (part_list),
+			e_mail_part_list_get_message_uid (part_list),
+			NULL);
+	} else {
+		CamelMimeMessage *msg;
+
+		msg = e_mail_part_list_get_message (part_list);
+		if (msg) {
+			export_basename = em_utils_build_export_basename_internal (
+				camel_mime_message_get_subject (msg),
+				camel_mime_message_get_date (msg, NULL),
+				NULL);
+		} else {
+			export_basename = NULL;
+		}
+	}
+
+	e_util_make_safe_filename (export_basename);
+	e_mail_printer_set_export_filename (printer, export_basename);
+	g_free (export_basename);
+
+	if (e_mail_display_get_mode (mail_display) == E_MAIL_FORMATTER_MODE_SOURCE)
+		e_mail_printer_set_mode (printer, E_MAIL_FORMATTER_MODE_SOURCE);
+
+	g_clear_object (&remote_content);
+
+	e_mail_printer_print (
+		printer,
+		print_action,
+		formatter,
+		cancellable,
+		em_utils_print_part_list_done_cb,
+		pd);
+
+	g_object_unref (printer);
+}
+
+gboolean
+em_utils_print_part_list_finish (GObject *source_object,
+				 GAsyncResult *result,
+				 GError **error)
+{
+	g_return_val_if_fail (E_IS_MAIL_PRINTER (source_object), FALSE);
+
+	return e_mail_printer_print_finish (E_MAIL_PRINTER (source_object), result, error);
 }

@@ -29,7 +29,8 @@
 #include "e-cal-shell-content.h"
 #include "e-cal-shell-view.h"
 
-G_DEFINE_DYNAMIC_TYPE (ECalShellView, e_cal_shell_view, E_TYPE_CAL_BASE_SHELL_VIEW)
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (ECalShellView, e_cal_shell_view, E_TYPE_CAL_BASE_SHELL_VIEW, 0,
+	G_ADD_PRIVATE_DYNAMIC (ECalShellView))
 
 static void
 cal_shell_view_add_action_button (GtkBox *box,
@@ -225,8 +226,12 @@ cal_shell_view_execute_search (EShellView *shell_view)
 		gtk_toggle_action_set_active (GTK_TOGGLE_ACTION (action), TRUE);
 		gtk_widget_hide (GTK_WIDGET (calendar));
 	} else {
+		ECalViewKind view_kind;
+
+		view_kind = e_cal_shell_content_get_current_view_id (cal_shell_content);
+
 		/* Ensure the date navigator is visible. */
-		gtk_widget_show (GTK_WIDGET (calendar));
+		gtk_widget_set_visible (GTK_WIDGET (calendar), view_kind != E_CAL_VIEW_KIND_LIST && view_kind != E_CAL_VIEW_KIND_YEAR);
 		e_cal_shell_content_get_current_range (cal_shell_content, &start_range, &end_range);
 		end_range = time_day_end (end_range) - 1;
 	}
@@ -244,7 +249,7 @@ cal_shell_view_execute_search (EShellView *shell_view)
 static void
 cal_shell_view_update_actions (EShellView *shell_view)
 {
-	ECalShellViewPrivate *priv;
+	ECalShellView *self = E_CAL_SHELL_VIEW (shell_view);
 	ECalShellContent *cal_shell_content;
 	EShellContent *shell_content;
 	EShellSidebar *shell_sidebar;
@@ -286,10 +291,7 @@ cal_shell_view_update_actions (EShellView *shell_view)
 	gboolean this_and_future_supported;
 
 	/* Chain up to parent's update_actions() method. */
-	E_SHELL_VIEW_CLASS (e_cal_shell_view_parent_class)->
-		update_actions (shell_view);
-
-	priv = E_CAL_SHELL_VIEW_GET_PRIVATE (shell_view);
+	E_SHELL_VIEW_CLASS (e_cal_shell_view_parent_class)->update_actions (shell_view);
 
 	shell_window = e_shell_view_get_shell_window (shell_view);
 	shell = e_shell_window_get_shell (shell_window);
@@ -302,7 +304,7 @@ cal_shell_view_update_actions (EShellView *shell_view)
 		g_object_unref (source);
 	}
 
-	cal_shell_content = priv->cal_shell_content;
+	cal_shell_content = self->priv->cal_shell_content;
 	cal_view = e_cal_shell_content_get_current_calendar_view (cal_shell_content);
 	memo_table = e_cal_shell_content_get_memo_table (cal_shell_content);
 	task_table = e_cal_shell_content_get_task_table (cal_shell_content);
@@ -414,7 +416,7 @@ cal_shell_view_update_actions (EShellView *shell_view)
 	gtk_action_set_sensitive (action, is_searching && !is_list_view);
 
 	action = ACTION (CALENDAR_SEARCH_STOP);
-	sensitive = is_searching && priv->searching_activity != NULL;
+	sensitive = is_searching && self->priv->searching_activity != NULL;
 	gtk_action_set_sensitive (action, sensitive);
 
 	action = ACTION (EVENT_DELEGATE);
@@ -620,8 +622,6 @@ e_cal_shell_view_class_init (ECalShellViewClass *class)
 	EShellViewClass *shell_view_class;
 	ECalBaseShellViewClass *cal_base_shell_view_class;
 
-	g_type_class_add_private (class, sizeof (ECalShellViewPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->dispose = cal_shell_view_dispose;
 	object_class->finalize = cal_shell_view_finalize;
@@ -647,6 +647,7 @@ e_cal_shell_view_class_init (ECalShellViewClass *class)
 	g_type_ensure (GAL_TYPE_VIEW_CALENDAR_WORK_WEEK);
 	g_type_ensure (GAL_TYPE_VIEW_CALENDAR_WEEK);
 	g_type_ensure (GAL_TYPE_VIEW_CALENDAR_MONTH);
+	g_type_ensure (GAL_TYPE_VIEW_CALENDAR_YEAR);
 	g_type_ensure (GAL_TYPE_VIEW_ETABLE);
 
 	e_calendar_a11y_init ();
@@ -660,7 +661,7 @@ e_cal_shell_view_class_finalize (ECalShellViewClass *class)
 static void
 e_cal_shell_view_init (ECalShellView *cal_shell_view)
 {
-	cal_shell_view->priv = E_CAL_SHELL_VIEW_GET_PRIVATE (cal_shell_view);
+	cal_shell_view->priv = e_cal_shell_view_get_instance_private (cal_shell_view);
 
 	e_cal_shell_view_private_init (cal_shell_view);
 }

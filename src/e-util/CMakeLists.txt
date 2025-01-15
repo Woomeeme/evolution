@@ -30,7 +30,7 @@ if(WIN32)
 	)
 endif(WIN32)
 
-glib_compile_resources(${CMAKE_SOURCE_DIR}/data/ ${CMAKE_CURRENT_BINARY_DIR}/org.gnome.Evolution.gresource org_gnome_evolution ../../data/org.gnome.Evolution.gresource.xml ${CMAKE_SOURCE_DIR}/data/emoji.data)
+glib_compile_resources(${CMAKE_SOURCE_DIR}/data/ ${CMAKE_CURRENT_BINARY_DIR}/org.gnome.Evolution.gresource org_gnome_evolution ../../data/org.gnome.Evolution.gresource.xml)
 
 # Main libevolution-util
 
@@ -50,11 +50,11 @@ set(SOURCES
 	e-alert-sink.c
 	e-alert.c
 	e-attachment-bar.c
-	e-attachment-dialog.c
 	e-attachment-handler-image.c
 	e-attachment-handler.c
 	e-attachment-icon-view.c
 	e-attachment-paned.c
+	e-attachment-popover.c
 	e-attachment-store.c
 	e-attachment-tree-view.c
 	e-attachment-view.c
@@ -100,6 +100,7 @@ set(SOURCES
 	e-collection-account-wizard.c
 	e-color-chooser-widget.c
 	e-color-combo.c
+	e-color-scheme-watcher.c
 	e-config.c
 	e-config-lookup.c
 	e-config-lookup-result.c
@@ -138,13 +139,15 @@ set(SOURCES
 	e-focus-tracker.c
 	e-gtkemojichooser.h
 	e-gtkemojichooser.c
+	e-headerbar.c
+	e-headerbar-button.c
 	e-html-editor-actions.c
 	e-html-editor-cell-dialog.c
 	e-html-editor-dialog.c
 	e-html-editor-find-dialog.c
 	e-html-editor-hrule-dialog.c
 	e-html-editor-image-dialog.c
-	e-html-editor-link-dialog.c
+	e-html-editor-link-popover.c
 	e-html-editor-page-dialog.c
 	e-html-editor-paragraph-dialog.c
 	e-html-editor-private.h
@@ -168,11 +171,15 @@ set(SOURCES
 	e-mail-signature-script-dialog.c
 	e-mail-signature-tree-view.c
 	e-map.c
+	e-markdown-editor.c
+	e-markdown-utils.c
 	e-marshal.c
+	e-menu-bar.c
 	e-menu-tool-action.c
 	e-menu-tool-button.c
 	e-misc-utils.c
 	e-mktemp.c
+	e-month-widget.c
 	e-name-selector-dialog.c
 	e-name-selector-entry.c
 	e-name-selector-list.c
@@ -328,11 +335,11 @@ set(HEADERS
 	e-alert-sink.h
 	e-alert.h
 	e-attachment-bar.h
-	e-attachment-dialog.h
 	e-attachment-handler-image.h
 	e-attachment-handler.h
 	e-attachment-icon-view.h
 	e-attachment-paned.h
+	e-attachment-popover.h
 	e-attachment-store.h
 	e-attachment-tree-view.h
 	e-attachment-view.h
@@ -378,6 +385,7 @@ set(HEADERS
 	e-collection-account-wizard.h
 	e-color-chooser-widget.h
 	e-color-combo.h
+	e-color-scheme-watcher.h
 	e-config.h
 	e-config-lookup.h
 	e-config-lookup-result.h
@@ -414,13 +422,15 @@ set(HEADERS
 	e-filter-part.h
 	e-filter-rule.h
 	e-focus-tracker.h
+	e-headerbar.h
+	e-headerbar-button.h
 	e-html-editor-actions.h
 	e-html-editor-cell-dialog.h
 	e-html-editor-dialog.h
 	e-html-editor-find-dialog.h
 	e-html-editor-hrule-dialog.h
 	e-html-editor-image-dialog.h
-	e-html-editor-link-dialog.h
+	e-html-editor-link-popover.h
 	e-html-editor-page-dialog.h
 	e-html-editor-paragraph-dialog.h
 	e-html-editor-replace-dialog.h
@@ -443,10 +453,14 @@ set(HEADERS
 	e-mail-signature-script-dialog.h
 	e-mail-signature-tree-view.h
 	e-map.h
+	e-markdown-editor.h
+	e-markdown-utils.h
+	e-menu-bar.h
 	e-menu-tool-action.h
 	e-menu-tool-button.h
 	e-misc-utils.h
 	e-mktemp.h
+	e-month-widget.h
 	e-name-selector-dialog.h
 	e-name-selector-entry.h
 	e-name-selector-list.h
@@ -625,6 +639,7 @@ target_compile_definitions(evolution-util PRIVATE
 	-DEVOLUTION_WEBKITDATADIR=\"${webkitdatadir}\"
 	-DEVOLUTION_TESTGIOMODULESDIR=\"${CMAKE_CURRENT_BINARY_DIR}\"
 	-DEVOLUTION_TESTTOPSRCDIR=\"${CMAKE_SOURCE_DIR}\"
+	-DE_DATA_SERVER_ICONDIR=\"${E_DATA_SERVER_ICONDIR}\"
 	-DLIBEUTIL_COMPILATION
 )
 
@@ -635,6 +650,7 @@ target_compile_options(evolution-util PUBLIC
 	${GEO_CFLAGS}
 	${GNOME_PLATFORM_CFLAGS}
 	${GSPELL_CFLAGS}
+	${LIBSECRET_CFLAGS}
 )
 
 target_include_directories(evolution-util PUBLIC
@@ -650,6 +666,8 @@ target_include_directories(evolution-util PUBLIC
 	${GEO_INCLUDE_DIRS}
 	${GNOME_PLATFORM_INCLUDE_DIRS}
 	${GSPELL_INCLUDE_DIRS}
+	${LIBSECRET_INCLUDE_DIRS}
+	${MARKDOWN_INCLUDE_DIRS}
 )
 
 target_link_libraries(evolution-util
@@ -661,7 +679,9 @@ target_link_libraries(evolution-util
 	${GNOME_PLATFORM_LDFLAGS}
 	${GSPELL_LDFLAGS}
 	${ICONV_LIBS}
+	${LIBSECRET_LDFLAGS}
 	${MATH_LDFLAGS}
+	${MARKDOWN_LDFLAGS}
 )
 
 if(HAVE_LDAP)
@@ -761,6 +781,7 @@ macro(add_private_program _name _sources)
 		-DEVOLUTION_SOURCE_WEBKITDATADIR=\"${CMAKE_SOURCE_DIR}/data/webkit\"
 		-DEVOLUTION_TESTGIOMODULESDIR=\"${CMAKE_CURRENT_BINARY_DIR}/test-gio-modules\"
 		-DEVOLUTION_TESTTOPSRCDIR=\"${CMAKE_SOURCE_DIR}\"
+		-DE_DATA_SERVER_ICONDIR=\"${E_DATA_SERVER_ICONDIR}\"
 		-DLIBEUTIL_COMPILATION
 	)
 
@@ -814,6 +835,9 @@ add_private_programs_simple(
 	test-dateedit
 	test-html-editor
 	test-mail-signatures
+	test-markdown
+	test-markdown-editor
+	test-month-widget
 	test-name-selector
 	test-preferences-window
 	test-proxy-preferences

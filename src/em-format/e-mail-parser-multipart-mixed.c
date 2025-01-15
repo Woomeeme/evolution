@@ -48,6 +48,7 @@ empe_mp_mixed_maybe_update_message_info_headers (EMailParser *parser,
 						 GCancellable *cancellable)
 {
 	EMailPartList *part_list;
+	CamelMimeMessage *message;
 	CamelFolder *folder;
 	const gchar *message_uid;
 
@@ -65,6 +66,10 @@ empe_mp_mixed_maybe_update_message_info_headers (EMailParser *parser,
 	if (!part_list)
 		return;
 
+	message = e_mail_part_list_get_message (part_list);
+	if (message)
+		camel_mime_message_set_subject (message, subject);
+
 	folder = e_mail_part_list_get_folder (part_list);
 	message_uid = e_mail_part_list_get_message_uid (part_list);
 
@@ -73,8 +78,14 @@ empe_mp_mixed_maybe_update_message_info_headers (EMailParser *parser,
 
 		info = camel_folder_get_message_info (folder, message_uid);
 		if (info) {
-			camel_message_info_set_subject (info, subject);
+			gchar *tmp;
+
+			tmp = camel_header_decode_string (subject, NULL);
+
+			camel_message_info_set_subject (info, tmp ? tmp : subject);
+
 			g_clear_object (&info);
+			g_free (tmp);
 		}
 	}
 
@@ -185,8 +196,18 @@ empe_mp_mixed_parse (EMailParserExtension *extension,
 
 				/* The multipart/mixed contains some of the original headers */
 				subject = camel_medium_get_header (CAMEL_MEDIUM (part), "Subject");
-				if (subject)
+				if (subject) {
+					gchar *tmp = NULL;
+
+					if (strchr (subject, '\n')) {
+						tmp = camel_header_unfold (subject);
+						subject = tmp;
+					}
+
 					empe_mp_mixed_maybe_update_message_info_headers (parser, part_id->str, subject, cancellable);
+
+					g_free (tmp);
+				}
 			}
 
 			ct = camel_mime_part_get_content_type (subpart);
@@ -205,16 +226,16 @@ empe_mp_mixed_parse (EMailParserExtension *extension,
 			ct = camel_content_type_ref (ct);
 
 		if (!e_mail_parser_get_parsers_for_part (parser, subpart)) {
-			const gchar *snoop_type;
-			CamelContentType *snoop_ct = NULL;
+			gchar *guessed_mime_type;
+			CamelContentType *guessed_ct = NULL;
 
-			snoop_type = e_mail_part_snoop_type (subpart);
-			if (snoop_type)
-				snoop_ct = camel_content_type_decode (snoop_type);
+			guessed_mime_type = e_mail_part_guess_mime_type (subpart);
+			if (guessed_mime_type)
+				guessed_ct = camel_content_type_decode (guessed_mime_type);
 
-			if (snoop_ct && snoop_ct->type && snoop_ct->subtype && (
-			    !ct || g_ascii_strcasecmp (snoop_ct->type, ct->type) != 0 ||
-			    g_ascii_strcasecmp (snoop_ct->subtype, ct->subtype) != 0)) {
+			if (guessed_ct && guessed_ct->type && guessed_ct->subtype && (
+			    !ct || g_ascii_strcasecmp (guessed_ct->type, ct->type) != 0 ||
+			    g_ascii_strcasecmp (guessed_ct->subtype, ct->subtype) != 0)) {
 				CamelStream *mem_stream;
 
 				mem_stream = camel_stream_mem_new ();
@@ -229,7 +250,7 @@ empe_mp_mixed_parse (EMailParserExtension *extension,
 					opart = camel_mime_part_new ();
 
 					dw = camel_data_wrapper_new ();
-					camel_data_wrapper_set_mime_type (dw, snoop_type);
+					camel_data_wrapper_set_mime_type (dw, guessed_mime_type);
 					if (camel_data_wrapper_construct_from_stream_sync (dw, mem_stream, cancellable, NULL)) {
 						const gchar *disposition;
 
@@ -244,17 +265,17 @@ empe_mp_mixed_parse (EMailParserExtension *extension,
 						if (ct && ct->params) {
 							CamelHeaderParam *param;
 							for (param = ct->params; param; param = param->next) {
-								camel_content_type_set_param (snoop_ct, param->name, param->value);
+								camel_content_type_set_param (guessed_ct, param->name, param->value);
 							}
 						}
 
-						camel_content_type_set_param (snoop_ct, E_MAIL_PART_X_EVOLUTION_GUESSED, "1");
-						camel_data_wrapper_set_mime_type_field (CAMEL_DATA_WRAPPER (opart), snoop_ct);
+						camel_content_type_set_param (guessed_ct, E_MAIL_PART_X_EVOLUTION_GUESSED, "1");
+						camel_data_wrapper_set_mime_type_field (CAMEL_DATA_WRAPPER (opart), guessed_ct);
 
 						handled = e_mail_parser_parse_part (parser, opart, part_id, cancellable, &work_queue);
 						if (handled) {
 							camel_content_type_unref (ct);
-							ct = camel_content_type_ref (snoop_ct);
+							ct = camel_content_type_ref (guessed_ct);
 						}
 					}
 
@@ -265,8 +286,9 @@ empe_mp_mixed_parse (EMailParserExtension *extension,
 				g_object_unref (mem_stream);
 			}
 
-			if (snoop_ct)
-				camel_content_type_unref (snoop_ct);
+			if (guessed_ct)
+				camel_content_type_unref (guessed_ct);
+			g_free (guessed_mime_type);
 		}
 
 		if (!handled) {

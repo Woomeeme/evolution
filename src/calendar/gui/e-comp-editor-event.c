@@ -50,7 +50,7 @@ struct _ECompEditorEventPrivate {
 	gpointer insensitive_info_alert;
 };
 
-G_DEFINE_TYPE (ECompEditorEvent, e_comp_editor_event, E_TYPE_COMP_EDITOR)
+G_DEFINE_TYPE_WITH_PRIVATE (ECompEditorEvent, e_comp_editor_event, E_TYPE_COMP_EDITOR)
 
 static void
 ece_event_action_classification_cb (GtkRadioAction *action,
@@ -82,6 +82,9 @@ ece_event_update_times (ECompEditorEvent *event_editor,
 			event_editor->priv->dtstart,
 			event_editor->priv->dtend,
 			change_end_datetime);
+		e_comp_editor_ensure_same_value_type (E_COMP_EDITOR (event_editor),
+			change_end_datetime ? event_editor->priv->dtstart : event_editor->priv->dtend,
+			change_end_datetime ? event_editor->priv->dtend : event_editor->priv->dtstart);
 	}
 
 	flags = e_comp_editor_get_flags (E_COMP_EDITOR (event_editor));
@@ -145,6 +148,13 @@ ece_event_all_day_toggled_cb (ECompEditorEvent *event_editor)
 
 	edit_widget = e_comp_editor_property_part_get_edit_widget (event_editor->priv->dtstart);
 
+	if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (event_editor->priv->all_day_check))) {
+		gint hour, minute;
+
+		if (!e_date_edit_get_time_of_day (E_DATE_EDIT (edit_widget), &hour, &minute))
+			e_date_edit_set_time_of_day (E_DATE_EDIT (edit_widget), 0, 0);
+	}
+
 	ece_event_update_times (event_editor, E_DATE_EDIT (edit_widget), TRUE);
 
 	e_comp_editor_ensure_changed (E_COMP_EDITOR (event_editor));
@@ -189,7 +199,15 @@ ece_event_sensitize_widgets (ECompEditor *comp_editor,
 	action = e_comp_editor_get_action (comp_editor, "all-day-event");
 	gtk_action_set_sensitive (action, !force_insensitive);
 
-	action = e_comp_editor_get_action (comp_editor, "classification-menu");
+	/* Disable radio items, instead of the whole submenu,
+	   to see the value with read-only events/calendars. */
+	action = e_comp_editor_get_action (comp_editor, "classify-private");
+	gtk_action_set_sensitive (action, !force_insensitive);
+
+	action = e_comp_editor_get_action (comp_editor, "classify-confidential");
+	gtk_action_set_sensitive (action, !force_insensitive);
+
+	action = e_comp_editor_get_action (comp_editor, "classify-public");
 	gtk_action_set_sensitive (action, !force_insensitive);
 
 	if (event_editor->priv->insensitive_info_alert)
@@ -414,9 +432,49 @@ ece_event_fill_widgets (ECompEditor *comp_editor,
 
 	if (dtstart && i_cal_time_is_valid_time (dtstart) && !i_cal_time_is_null_time (dtstart) &&
 	    (!dtend || !i_cal_time_is_valid_time (dtend) || i_cal_time_is_null_time (dtend))) {
+		gboolean dtend_set = FALSE;
 		g_clear_object (&dtend);
 		dtend = i_cal_time_clone (dtstart);
-		if (i_cal_time_is_date (dtstart))
+
+		if (e_cal_util_component_has_property (component, I_CAL_DURATION_PROPERTY)) {
+			prop = i_cal_component_get_first_property (component, I_CAL_DURATION_PROPERTY);
+			if (prop) {
+				ICalDuration *duration;
+
+				g_clear_object (&prop);
+
+				duration = i_cal_component_get_duration (component);
+				if (!duration || i_cal_duration_is_null_duration (duration) || i_cal_duration_is_bad_duration (duration)) {
+					g_clear_object (&duration);
+				/* The DURATION shouldn't be negative, but just return DTSTART if it
+				 * is, i.e. assume it is 0. */
+				} else if (!i_cal_duration_is_neg (duration)) {
+					guint dur_days, dur_hours, dur_minutes, dur_seconds;
+
+					/* If DTSTART is a DATE value, then we need to check if the DURATION
+					 * includes any hours, minutes or seconds. If it does, we need to
+					 * make the DTEND/DUE a DATE-TIME value. */
+					dur_days = i_cal_duration_get_days (duration) + (7 * i_cal_duration_get_weeks (duration));
+					dur_hours = i_cal_duration_get_hours (duration);
+					dur_minutes = i_cal_duration_get_minutes (duration);
+					dur_seconds = i_cal_duration_get_seconds (duration);
+
+					if (i_cal_time_is_date (dtend) && (
+					    dur_hours != 0 || dur_minutes != 0 || dur_seconds != 0)) {
+						i_cal_time_set_is_date (dtend, FALSE);
+					}
+
+					/* Add on the DURATION. */
+					i_cal_time_adjust (dtend, dur_days, dur_hours, dur_minutes, dur_seconds);
+
+					dtend_set = TRUE;
+				}
+
+				g_clear_object (&duration);
+			}
+		}
+
+		if (!dtend_set && i_cal_time_is_date (dtstart))
 			i_cal_time_adjust (dtend, 1, 0, 0, 0);
 	}
 
@@ -541,7 +599,6 @@ ece_event_fill_component (ECompEditor *comp_editor,
 			set_dtend = TRUE;
 
 			if (ece_event_client_needs_all_day_as_time (comp_editor)) {
-				ECompEditorEvent *event_editor = E_COMP_EDITOR_EVENT (comp_editor);
 				GtkWidget *timezone_entry;
 				ICalTimezone *zone;
 
@@ -569,6 +626,8 @@ ece_event_fill_component (ECompEditor *comp_editor,
 
 			i_cal_property_set_dtend (dtend_prop, dtend);
 			cal_comp_util_update_tzid_parameter (dtend_prop, dtend);
+
+			e_cal_util_component_remove_property_by_kind (component, I_CAL_DURATION_PROPERTY, TRUE);
 		}
 
 		g_clear_object (&dtstart);
@@ -859,6 +918,8 @@ e_comp_editor_event_constructed (GObject *object)
 	ECompEditorPropertyPart *part;
 	ECompEditorPropertyPart *summary;
 	EFocusTracker *focus_tracker;
+	EMeetingStore *meeting_store;
+	ENameSelector *name_selector;
 	GtkWidget *widget;
 
 	G_OBJECT_CLASS (e_comp_editor_event_parent_class)->constructed (object);
@@ -872,6 +933,9 @@ e_comp_editor_event_constructed (GObject *object)
 		NULL, FALSE, 2);
 	event_editor->priv->page_general = page;
 
+	meeting_store = e_comp_editor_page_general_get_meeting_store (E_COMP_EDITOR_PAGE_GENERAL (event_editor->priv->page_general));
+	name_selector = e_comp_editor_page_general_get_name_selector (E_COMP_EDITOR_PAGE_GENERAL (event_editor->priv->page_general));
+
 	part = e_comp_editor_property_part_summary_new (focus_tracker);
 	e_comp_editor_page_add_property_part (page, part, 0, 2, 3, 1);
 	summary = part;
@@ -879,7 +943,7 @@ e_comp_editor_event_constructed (GObject *object)
 	part = e_comp_editor_property_part_location_new (focus_tracker);
 	e_comp_editor_page_add_property_part (page, part, 0, 3, 3, 1);
 
-	part = e_comp_editor_property_part_dtstart_new (C_("ECompEditor", "_Start time:"), FALSE, FALSE);
+	part = e_comp_editor_property_part_dtstart_new (C_("ECompEditor", "_Start time:"), FALSE, FALSE, TRUE);
 	e_comp_editor_page_add_property_part (page, part, 0, 4, 2, 1);
 	e_comp_editor_property_part_set_sensitize_handled (part, TRUE);
 	event_editor->priv->dtstart = part;
@@ -932,6 +996,11 @@ e_comp_editor_event_constructed (GObject *object)
 	event_editor->priv->description = part;
 
 	widget = e_comp_editor_property_part_get_edit_widget (event_editor->priv->timezone);
+
+	e_binding_bind_property (widget, "timezone",
+		meeting_store, "timezone",
+		G_BINDING_SYNC_CREATE);
+
 	e_comp_editor_property_part_datetime_attach_timezone_entry (
 		E_COMP_EDITOR_PROPERTY_PART_DATETIME (event_editor->priv->dtstart),
 		E_TIMEZONE_ENTRY (widget));
@@ -973,9 +1042,7 @@ e_comp_editor_event_constructed (GObject *object)
 	page = e_comp_editor_page_attachments_new (comp_editor);
 	e_comp_editor_add_page (comp_editor, C_("ECompEditorPage", "Attachments"), page);
 
-	page = e_comp_editor_page_schedule_new (comp_editor,
-		e_comp_editor_page_general_get_meeting_store (
-		E_COMP_EDITOR_PAGE_GENERAL (event_editor->priv->page_general)));
+	page = e_comp_editor_page_schedule_new (comp_editor, meeting_store, name_selector);
 	e_binding_bind_property (
 		event_editor->priv->page_general, "show-attendees",
 		page, "visible",
@@ -1000,7 +1067,7 @@ e_comp_editor_event_constructed (GObject *object)
 static void
 e_comp_editor_event_init (ECompEditorEvent *event_editor)
 {
-	event_editor->priv = G_TYPE_INSTANCE_GET_PRIVATE (event_editor, E_TYPE_COMP_EDITOR_EVENT, ECompEditorEventPrivate);
+	event_editor->priv = e_comp_editor_event_get_instance_private (event_editor);
 }
 
 static void
@@ -1008,8 +1075,6 @@ e_comp_editor_event_class_init (ECompEditorEventClass *klass)
 {
 	GObjectClass *object_class;
 	ECompEditorClass *comp_editor_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorEventPrivate));
 
 	object_class = G_OBJECT_CLASS (klass);
 	object_class->constructed = e_comp_editor_event_constructed;

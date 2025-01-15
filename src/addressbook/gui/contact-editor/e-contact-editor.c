@@ -33,9 +33,7 @@
 #include <gdk/gdkkeysyms.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 
-#define GCR_API_SUBJECT_TO_CHANGE
-#include <gcr/gcr.h>
-#undef GCR_API_SUBJECT_TO_CHANGE
+#include <libedataserverui/libedataserverui.h>
 
 #include "shell/e-shell.h"
 #include "e-util/e-util.h"
@@ -48,6 +46,10 @@
 
 #include "e-contact-editor-fullname.h"
 #include "e-contact-editor-dyntable.h"
+
+#ifdef ENABLE_SMIME
+#include "smime/lib/e-cert.h"
+#endif
 
 #define SLOTS_PER_LINE 2
 #define SLOTS_IN_COLLAPSED_STATE SLOTS_PER_LINE
@@ -88,7 +90,7 @@ enum {
 };
 
 typedef struct {
-	EContactEditor *editor;
+	GWeakRef *editor_weak_ref; /* EContactEditor * */
 	ESource *source;
 } ConnectClosure;
 
@@ -120,8 +122,6 @@ static void	set_entry_text			(EContactEditor *editor,
 						 const gchar *string);
 static void	sensitize_ok			(EContactEditor *ce);
 
-static EABEditorClass *parent_class = NULL;
-
 enum {
 	PROP_0,
 	PROP_SOURCE_CLIENT,
@@ -141,7 +141,7 @@ enum {
 };
 
 /* Defaults selected from eab_phone_types */
-static const gint phones_default[] = { 1, 6, 9, 2, 7, 12, 10, 10 };
+static const gint phones_default[] = { 1, 9, 6, 2, 7, 12, 10, 10 };
 
 static EContactField addresses[] = {
 	E_CONTACT_ADDRESS_WORK,
@@ -246,7 +246,7 @@ struct _EContactEditorPrivate
 	EFocusTracker *focus_tracker;
 };
 
-G_DEFINE_TYPE (EContactEditor, e_contact_editor, EAB_TYPE_EDITOR)
+G_DEFINE_TYPE_WITH_PRIVATE (EContactEditor, e_contact_editor, EAB_TYPE_EDITOR)
 
 static GtkActionEntry undo_entries[] = {
 
@@ -276,12 +276,8 @@ static GtkActionEntry undo_entries[] = {
 static void
 connect_closure_free (ConnectClosure *connect_closure)
 {
-	if (connect_closure->editor != NULL)
-		g_object_unref (connect_closure->editor);
-
-	if (connect_closure->source != NULL)
-		g_object_unref (connect_closure->source);
-
+	e_weak_ref_free (connect_closure->editor_weak_ref);
+	g_clear_object (&connect_closure->source);
 	g_slice_free (ConnectClosure, connect_closure);
 }
 
@@ -356,10 +352,6 @@ e_contact_editor_class_init (EContactEditorClass *class)
 {
 	GObjectClass *object_class = G_OBJECT_CLASS (class);
 	EABEditorClass *editor_class = EAB_EDITOR_CLASS (class);
-
-	g_type_class_add_private (class, sizeof (EContactEditorPrivate));
-
-	parent_class = g_type_class_ref (EAB_TYPE_EDITOR);
 
 	object_class->set_property = e_contact_editor_set_property;
 	object_class->get_property = e_contact_editor_get_property;
@@ -570,13 +562,15 @@ name_to_style (const EContactName *name,
 		}
 		*midstrptr = NULL;
 		stringptr = strings;
-		*(stringptr++) = g_strjoinv(", ", midstring);
+		substring = g_strjoinv (", ", midstring);
+		*(stringptr++) = substring;
 		if (name) {
 			if (name->additional && *name->additional)
 				*(stringptr++) = name->additional;
 		}
 		*stringptr = NULL;
 		string = g_strjoinv (" ", strings);
+		g_free (substring);
 		break;
 	case 3:
 		string = g_strdup (company);
@@ -2948,7 +2942,7 @@ extract_simple_field (EContactEditor *editor,
 
 					height = gdk_pixbuf_get_height (pixbuf);
 					width = gdk_pixbuf_get_width (pixbuf);
-					if ((height > 96 || width > 96)) {
+					if ((height > 1024 || width > 1024)) {
 
 						prompt_response =
 							e_alert_run_dialog_for_args
@@ -2958,11 +2952,11 @@ extract_simple_field (EContactEditor *editor,
 
 						if (prompt_response == GTK_RESPONSE_YES) {
 							if (width > height) {
-								height = height * 96 / width;
-								width = 96;
+								height = height * 1024 / width;
+								width = 1024;
 							} else {
-								width = width *96 / height;
-								height = 96;
+								width = width * 1024 / height;
+								height = 1024;
 							}
 
 							new = e_icon_factory_pixbuf_scale (pixbuf, width, height);
@@ -3177,8 +3171,7 @@ enum CertColumns {
 	CERT_COLUMN_SUBJECT_STRING,
 	CERT_COLUMN_KIND_STRING,
 	CERT_COLUMN_KIND_INT,
-	CERT_COLUMN_DATA_ECONTACTCERT,
-	CERT_COLUMN_CERT_GCRCERTIFICATE,
+	CERT_COLUMN_CERT_BYTES,
 	N_CERT_COLUMNS
 };
 
@@ -3213,18 +3206,18 @@ cert_tab_selection_changed_cb (GtkTreeSelection *selection,
 	if (GTK_IS_VIEWPORT (widget))
 		widget = gtk_bin_get_child (GTK_BIN (widget));
 
-	g_return_if_fail (GCR_IS_CERTIFICATE_WIDGET (widget));
+	g_return_if_fail (E_IS_CERTIFICATE_WIDGET (widget));
 
 	if (has_selected) {
-		GcrCertificate *cert = NULL;
+		GBytes *cert_bytes = NULL;
 
-		gtk_tree_model_get (model, &iter, CERT_COLUMN_CERT_GCRCERTIFICATE, &cert, -1);
+		gtk_tree_model_get (model, &iter, CERT_COLUMN_CERT_BYTES, &cert_bytes, -1);
 
-		gcr_certificate_widget_set_certificate (GCR_CERTIFICATE_WIDGET (widget), cert);
+		e_certificate_widget_set_der (E_CERTIFICATE_WIDGET (widget), g_bytes_get_data (cert_bytes, NULL), g_bytes_get_size (cert_bytes));
 
-		g_clear_object (&cert);
+		g_clear_pointer (&cert_bytes, g_bytes_unref);
 	} else {
-		gcr_certificate_widget_set_certificate (GCR_CERTIFICATE_WIDGET (widget), NULL);
+		e_certificate_widget_set_der (E_CERTIFICATE_WIDGET (widget), NULL, 0);
 	}
 }
 
@@ -3313,7 +3306,7 @@ cert_update_row_with_cert (GtkListStore *list_store,
 			   EContactCert *cert,
 			   enum CertKind kind)
 {
-	GcrCertificate *gcr_cert = NULL;
+	GBytes *cert_bytes;
 	gchar *subject = NULL;
 
 	g_return_if_fail (GTK_IS_LIST_STORE (list_store));
@@ -3321,21 +3314,65 @@ cert_update_row_with_cert (GtkListStore *list_store,
 	g_return_if_fail (cert != NULL);
 	g_return_if_fail (kind == CERT_KIND_PGP || kind == CERT_KIND_X509);
 
-	if (kind == CERT_KIND_X509) {
-		gcr_cert = gcr_simple_certificate_new ((const guchar *) cert->data, cert->length);
-		if (gcr_cert)
-			subject = gcr_certificate_get_subject_name (gcr_cert);
+	if (kind == CERT_KIND_X509 && cert->data && cert->length) {
+		#ifdef ENABLE_SMIME
+		ECert *ecert;
+
+		ecert = e_cert_new_from_der (cert->data, cert->length);
+		if (ecert) {
+			const gchar *ident;
+
+			ident = e_cert_get_cn (ecert);
+			if (!ident || !*ident)
+				ident = e_cert_get_email (ecert);
+			if (!ident || !*ident)
+				ident = e_cert_get_subject_name (ecert);
+
+			subject = g_strdup (ident);
+
+			g_object_unref (ecert);
+		}
+		#else
+		GTlsCertificate *tls_cert;
+
+		tls_cert = g_tls_certificate_new_from_pem (cert->data, cert->length, NULL);
+		if (!tls_cert) {
+			gchar *encoded;
+
+			encoded = g_base64_encode ((const guchar *) cert->data, cert->length);
+			if (encoded) {
+				GString *pem = g_string_sized_new (cert->length + 60);
+
+				g_string_append (pem, "-----BEGIN CERTIFICATE-----\n");
+				g_string_append (pem, encoded);
+				g_string_append (pem, "\n-----END CERTIFICATE-----\n");
+
+				tls_cert = g_tls_certificate_new_from_pem (pem->str, pem->len, NULL);
+
+				g_string_free (pem, TRUE);
+			}
+
+			g_free (encoded);
+		}
+
+		if (tls_cert) {
+			subject = g_tls_certificate_get_subject_name (tls_cert);
+
+			g_clear_object (&tls_cert);
+		}
+		#endif
 	}
+
+	cert_bytes = g_bytes_new (cert->data, cert->length);
 
 	gtk_list_store_set (list_store, iter,
 		CERT_COLUMN_SUBJECT_STRING, subject,
 		CERT_COLUMN_KIND_STRING, kind == CERT_KIND_X509 ? C_("cert-kind", "X.509") : C_("cert-kind", "PGP"),
 		CERT_COLUMN_KIND_INT, kind,
-		CERT_COLUMN_DATA_ECONTACTCERT, cert,
-		CERT_COLUMN_CERT_GCRCERTIFICATE, gcr_cert,
+		CERT_COLUMN_CERT_BYTES, cert_bytes,
 		-1);
 
-	g_clear_object (&gcr_cert);
+	g_clear_pointer (&cert_bytes, g_bytes_unref);
 	g_free (subject);
 }
 
@@ -3475,7 +3512,7 @@ cert_save_btn_clicked_cb (GtkWidget *button,
 	GtkTreeSelection *selection;
 	GtkTreeModel *model;
 	GtkTreeIter iter;
-	EContactCert *cert = NULL;
+	GBytes *cert_bytes = NULL;
 	gint kind = -1;
 	GtkWindow *parent;
 	GtkFileChooserNative *native;
@@ -3492,11 +3529,11 @@ cert_save_btn_clicked_cb (GtkWidget *button,
 
 	gtk_tree_model_get (model, &iter,
 		CERT_COLUMN_KIND_INT, &kind,
-		CERT_COLUMN_DATA_ECONTACTCERT, &cert,
+		CERT_COLUMN_CERT_BYTES, &cert_bytes,
 		-1);
 
 	g_return_if_fail (kind == CERT_KIND_X509 || kind == CERT_KIND_PGP);
-	g_return_if_fail (cert != NULL);
+	g_return_if_fail (cert_bytes != NULL);
 
 	parent = eab_editor_get_window (EAB_EDITOR (editor));
 	native = gtk_file_chooser_native_new (
@@ -3517,14 +3554,14 @@ cert_save_btn_clicked_cb (GtkWidget *button,
 		if (!filename) {
 			g_set_error_literal (&error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, _("Chosen file is not a local file."));
 		} else {
-			g_file_set_contents (filename, cert->data, cert->length, &error);
+			g_file_set_contents (filename, g_bytes_get_data (cert_bytes, NULL), g_bytes_get_size (cert_bytes), &error);
 		}
 
 		g_free (filename);
 	}
 
 	g_object_unref (native);
-	e_contact_cert_free (cert);
+	g_bytes_unref (cert_bytes);
 
 	if (error) {
 		e_notice (parent, GTK_MESSAGE_ERROR, _("Failed to save certificate: %s"), error->message);
@@ -3540,7 +3577,7 @@ init_certs (EContactEditor *editor)
 	GtkTreeViewColumn *column;
 	GtkTreeSelection *selection;
 	GtkCellRenderer *renderer;
-	GcrCertificateWidget *certificate_widget;
+	GtkWidget *certificate_widget;
 	GtkWidget *widget;
 
 	tree_view = GTK_TREE_VIEW (e_builder_get_widget (editor->priv->builder, "certs-treeview"));
@@ -3567,15 +3604,14 @@ init_certs (EContactEditor *editor)
 		G_TYPE_STRING,		/* CERT_COLUMN_SUBJECT_STRING */
 		G_TYPE_STRING,		/* CERT_COLUMN_KIND_STRING */
 		G_TYPE_INT,		/* CERT_COLUMN_KIND_INT */
-		E_TYPE_CONTACT_CERT,	/* CERT_COLUMN_DATA_ECONTACTCERT */
-		GCR_TYPE_CERTIFICATE);	/* CERT_COLUMN_CERT_GCRCERTIFICATE */
+		G_TYPE_BYTES);		/* CERT_COLUMN_CERT_BYTES */
 
 	gtk_tree_view_set_model (tree_view, GTK_TREE_MODEL (list_store));
 
-	certificate_widget = gcr_certificate_widget_new (NULL);
-	gtk_widget_show (GTK_WIDGET (certificate_widget));
+	certificate_widget = e_certificate_widget_new ();
+	gtk_widget_show (certificate_widget);
 	widget = e_builder_get_widget (editor->priv->builder, "cert-preview-scw");
-	gtk_container_add (GTK_CONTAINER (widget), GTK_WIDGET (certificate_widget));
+	gtk_container_add (GTK_CONTAINER (widget), certificate_widget);
 
 	selection = gtk_tree_view_get_selection (tree_view);
 	gtk_tree_selection_set_mode (selection, GTK_SELECTION_SINGLE);
@@ -3625,7 +3661,6 @@ fill_in_certs (EContactEditor *editor)
 		EVCardAttribute *attr = link->data;
 		EContactCert *cert;
 		GString *value;
-		GtkTreeIter iter;
 
 		if (e_vcard_attribute_has_type (attr, "X509"))
 			kind = CERT_KIND_X509;
@@ -3676,15 +3711,15 @@ extract_certs_for_kind (EContactEditor *editor,
 	if (is_field_supported (editor, field)) {
 		valid = gtk_tree_model_get_iter_first (model, &iter);
 		while (valid) {
-			EContactCert *cert = NULL;
+			GBytes *cert_bytes = NULL;
 			gint set_kind = -1;
 
 			gtk_tree_model_get (model, &iter,
 					    CERT_COLUMN_KIND_INT, &set_kind,
-					    CERT_COLUMN_DATA_ECONTACTCERT, &cert,
+					    CERT_COLUMN_CERT_BYTES, &cert_bytes,
 					   -1);
 
-			if (cert && set_kind == kind) {
+			if (cert_bytes && set_kind == kind) {
 				EVCardAttribute *attr;
 
 				attr = e_vcard_attribute_new ("", e_contact_vcard_attribute (field));
@@ -3696,12 +3731,12 @@ extract_certs_for_kind (EContactEditor *editor,
 					e_vcard_attribute_param_new (EVC_ENCODING),
 					"b");
 
-				e_vcard_attribute_add_value_decoded (attr, cert->data, cert->length);
+				e_vcard_attribute_add_value_decoded (attr, g_bytes_get_data (cert_bytes, NULL), g_bytes_get_size (cert_bytes));
 
 				attrs = g_list_prepend (attrs, attr);
 			}
 
-			e_contact_cert_free (cert);
+			g_clear_pointer (&cert_bytes, g_bytes_unref);
 
 			valid = gtk_tree_model_iter_next (model, &iter);
 		}
@@ -3905,8 +3940,7 @@ init_all (EContactEditor *editor)
 		GdkRectangle monitor_area;
 		gint x = 0, y = 0, monitor, width, height;
 
-		window = e_builder_get_widget (
-			editor->priv->builder, "contact editor");
+		window = editor->priv->app;
 
 		gtk_widget_get_preferred_size (window, &tab_req, NULL);
 		width = tab_req.width - 320 + 24;
@@ -3966,31 +4000,36 @@ contact_editor_get_client_cb (GObject *source_object,
 	if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
 		g_warn_if_fail (client == NULL);
 		g_error_free (error);
-		goto exit;
+	} else {
+		EContactEditor *editor;
 
-	} else if (error != NULL) {
-		GtkWindow *parent;
+		editor = g_weak_ref_get (closure->editor_weak_ref);
 
-		parent = eab_editor_get_window (EAB_EDITOR (closure->editor));
+		if (editor) {
+			if (error != NULL) {
+				GtkWindow *parent;
 
-		eab_load_error_dialog (
-			GTK_WIDGET (parent), NULL,
-			closure->source, error);
+				parent = eab_editor_get_window (EAB_EDITOR (editor));
 
-		e_source_combo_box_set_active (
-			E_SOURCE_COMBO_BOX (combo_box),
-			e_client_get_source (E_CLIENT (closure->editor->priv->target_client)));
+				eab_load_error_dialog (
+					GTK_WIDGET (parent), NULL,
+					closure->source, error);
 
-		g_error_free (error);
-		goto exit;
+				e_source_combo_box_set_active (
+					E_SOURCE_COMBO_BOX (combo_box),
+					e_client_get_source (E_CLIENT (editor->priv->target_client)));
+
+				g_error_free (error);
+			} else {
+				/* FIXME Write a private contact_editor_set_target_client(). */
+				g_object_set (editor, "target_client", client, NULL);
+			}
+		}
+
+		g_clear_object (&client);
+		g_clear_object (&editor);
 	}
 
-	/* FIXME Write a private contact_editor_set_target_client(). */
-	g_object_set (closure->editor, "target_client", client, NULL);
-
-	g_object_unref (client);
-
-exit:
 	connect_closure_free (closure);
 }
 
@@ -4029,7 +4068,7 @@ source_changed (EClientComboBox *combo_box,
 	editor->priv->cancellable = g_cancellable_new ();
 
 	closure = g_slice_new0 (ConnectClosure);
-	closure->editor = g_object_ref (editor);
+	closure->editor_weak_ref = e_weak_ref_new (editor);
 	closure->source = g_object_ref (source);
 
 	e_client_combo_box_get_client (
@@ -4550,12 +4589,12 @@ real_save_contact (EContactEditor *ce,
 		/* Two-step move; add to target, then remove from source */
 		eab_merging_book_add_contact (
 			registry, ce->priv->target_client,
-			ce->priv->contact, contact_added_cb, ecs);
+			ce->priv->contact, contact_added_cb, ecs, FALSE);
 	} else {
 		if (ce->priv->is_new_contact)
 			eab_merging_book_add_contact (
 				registry, ce->priv->target_client,
-				ce->priv->contact, contact_added_cb, ecs);
+				ce->priv->contact, contact_added_cb, ecs, FALSE);
 		else if (ce->priv->check_merge)
 			eab_merging_book_modify_contact (
 				registry, ce->priv->target_client,
@@ -5006,9 +5045,9 @@ e_contact_editor_init (EContactEditor *e_contact_editor)
 	GtkWidget *container;
 	GtkWidget *widget, *label, *dyntable;
 	GtkEntryCompletion *completion;
+	GtkAccelGroup *accel_group;
 
-	e_contact_editor->priv = G_TYPE_INSTANCE_GET_PRIVATE (
-		e_contact_editor, E_TYPE_CONTACT_EDITOR, EContactEditorPrivate);
+	e_contact_editor->priv = e_contact_editor_get_instance_private (e_contact_editor);
 
 	/* FIXME The shell should be obtained
 	 *       through a constructor property. */
@@ -5042,16 +5081,62 @@ e_contact_editor_init (EContactEditor *e_contact_editor)
 
 	setup_tab_order (builder);
 
-	e_contact_editor->priv->app =
-		e_builder_get_widget (builder, "contact editor");
-	widget = e_contact_editor->priv->app;
+	e_contact_editor->priv->app = g_object_new (GTK_TYPE_DIALOG,
+		"window-position", GTK_WIN_POS_CENTER,
+		"can-focus", FALSE,
+		"title", _("Contact Editor"),
+		"use-header-bar", e_util_get_use_header_bar (),
+		NULL);
 
-	gtk_window_set_type_hint (
-		GTK_WINDOW (widget), GDK_WINDOW_TYPE_HINT_NORMAL);
-	container = gtk_dialog_get_action_area (GTK_DIALOG (widget));
+	gtk_window_set_type_hint (GTK_WINDOW (e_contact_editor->priv->app), GDK_WINDOW_TYPE_HINT_NORMAL);
+	container = gtk_dialog_get_action_area (GTK_DIALOG (e_contact_editor->priv->app));
 	gtk_container_set_border_width (GTK_CONTAINER (container), 12);
-	container = gtk_dialog_get_content_area (GTK_DIALOG (widget));
+	container = gtk_dialog_get_content_area (GTK_DIALOG (e_contact_editor->priv->app));
 	gtk_container_set_border_width (GTK_CONTAINER (container), 0);
+	widget = e_builder_get_widget (builder, "contact-editor-box");
+	gtk_container_add (GTK_CONTAINER (container), widget);
+
+	if (e_util_get_use_header_bar ()) {
+		container = gtk_dialog_get_header_bar (GTK_DIALOG (e_contact_editor->priv->app));
+
+		widget = e_builder_get_widget (builder, "button-ok");
+		gtk_header_bar_pack_start (GTK_HEADER_BAR (container), widget);
+
+		widget = e_builder_get_widget (builder, "button-config");
+		gtk_header_bar_pack_end (GTK_HEADER_BAR (container), widget);
+
+		widget = e_builder_get_widget (builder, "button-help");
+		gtk_header_bar_pack_end (GTK_HEADER_BAR (container), widget);
+	} else {
+		container = gtk_dialog_get_action_area (GTK_DIALOG (e_contact_editor->priv->app));
+
+		widget = e_builder_get_widget (builder, "button-config");
+		gtk_box_pack_end (GTK_BOX (container), widget, FALSE, FALSE, 0);
+		gtk_widget_set_valign (widget, GTK_ALIGN_FILL);
+
+		widget = e_builder_get_widget (builder, "button-cancel");
+		gtk_dialog_add_action_widget (GTK_DIALOG (e_contact_editor->priv->app), widget, GTK_RESPONSE_CANCEL);
+		gtk_widget_set_valign (widget, GTK_ALIGN_FILL);
+
+		widget = e_builder_get_widget (builder, "button-ok");
+		gtk_dialog_add_action_widget (GTK_DIALOG (e_contact_editor->priv->app), widget, GTK_RESPONSE_OK);
+		gtk_widget_set_valign (widget, GTK_ALIGN_FILL);
+
+		widget = e_builder_get_widget (builder, "button-help");
+		gtk_button_set_label (GTK_BUTTON (widget), _("_Help"));
+		gtk_style_context_remove_class (gtk_widget_get_style_context (widget), "image-button");
+		gtk_dialog_add_action_widget (GTK_DIALOG (e_contact_editor->priv->app), widget, GTK_RESPONSE_HELP);
+		gtk_widget_set_valign (widget, GTK_ALIGN_FILL);
+	}
+
+	accel_group = gtk_accel_group_new ();
+	widget = e_builder_get_widget (builder, "button-ok");
+	gtk_widget_grab_default (widget);
+	gtk_widget_add_accelerator (
+		widget, "clicked", accel_group,
+		's', GDK_CONTROL_MASK, 0);
+	gtk_window_add_accel_group (GTK_WINDOW (e_contact_editor->priv->app), accel_group);
+	g_clear_object (&accel_group);
 
 	init_all (e_contact_editor);
 
@@ -5082,6 +5167,12 @@ e_contact_editor_init (EContactEditor *e_contact_editor)
 	gtk_label_set_mnemonic_widget (GTK_LABEL (label), widget);
 	widget = e_builder_get_widget (
 		e_contact_editor->priv->builder, "button-ok");
+	if (e_util_get_use_header_bar ()) {
+		/* Already set in the .ui file, but does not work */
+		gtk_style_context_add_class (
+			gtk_widget_get_style_context (widget),
+			"suggested-action");
+	}
 	g_signal_connect (
 		widget, "clicked",
 		G_CALLBACK (file_save_and_close_cb), e_contact_editor);
@@ -5168,7 +5259,7 @@ e_contact_editor_constructed (GObject *object)
 	GError *error = NULL;
 
 	/* Chain up to parent's method. */
-	G_OBJECT_CLASS (parent_class)->constructed (object);
+	G_OBJECT_CLASS (e_contact_editor_parent_class)->constructed (object);
 
 	editor->priv->focus_tracker = e_focus_tracker_new (GTK_WINDOW (editor->priv->app));
 	editor->priv->ui_manager = gtk_ui_manager_new ();
@@ -5246,7 +5337,7 @@ e_contact_editor_dispose (GObject *object)
 	g_clear_object (&e_contact_editor->priv->focus_tracker);
 
 	/* Chain up to parent's dispose() method. */
-	G_OBJECT_CLASS (parent_class)->dispose (object);
+	G_OBJECT_CLASS (e_contact_editor_parent_class)->dispose (object);
 }
 
 static void

@@ -260,6 +260,7 @@ struct _EWeekView {
 	/* The icons. */
 	GdkPixbuf *reminder_icon;
 	GdkPixbuf *recurrence_icon;
+	GdkPixbuf *detached_recurrence_icon;
 	GdkPixbuf *attach_icon;
 	GdkPixbuf *timezone_icon;
 	GdkPixbuf *meeting_icon;
@@ -456,6 +457,11 @@ void		e_week_view_scroll_a_step	(EWeekView *week_view,
 						 ECalViewMoveDirection direction);
 
 gboolean	e_week_view_is_editing		(EWeekView *week_view);
+const gchar *	e_week_view_get_today_background_color
+						(EWeekView *week_view);
+void		e_week_view_set_today_background_color
+						(EWeekView *week_view,
+						 const gchar *color);
 
 G_END_DECLS
 

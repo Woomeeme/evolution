@@ -60,8 +60,8 @@ e_mail_formatter_format_text_header (EMailFormatter *formatter,
 	if (!(flags & E_MAIL_FORMATTER_HEADER_FLAG_HTML)) {
 		CamelMimeFilterToHTMLFlags text_format_flags;
 
-		text_format_flags =
-			e_mail_formatter_get_text_format_flags (formatter);
+		text_format_flags = e_mail_formatter_get_text_format_flags (formatter) &
+			(~CAMEL_MIME_FILTER_TOHTML_MARK_CITATION);
 		html = mhtml = camel_text_to_html (
 			value, text_format_flags, 0);
 	} else {
@@ -380,8 +380,8 @@ e_mail_formatter_format_header (EMailFormatter *formatter,
 		while (*txt == ' ' || *txt == '\t')
 			txt++;
 
-		text_format_flags =
-			e_mail_formatter_get_text_format_flags (formatter);
+		text_format_flags = e_mail_formatter_get_text_format_flags (formatter) &
+			(~CAMEL_MIME_FILTER_TOHTML_MARK_CITATION);
 
 		html = camel_text_to_html (txt, text_format_flags, 0);
 
@@ -400,21 +400,25 @@ e_mail_formatter_format_header (EMailFormatter *formatter,
 			txt = value = html;
 		} else {
 			gchar *date_str;
+			gchar *date_html;
 
 			date_str = e_datetime_format_format (
 				"mail", "header",
 				DTFormatKindDateTime, msg_date);
 
+			date_html = camel_text_to_html (date_str, text_format_flags, 0);
+
 			if (hide_real_date) {
 				/* Show only the local-formatted date, losing
 				 * all timezone information like Outlook does.
 				 * Should we attempt to show it somehow? */
-				txt = value = date_str;
+				txt = value = date_html;
 			} else {
-				txt = value = g_strdup_printf (
-					"%s (<I>%s</I>)", html, date_str);
-				g_free (date_str);
+				txt = value = g_strdup_printf ("%s (<I>%s</I>)", html, date_html);
+				g_free (date_html);
 			}
+
+			g_free (date_str);
 			g_free (html);
 		}
 
@@ -464,6 +468,8 @@ e_mail_formatter_format_header (EMailFormatter *formatter,
 		   g_str_has_prefix (canon_name, "Arc-")) {
 		/* don't unfold Received nor extension headers */
 		txt = value = camel_header_decode_string (header_value, charset);
+	} else if (g_strcmp0 (header_name, _("Security")) == 0) {
+		txt = header_value;
 	} else {
 		buf = camel_header_unfold (header_value);
 		txt = value = camel_header_decode_string (buf, charset);
@@ -619,20 +625,23 @@ e_mail_formatter_format_security_header (EMailFormatter *formatter,
 		if (should_skip_part (id))
 			continue;
 
-		if (!e_mail_part_has_validity (mail_part)) {
-			/* A part without validity, thus it's partially signed/encrypted */
-			is_partial = TRUE;
-		} else {
-			guint32 validies = 0;
-			for (ii = 0; ii < G_N_ELEMENTS (validity_flags); ii++) {
-				if (e_mail_part_get_validity (mail_part, validity_flags[ii].flags))
-					validies |= validity_flags[ii].flags;
+		if (!mail_part->is_hidden && !e_mail_part_id_has_suffix (mail_part, ".secure_button") &&
+		    !e_mail_part_get_is_attachment (mail_part)) {
+			if (!e_mail_part_has_validity (mail_part)) {
+				/* A part without validity, thus it's partially signed/encrypted */
+				is_partial = TRUE;
+			} else {
+				guint32 validies = 0;
+				for (ii = 0; ii < G_N_ELEMENTS (validity_flags); ii++) {
+					if (e_mail_part_get_validity (mail_part, validity_flags[ii].flags))
+						validies |= validity_flags[ii].flags;
+				}
+				check_valid_flags |= validies;
 			}
-			check_valid_flags |= validies;
 		}
 
 		/* Do not traverse sub-messages */
-		if (g_str_has_suffix (e_mail_part_get_id (mail_part), ".rfc822") &&
+		if (e_mail_part_id_has_suffix (mail_part, ".rfc822") &&
 		    !g_str_equal (e_mail_part_get_id (mail_part), part_id_prefix))
 			link = e_mail_formatter_find_rfc822_end_iter (link);
 	}
@@ -691,8 +700,40 @@ e_mail_formatter_format_security_header (EMailFormatter *formatter,
 			break;
 		}
 
-		if (tmp->len > 0)
+		if (tmp->len > 0) {
+			if (is_partial && context && context->mode == E_MAIL_FORMATTER_MODE_NORMAL) {
+				GSettings *settings;
+				gboolean show_parts;
+				gint icon_width, icon_height;
+				gchar *escaped;
+
+				if (!gtk_icon_size_lookup (GTK_ICON_SIZE_BUTTON, &icon_width, &icon_height)) {
+					icon_width = 16;
+					icon_height = 16;
+				}
+
+				escaped = g_markup_escape_text (tmp->str, tmp->len);
+				g_string_assign (tmp, escaped);
+				g_free (escaped);
+
+				settings = e_util_ref_settings ("org.gnome.evolution.mail");
+				show_parts = g_settings_get_boolean (settings, "show-insecure-parts");
+				g_object_unref (settings);
+
+				e_util_markup_append_escaped (tmp,
+					"&nbsp;&nbsp;&nbsp; (<img src=\"gtk-stock://dialog-warning?size=%d\" width=\"%dpx\" height=\"%dpx\" style=\"vertical-align:middle;\"/>&nbsp;"
+					"<a class=\"manage-insecure-parts\" id=\"show:%s\" value=\"%s\" style=\"cursor:pointer;\"%s>%s</a>"
+					"<a class=\"manage-insecure-parts\" id=\"hide:%s\" value=\"%s\" style=\"cursor:pointer;\"%s>%s</a>"
+					")",
+					GTK_ICON_SIZE_BUTTON, icon_width, icon_height,
+					part_id_prefix, part_id_prefix, show_parts ? " hidden" : "", _("Show parts not being secured"),
+					part_id_prefix, part_id_prefix, show_parts ? "" : " hidden", _("Hide parts not being secured"));
+
+				flags |= E_MAIL_FORMATTER_HEADER_FLAG_HTML;
+			}
+
 			e_mail_formatter_format_header (formatter, buffer, _("Security"), tmp->str, flags, "UTF-8");
+		}
 
 		g_string_free (tmp, TRUE);
 	}
@@ -703,4 +744,100 @@ e_mail_formatter_format_security_header (EMailFormatter *formatter,
 		g_object_unref (g_queue_pop_head (&queue));
 
 	g_free (part_id_prefix);
+}
+
+GHashTable *
+e_mail_formatter_utils_extract_secured_message_ids (GList *parts)
+{
+	GHashTable *secured_message_ids = NULL;
+	GSList *message_ids = NULL;
+	GList *link;
+
+	message_ids = g_slist_prepend (message_ids, (gpointer) ".message");
+
+	for (link = parts; link; link = g_list_next (link)) {
+		EMailPart *part = link->data;
+
+		if (!e_mail_part_get_id (part))
+			continue;
+
+		if (e_mail_part_id_has_suffix (part, ".rfc822")) {
+			message_ids = g_slist_prepend (message_ids, (gpointer) e_mail_part_get_id (part));
+			continue;
+		}
+
+		if (e_mail_part_id_has_suffix (part, ".rfc822.end")) {
+			g_warn_if_fail (message_ids != NULL);
+			if (message_ids)
+				message_ids = g_slist_remove (message_ids, message_ids->data);
+			continue;
+		}
+
+		if (part->is_hidden || e_mail_part_get_is_attachment (part) ||
+		    e_mail_part_id_has_suffix (part, ".secure_button"))
+			continue;
+
+		if (e_mail_part_has_validity (part)) {
+			g_warn_if_fail (message_ids != NULL);
+
+			if (message_ids) {
+				if (!secured_message_ids)
+					secured_message_ids = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+
+				if (!g_hash_table_contains (secured_message_ids, message_ids->data))
+					g_hash_table_add (secured_message_ids, g_strdup ((const gchar *) message_ids->data));
+			}
+		}
+	}
+
+	g_slist_free (message_ids);
+
+	return secured_message_ids;
+}
+
+gboolean
+e_mail_formatter_utils_consider_as_secured_part (EMailPart *part,
+						 GHashTable *secured_message_ids)
+{
+	GHashTableIter iter;
+	gpointer key;
+	const gchar *id;
+
+	g_return_val_if_fail (E_IS_MAIL_PART (part), FALSE);
+
+	if (!secured_message_ids)
+		return FALSE;
+
+	id = e_mail_part_get_id (part);
+
+	if (!id || part->is_hidden || e_mail_part_get_is_attachment (part))
+		return FALSE;
+
+	if (g_strcmp0 (id, ".message") == 0 ||
+	    e_mail_part_id_has_suffix (part, ".rfc822") ||
+	    e_mail_part_id_has_suffix (part, ".rfc822.end") ||
+	    e_mail_part_id_has_suffix (part, ".secure_button") ||
+	    e_mail_part_id_has_suffix (part, ".headers"))
+		return FALSE;
+
+	if (g_hash_table_contains (secured_message_ids, id))
+		return TRUE;
+
+	g_hash_table_iter_init (&iter, secured_message_ids);
+
+	while (g_hash_table_iter_next (&iter, &key, NULL)) {
+		const gchar *message_id = key;
+
+		if (g_str_has_prefix (id, message_id)) {
+			const gchar *ptr;
+
+			ptr = id + strlen (message_id);
+
+			/* a part, which does not contain another RFC822 message */
+			if (!*ptr || !strstr (ptr, ".rfc822."))
+				return TRUE;
+		}
+	}
+
+	return FALSE;
 }

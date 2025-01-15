@@ -35,10 +35,6 @@
 #include <shell/e-shell.h>
 #include "e-select-names-renderer.h"
 
-#define E_MEETING_LIST_VIEW_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MEETING_LIST_VIEW, EMeetingListViewPrivate))
-
 struct _EMeetingListViewPrivate {
 	EMeetingStore *store;
 
@@ -59,34 +55,31 @@ static guint e_meeting_list_view_signals[LAST_SIGNAL] = { 0 };
 
 static void name_selector_dialog_close_cb (ENameSelectorDialog *dialog, gint response, gpointer data);
 
-static const gchar *sections[] = {N_("Chair Persons"),
-				  N_("Required Participants"),
+static const gchar *sections[] = {N_("Required Participants"),
 				  N_("Optional Participants"),
 				  N_("Resources"),
+				  N_("Chair Persons"),
 				  NULL};
 
-static ICalParameterRole roles[] = { I_CAL_ROLE_CHAIR,
-				     I_CAL_ROLE_REQPARTICIPANT,
+static ICalParameterRole roles[] = { I_CAL_ROLE_REQPARTICIPANT,
 				     I_CAL_ROLE_OPTPARTICIPANT,
 				     I_CAL_ROLE_NONPARTICIPANT,
+				     I_CAL_ROLE_CHAIR,
 				     I_CAL_ROLE_NONE };
 
-G_DEFINE_TYPE (EMeetingListView, e_meeting_list_view, GTK_TYPE_TREE_VIEW)
+G_DEFINE_TYPE_WITH_PRIVATE (EMeetingListView, e_meeting_list_view, GTK_TYPE_TREE_VIEW)
 
 static void
 e_meeting_list_view_finalize (GObject *object)
 {
-	EMeetingListViewPrivate *priv;
+	EMeetingListView *self = E_MEETING_LIST_VIEW (object);
 
-	priv = E_MEETING_LIST_VIEW_GET_PRIVATE (object);
-
-	if (priv->name_selector) {
-		e_name_selector_cancel_loading (priv->name_selector);
-		g_object_unref (priv->name_selector);
-		priv->name_selector = NULL;
+	if (self->priv->name_selector) {
+		e_name_selector_cancel_loading (self->priv->name_selector);
+		g_clear_object (&self->priv->name_selector);
 	}
 
-	g_clear_pointer (&priv->renderers, g_hash_table_destroy);
+	g_clear_pointer (&self->priv->renderers, g_hash_table_destroy);
 
 	/* Chain up to parent's finalize() method. */
 	G_OBJECT_CLASS (e_meeting_list_view_parent_class)->finalize (object);
@@ -96,8 +89,6 @@ static void
 e_meeting_list_view_class_init (EMeetingListViewClass *class)
 {
 	GObjectClass *object_class;
-
-	g_type_class_add_private (class, sizeof (EMeetingListViewPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->finalize = e_meeting_list_view_finalize;
@@ -142,7 +133,7 @@ e_meeting_list_view_init (EMeetingListView *view)
 	EShell *shell;
 	gint i;
 
-	view->priv = E_MEETING_LIST_VIEW_GET_PRIVATE (view);
+	view->priv = e_meeting_list_view_get_instance_private (view);
 
 	view->priv->renderers = g_hash_table_new (g_direct_hash, g_int_equal);
 
@@ -227,18 +218,19 @@ value_edited (GtkTreeView *view,
 static guint
 get_index_from_role (ICalParameterRole role)
 {
-	switch (role)	{
-		case I_CAL_ROLE_CHAIR:
-			return 0;
-		case I_CAL_ROLE_REQPARTICIPANT:
-			return 1;
-		case I_CAL_ROLE_OPTPARTICIPANT:
-			return 2;
-		case I_CAL_ROLE_NONPARTICIPANT:
-			return 3;
-		default:
-			return 1;
+	guint ii;
+
+	for (ii = 0; roles[ii] != I_CAL_ROLE_NONE; ii++) {
+		if (role == roles[ii])
+			return ii;
 	}
+
+	g_warn_if_fail (role != I_CAL_ROLE_REQPARTICIPANT);
+
+	if (role == I_CAL_ROLE_REQPARTICIPANT)
+		return 0;
+
+	return get_index_from_role (I_CAL_ROLE_REQPARTICIPANT);
 }
 
 void
@@ -259,7 +251,7 @@ e_meeting_list_view_add_attendee_to_name_selector (EMeetingListView *view,
 		name_selector_model, sections[i],
 		NULL, &destination_store);
 	des = e_destination_new ();
-	e_destination_set_email (des, itip_strip_mailto (e_meeting_attendee_get_address (ma)));
+	e_destination_set_email (des, e_cal_util_strip_mailto (e_meeting_attendee_get_address (ma)));
 	e_destination_set_name (des, e_meeting_attendee_get_cn (ma));
 	e_destination_store_append_destination (destination_store, des);
 	g_object_unref (des);
@@ -284,7 +276,7 @@ e_meeting_list_view_remove_attendee_from_name_selector (EMeetingListView *view,
 		name_selector_model, sections[i],
 		NULL, &destination_store);
 	destinations = e_destination_store_list_destinations (destination_store);
-	madd = itip_strip_mailto (e_meeting_attendee_get_address (ma));
+	madd = e_cal_util_strip_mailto (e_meeting_attendee_get_address (ma));
 
 	for (l = destinations; l; l = g_list_next (l)) {
 		const gchar *attendee = NULL;
@@ -871,11 +863,11 @@ process_section (EMeetingListView *view,
                  GSList **la)
 {
 	EMeetingListViewPrivate *priv;
-	GList *l;
+	GList *link;
 
 	priv = view->priv;
-	for (l = destinations; l; l = g_list_next (l)) {
-		EDestination *destination = l->data, *des = NULL;
+	for (link = destinations; link; link = g_list_next (link)) {
+		EDestination *destination = link->data, *des = NULL;
 		const GList *list_dests = NULL, *l;
 		GList card_dest;
 
@@ -890,7 +882,7 @@ process_section (EMeetingListView *view,
 				ENameSelectorDialog *dialog;
 				ENameSelectorModel *model;
 				EContactStore *c_store;
-				GSList *clients, *l;
+				GSList *clients, *slink;
 				gchar *uid = e_contact_get (contact, E_CONTACT_BOOK_UID);
 
 				dialog = e_name_selector_peek_dialog (view->priv->name_selector);
@@ -898,8 +890,8 @@ process_section (EMeetingListView *view,
 				c_store = e_name_selector_model_peek_contact_store (model);
 				clients = e_contact_store_get_clients (c_store);
 
-				for (l = clients; l; l = l->next) {
-					EBookClient *b = l->data;
+				for (slink = clients; slink; slink = g_slist_next (slink)) {
+					EBookClient *b = slink->data;
 					ESource *source;
 
 					source = e_client_get_source (E_CLIENT (b));
@@ -955,7 +947,9 @@ process_section (EMeetingListView *view,
 
 			email_addr = g_strdup (e_destination_get_email (dest));
 			if (email_addr && *email_addr) {
-				name = g_strdup (e_destination_get_name (dest));
+				name = camel_header_decode_string (e_destination_get_name (dest), "UTF-8");
+				if (!name)
+					name = g_strdup (e_destination_get_name (dest));
 				if (name && !*name) {
 					g_free (name);
 					name = NULL;
@@ -1028,7 +1022,7 @@ add_to_list (gpointer data,
 {
 	GSList **user_data = u_data;
 
-	*user_data = g_slist_append (*user_data, (gpointer)itip_strip_mailto (e_meeting_attendee_get_address (data)));
+	*user_data = g_slist_append (*user_data, (gpointer)e_cal_util_strip_mailto (e_meeting_attendee_get_address (data)));
 }
 
 static void
@@ -1071,7 +1065,6 @@ name_selector_dialog_close_cb (ENameSelectorDialog *dialog,
 	for (l = la; l != NULL; l = l->next) {
 		EMeetingAttendee *ma = NULL;
 		const gchar *email = l->data;
-		gint i;
 
 		ma = e_meeting_store_find_attendee (store, email, &i);
 

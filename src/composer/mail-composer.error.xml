@@ -146,11 +146,21 @@ Detailed error: {0}</_secondary>
 
  <error id="webkit-web-process-crashed" type="error">
    <_primary>Something has gone wrong when editing the message</_primary>
-   <_secondary>A WebKitWebProcess crashed when editing the message. You can try again by closing the composer window and opening a new one. If the issue persists, please file a bug report in GNOME Gitlab.</_secondary>
+   <_secondary>A WebKitWebProcess crashed when editing the message. You can try again by closing the composer window and opening a new one. If the issue persists, please file a bug report in GNOME GitLab.</_secondary>
  </error>
 
  <error id="failed-create-composer" type="error">
   <_primary>An error occurred while creating message composer.</_primary>
   <secondary>{0}</secondary>
+ </error>
+
+ <error id="info-message-redirect" type="info">
+   <_primary>Message Redirection</_primary>
+   <_secondary>This message is a redirection, which allows you to change the recipients, subject and other message attributes, but not the contents of the message.</_secondary>
+ </error>
+
+ <error id="info-autocrypt-header-too-large" type="info">
+   <_primary>Not adding OpenPGP public key into the mail.</_primary>
+   <_secondary>The OpenPGP public key for “{0}” is too large for the transfer.</_secondary>
  </error>
 </error-list>

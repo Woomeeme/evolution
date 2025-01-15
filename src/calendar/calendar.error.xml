@@ -8,6 +8,13 @@
     <button _label="_Send Notice" response="GTK_RESPONSE_YES"/>
   </error>
 
+  <error id="prompt-cancel-meeting-attendee" type="question" default="GTK_RESPONSE_YES">
+    <_primary>Would you like to send the organizer a deletion notice?</_primary>
+    <_secondary>If you do not send a deletion notice, the organizer may not know the meeting has been deleted.</_secondary>
+    <button _label="Do _not Send" response="GTK_RESPONSE_NO"/>
+    <button _label="_Send Notice" response="GTK_RESPONSE_YES"/>
+  </error>
+
   <error id="prompt-delete-meeting" type="question" default="GTK_RESPONSE_NO">
     <_primary>Are you sure you want to delete this meeting?</_primary>
     <_secondary>All information on this meeting will be deleted and can not be restored.</_secondary>
@@ -15,9 +22,48 @@
     <button stock="gtk-delete" response="GTK_RESPONSE_YES" destructive="true"/>
   </error>
 
+  <error id="prompt-delete-meeting-with-notice-organizer" type="question" default="GTK_RESPONSE_NO">
+    <_primary>Are you sure you want to delete this meeting?</_primary>
+    <_secondary>All information on this meeting will be deleted and can not be restored. If you do not send a cancellation notice, the other participants may not know the meeting is canceled.</_secondary>
+    <button _label="Do _Not Delete" response="GTK_RESPONSE_NO"/>
+    <button _label="_Delete and Send Notice" response="GTK_RESPONSE_APPLY" destructive="true"/>
+    <button _label="Delete _without Notice" response="GTK_RESPONSE_YES" destructive="true"/>
+  </error>
+
+  <error id="prompt-delete-meeting-with-notice-attendee" type="question" default="GTK_RESPONSE_NO">
+    <_primary>Are you sure you want to delete this meeting?</_primary>
+    <_secondary>All information on this meeting will be deleted and can not be restored. If you do not send a deletion notice, the organizer may not know the meeting has been deleted.</_secondary>
+    <button _label="Do _Not Delete" response="GTK_RESPONSE_NO"/>
+    <button _label="_Delete and Send Notice" response="GTK_RESPONSE_APPLY" destructive="true"/>
+    <button _label="Delete _without Notice" response="GTK_RESPONSE_YES" destructive="true"/>
+  </error>
+
+  <error id="prompt-delete-titled-meeting-with-notice-organizer" type="question" default="GTK_RESPONSE_NO">
+    <_primary>Are you sure you want to delete the meeting titled “{0}”?</_primary>
+    <_secondary>All information on this meeting will be deleted and can not be restored. If you do not send a cancellation notice, the other participants may not know the meeting is canceled.</_secondary>
+    <button _label="Do _Not Delete" response="GTK_RESPONSE_NO"/>
+    <button _label="_Delete and Send Notice" response="GTK_RESPONSE_APPLY" destructive="true"/>
+    <button _label="Delete _without Notice" response="GTK_RESPONSE_YES" destructive="true"/>
+  </error>
+
+  <error id="prompt-delete-titled-meeting-with-notice-attendee" type="question" default="GTK_RESPONSE_NO">
+    <_primary>Are you sure you want to delete the meeting titled “{0}”?</_primary>
+    <_secondary>All information on this meeting will be deleted and can not be restored. If you do not send a deletion notice, the organizer may not know the meeting has been deleted.</_secondary>
+    <button _label="Do _Not Delete" response="GTK_RESPONSE_NO"/>
+    <button _label="_Delete and Send Notice" response="GTK_RESPONSE_APPLY" destructive="true"/>
+    <button _label="Delete _without Notice" response="GTK_RESPONSE_YES" destructive="true"/>
+  </error>
+
   <error id="prompt-cancel-task" type="question" default="GTK_RESPONSE_YES">
     <_primary>Would you like to send all the participants a cancellation notice?</_primary>
     <_secondary>If you do not send a cancellation notice, the other participants may not know the task has been deleted.</_secondary>
+    <button _label="Do _not Send" response="GTK_RESPONSE_NO"/>
+    <button _label="_Send Notice" response="GTK_RESPONSE_YES"/>
+  </error>
+
+  <error id="prompt-cancel-task-attendee" type="question" default="GTK_RESPONSE_YES">
+    <_primary>Would you like to send the organizer a deletion notice?</_primary>
+    <_secondary>If you do not send a deletion notice, the organizer may not know the task has been deleted.</_secondary>
     <button _label="Do _not Send" response="GTK_RESPONSE_NO"/>
     <button _label="_Send Notice" response="GTK_RESPONSE_YES"/>
   </error>
@@ -32,6 +78,13 @@
   <error id="prompt-cancel-memo" type="question" default="GTK_RESPONSE_YES">
     <_primary>Would you like to send a cancellation notice for this memo?</_primary>
     <_secondary>If you do not send a cancellation notice, the other participants may not know the memo has been deleted.</_secondary>
+    <button _label="Do _not Send" response="GTK_RESPONSE_NO"/>
+    <button _label="_Send Notice" response="GTK_RESPONSE_YES"/>
+  </error>
+
+  <error id="prompt-cancel-memo-attendee" type="question" default="GTK_RESPONSE_YES">
+    <_primary>Would you like to send a deletion notice for this memo?</_primary>
+    <_secondary>If you do not send a deletion notice, the organizer may not know the memo has been deleted.</_secondary>
     <button _label="Do _not Send" response="GTK_RESPONSE_NO"/>
     <button _label="_Send Notice" response="GTK_RESPONSE_YES"/>
   </error>
@@ -569,17 +622,24 @@
 
   <error id="webkit-web-process-crashed-event" type="error">
     <_primary>Something has gone wrong when displaying the event</_primary>
-    <_secondary>A WebKitWebProcess crashed when displaying the event. You can try again by moving to another event and back. If the issue persists, please file a bug report in GNOME Gitlab.</_secondary>
+    <_secondary>A WebKitWebProcess crashed when displaying the event. You can try again by moving to another event and back. If the issue persists, please file a bug report in GNOME GitLab.</_secondary>
   </error>
 
   <error id="webkit-web-process-crashed-memo" type="error">
     <_primary>Something has gone wrong when displaying the memo</_primary>
-    <_secondary>A WebKitWebProcess crashed when displaying the memo. You can try again by moving to another memo and back. If the issue persists, please file a bug report in GNOME Gitlab.</_secondary>
+    <_secondary>A WebKitWebProcess crashed when displaying the memo. You can try again by moving to another memo and back. If the issue persists, please file a bug report in GNOME GitLab.</_secondary>
   </error>
 
   <error id="webkit-web-process-crashed-task" type="error">
     <_primary>Something has gone wrong when displaying the task</_primary>
-    <_secondary>A WebKitWebProcess crashed when displaying the task. You can try again by moving to another task and back. If the issue persists, please file a bug report in GNOME Gitlab.</_secondary>
+    <_secondary>A WebKitWebProcess crashed when displaying the task. You can try again by moving to another task and back. If the issue persists, please file a bug report in GNOME GitLab.</_secondary>
+  </error>
+
+  <error id="prompt-detach-copy-event" type="question" default="GTK_RESPONSE_NO">
+    <_primary>Do you want to detach event from the series?</_primary>
+    <_secondary>The event “{0}” will be detached from its series and saved as a new standalone event.</_secondary>
+    <button _label="_Cancel" response="GTK_RESPONSE_NO"/>
+    <button _label="_Detach and Create Copy" response="GTK_RESPONSE_YES"/>
   </error>
 
 </error-list>

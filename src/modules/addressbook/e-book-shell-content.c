@@ -25,11 +25,9 @@
 #include <glib/gi18n.h>
 
 #include "shell/e-shell-utils.h"
+#include "addressbook/gui/widgets/gal-view-minicard.h"
+#include "e-book-shell-view-private.h"
 #include "e-book-shell-view.h"
-
-#define E_BOOK_SHELL_CONTENT_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_BOOK_SHELL_CONTENT, EBookShellContentPrivate))
 
 struct _EBookShellContentPrivate {
 	GtkWidget *paned;
@@ -51,13 +49,9 @@ enum {
 	PROP_PREVIEW_SHOW_MAPS
 };
 
-G_DEFINE_DYNAMIC_TYPE_EXTENDED (
-	EBookShellContent,
-	e_book_shell_content,
-	E_TYPE_SHELL_CONTENT,
-	0,
-	G_IMPLEMENT_INTERFACE_DYNAMIC (
-		GTK_TYPE_ORIENTABLE, NULL))
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (EBookShellContent, e_book_shell_content, E_TYPE_SHELL_CONTENT, 0,
+	G_ADD_PRIVATE_DYNAMIC (EBookShellContent)
+	G_IMPLEMENT_INTERFACE_DYNAMIC (GTK_TYPE_ORIENTABLE, NULL))
 
 static void
 book_shell_content_send_message_cb (EBookShellContent *book_shell_content,
@@ -83,10 +77,8 @@ book_shell_content_restore_state_cb (EShellWindow *shell_window,
                                      EShellView *shell_view,
                                      EShellContent *shell_content)
 {
-	EBookShellContentPrivate *priv;
+	EBookShellContent *self = E_BOOK_SHELL_CONTENT (shell_content);
 	GSettings *settings;
-
-	priv = E_BOOK_SHELL_CONTENT_GET_PRIVATE (shell_content);
 
 	/* Bind GObject properties to GSettings keys. */
 
@@ -95,23 +87,23 @@ book_shell_content_restore_state_cb (EShellWindow *shell_window,
 	if (e_shell_window_is_main_instance (shell_window)) {
 		g_settings_bind (
 			settings, "hpane-position",
-			priv->paned, "hposition",
+			self->priv->paned, "hposition",
 			G_SETTINGS_BIND_DEFAULT);
 
 		g_settings_bind (
 			settings, "vpane-position",
-			priv->paned, "vposition",
+			self->priv->paned, "vposition",
 			G_SETTINGS_BIND_DEFAULT);
 	} else {
 		g_settings_bind (
 			settings, "hpane-position-sub",
-			priv->paned, "hposition",
+			self->priv->paned, "hposition",
 			G_SETTINGS_BIND_DEFAULT |
 			G_SETTINGS_BIND_GET_NO_CHANGES);
 
 		g_settings_bind (
 			settings, "vpane-position-sub",
-			priv->paned, "vposition",
+			self->priv->paned, "vposition",
 			G_SETTINGS_BIND_DEFAULT |
 			G_SETTINGS_BIND_GET_NO_CHANGES);
 	}
@@ -227,12 +219,11 @@ book_shell_content_get_property (GObject *object,
 static void
 book_shell_content_dispose (GObject *object)
 {
-	EBookShellContentPrivate *priv;
+	EBookShellContent *self = E_BOOK_SHELL_CONTENT (object);
 
-	priv = E_BOOK_SHELL_CONTENT_GET_PRIVATE (object);
-	g_clear_object (&priv->paned);
-	g_clear_object (&priv->notebook);
-	g_clear_object (&priv->preview_pane);
+	g_clear_object (&self->priv->paned);
+	g_clear_object (&self->priv->notebook);
+	g_clear_object (&self->priv->preview_pane);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_book_shell_content_parent_class)->dispose (object);
@@ -241,15 +232,13 @@ book_shell_content_dispose (GObject *object)
 static void
 book_shell_content_constructed (GObject *object)
 {
-	EBookShellContentPrivate *priv;
+	EBookShellContent *self = E_BOOK_SHELL_CONTENT (object);
 	EShellView *shell_view;
 	EShellWindow *shell_window;
 	EShellContent *shell_content;
 	EShellTaskbar *shell_taskbar;
 	GtkWidget *container;
 	GtkWidget *widget;
-
-	priv = E_BOOK_SHELL_CONTENT_GET_PRIVATE (object);
 
 	/* Chain up to parent's constructed() method. */
 	G_OBJECT_CLASS (e_book_shell_content_parent_class)->constructed (object);
@@ -263,7 +252,7 @@ book_shell_content_constructed (GObject *object)
 
 	widget = e_paned_new (GTK_ORIENTATION_VERTICAL);
 	gtk_container_add (GTK_CONTAINER (container), widget);
-	priv->paned = g_object_ref (widget);
+	self->priv->paned = g_object_ref (widget);
 	gtk_widget_show (widget);
 
 	e_binding_bind_property (
@@ -277,7 +266,7 @@ book_shell_content_constructed (GObject *object)
 	gtk_notebook_set_show_tabs (GTK_NOTEBOOK (widget), FALSE);
 	gtk_notebook_set_show_border (GTK_NOTEBOOK (widget), FALSE);
 	gtk_paned_pack1 (GTK_PANED (container), widget, TRUE, FALSE);
-	priv->notebook = g_object_ref (widget);
+	self->priv->notebook = g_object_ref (widget);
 	gtk_widget_show (widget);
 
 	widget = eab_contact_display_new ();
@@ -287,7 +276,7 @@ book_shell_content_constructed (GObject *object)
 
 	eab_contact_display_set_show_maps (
 		EAB_CONTACT_DISPLAY (widget),
-		priv->preview_show_maps);
+		self->priv->preview_show_maps);
 
 	e_binding_bind_property (
 		object, "preview-show-maps",
@@ -307,7 +296,7 @@ book_shell_content_constructed (GObject *object)
 
 	widget = e_preview_pane_new (E_WEB_VIEW (widget));
 	gtk_paned_pack2 (GTK_PANED (container), widget, FALSE, FALSE);
-	priv->preview_pane = g_object_ref (widget);
+	self->priv->preview_pane = g_object_ref (widget);
 	gtk_widget_show (widget);
 
 	e_binding_bind_property (
@@ -324,39 +313,36 @@ book_shell_content_constructed (GObject *object)
 }
 
 static void
-book_shell_content_check_state_foreach (gint row,
-                                        gpointer user_data)
+e_book_shell_content_got_selected_contacts_cb (GObject *source_object,
+					       GAsyncResult *result,
+					       gpointer user_data)
 {
-	EContact *contact;
+	EShellContent *shell_content = user_data;
+	GPtrArray *contacts;
+	GError *error = NULL;
 
-	struct {
-		EAddressbookModel *model;
-		GList *list;
-	} *foreach_data = user_data;
+	contacts = e_addressbook_view_dup_selected_contacts_finish (E_ADDRESSBOOK_VIEW (source_object), result, &error);
 
-	contact = e_addressbook_model_get_contact (foreach_data->model, row);
-	g_return_if_fail (E_IS_CONTACT (contact));
+	if (contacts) {
+		e_shell_view_update_actions (e_shell_content_get_shell_view (shell_content));
+		g_ptr_array_unref (contacts);
+	} else if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+		g_message ("%s: Failed to retrieve selected contacts: %s", G_STRFUNC, error ? error->message : "Unknown error");
+	}
 
-	foreach_data->list = g_list_prepend (foreach_data->list, contact);
+	g_object_unref (shell_content);
 }
 
 static guint32
 book_shell_content_check_state (EShellContent *shell_content)
 {
 	EBookShellContent *book_shell_content;
-	ESelectionModel *selection_model;
-	EAddressbookModel *model;
 	EAddressbookView *view;
 	GtkNotebook *notebook;
-	gboolean has_email = TRUE;
-	gboolean is_contact_list = TRUE;
+	gboolean has_email = FALSE;
+	gboolean is_contact_list = FALSE;
 	guint32 state = 0;
-	gint n_selected;
-
-	struct {
-		EAddressbookModel *model;
-		GList *list;
-	} foreach_data;
+	guint n_selected;
 
 	book_shell_content = E_BOOK_SHELL_CONTENT (shell_content);
 
@@ -367,37 +353,35 @@ book_shell_content_check_state (EShellContent *shell_content)
 		return 0;
 
 	view = e_book_shell_content_get_current_view (book_shell_content);
-	model = e_addressbook_view_get_model (view);
+	n_selected = e_addressbook_view_get_n_selected (view);
 
-	selection_model = e_addressbook_view_get_selection_model (view);
-	n_selected = (selection_model != NULL) ?
-		e_selection_model_selected_count (selection_model) : 0;
+	if (n_selected > 0) {
+		GPtrArray *contacts;
 
-	foreach_data.model = model;
-	foreach_data.list = NULL;
+		contacts = e_addressbook_view_peek_selected_contacts (view);
 
-	if (selection_model != NULL)
-		e_selection_model_foreach (
-			selection_model, (EForeachFunc)
-			book_shell_content_check_state_foreach,
-			&foreach_data);
+		if (contacts) {
+			guint ii;
 
-	while (foreach_data.list != NULL) {
-		EContact *contact = E_CONTACT (foreach_data.list->data);
-		GList *email_list;
+			has_email = contacts->len > 0;
+			is_contact_list = contacts->len > 0;
 
-		email_list = e_contact_get (contact, E_CONTACT_EMAIL);
-		has_email &= (email_list != NULL);
-		g_list_foreach (email_list, (GFunc) g_free, NULL);
-		g_list_free (email_list);
+			for (ii = 0; ii < contacts->len && (has_email || is_contact_list); ii++) {
+				EContact *contact = g_ptr_array_index (contacts, ii);
+				GList *email_list;
 
-		is_contact_list &=
-			(e_contact_get (contact, E_CONTACT_IS_LIST) != NULL);
+				email_list = e_contact_get (contact, E_CONTACT_EMAIL);
+				has_email &= (email_list != NULL);
+				g_list_free_full (email_list, g_free);
 
-		g_object_unref (contact);
+				is_contact_list &= (e_contact_get (contact, E_CONTACT_IS_LIST) != NULL);
+			}
 
-		foreach_data.list = g_list_delete_link (
-			foreach_data.list, foreach_data.list);
+			g_ptr_array_unref (contacts);
+		} else {
+			/* Need to update actions after all the selected contacts are available */
+			e_addressbook_view_dup_selected_contacts (view, NULL, e_book_shell_content_got_selected_contacts_cb, g_object_ref (shell_content));
+		}
 	}
 
 	if (n_selected == 1)
@@ -408,9 +392,9 @@ book_shell_content_check_state (EShellContent *shell_content)
 		state |= E_BOOK_SHELL_CONTENT_SELECTION_HAS_EMAIL;
 	if (n_selected == 1 && is_contact_list)
 		state |= E_BOOK_SHELL_CONTENT_SELECTION_IS_CONTACT_LIST;
-	if (e_addressbook_model_can_stop (model))
+	if (e_addressbook_view_can_stop (view))
 		state |= E_BOOK_SHELL_CONTENT_SOURCE_IS_BUSY;
-	if (e_addressbook_model_get_editable (model))
+	if (e_addressbook_view_get_editable (view))
 		state |= E_BOOK_SHELL_CONTENT_SOURCE_IS_EDITABLE;
 
 	return state;
@@ -433,8 +417,6 @@ e_book_shell_content_class_init (EBookShellContentClass *class)
 {
 	GObjectClass *object_class;
 	EShellContentClass *shell_content_class;
-
-	g_type_class_add_private (class, sizeof (EBookShellContentPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = book_shell_content_set_property;
@@ -500,8 +482,7 @@ e_book_shell_content_class_finalize (EBookShellContentClass *class)
 static void
 e_book_shell_content_init (EBookShellContent *book_shell_content)
 {
-	book_shell_content->priv =
-		E_BOOK_SHELL_CONTENT_GET_PRIVATE (book_shell_content);
+	book_shell_content->priv = e_book_shell_content_get_instance_private (book_shell_content);
 
 	/* Postpone widget construction until we have a shell view. */
 }
@@ -584,6 +565,7 @@ e_book_shell_content_set_current_view (EBookShellContent *book_shell_content,
 	EShellView *shell_view;
 	EShellContent *shell_content;
 	EShellSearchbar *searchbar;
+	EShellWindow *shell_window;
 	EBookShellView *book_shell_view;
 	GtkNotebook *notebook;
 	GtkWidget *child;
@@ -594,6 +576,7 @@ e_book_shell_content_set_current_view (EBookShellContent *book_shell_content,
 
 	shell_content = E_SHELL_CONTENT (book_shell_content);
 	shell_view = e_shell_content_get_shell_view (shell_content);
+	shell_window = e_shell_view_get_shell_window (shell_view);
 
 	book_shell_view = E_BOOK_SHELL_VIEW (shell_view);
 	searchbar = e_book_shell_content_get_searchbar (book_shell_content);
@@ -607,8 +590,11 @@ e_book_shell_content_set_current_view (EBookShellContent *book_shell_content,
 	gtk_notebook_set_current_page (notebook, page_num);
 
 	if (old_page_num != page_num) {
+		GalViewInstance *view_instance;
+		GalView *gl_view;
 		EActionComboBox *combo_box;
-		GtkRadioAction *action;
+		GtkAction *action;
+		GtkRadioAction *radio_action;
 		gint filter_id = 0, search_id = 0;
 		gchar *search_text = NULL;
 		EFilterRule *advanced_search = NULL;
@@ -622,8 +608,8 @@ e_book_shell_content_set_current_view (EBookShellContent *book_shell_content,
 		combo_box = e_shell_searchbar_get_filter_combo_box (searchbar);
 		e_action_combo_box_set_current_value (combo_box, filter_id);
 
-		action = e_shell_searchbar_get_search_option (searchbar);
-		gtk_radio_action_set_current_value (action, search_id);
+		radio_action = e_shell_searchbar_get_search_option (searchbar);
+		gtk_radio_action_set_current_value (radio_action, search_id);
 
 		e_shell_searchbar_set_search_text (searchbar, search_text);
 
@@ -635,6 +621,17 @@ e_book_shell_content_set_current_view (EBookShellContent *book_shell_content,
 			g_object_unref (advanced_search);
 
 		e_book_shell_view_enable_searching (book_shell_view);
+
+		view_instance = e_addressbook_view_get_view_instance (addressbook_view);
+		gl_view = gal_view_instance_get_current_view (view_instance);
+
+		action = ACTION (CONTACT_CARDS_SORT_BY_MENU);
+		gtk_action_set_visible (action, GAL_IS_VIEW_MINICARD (gl_view));
+
+		if (GAL_IS_VIEW_MINICARD (gl_view)) {
+			action = ACTION (CONTACT_CARDS_SORT_BY_FILE_AS);
+			gtk_radio_action_set_current_value (GTK_RADIO_ACTION (action), gal_view_minicard_get_sort_by (GAL_VIEW_MINICARD (gl_view)));
+		}
 	}
 
 	g_object_notify (G_OBJECT (book_shell_content), "current-view");

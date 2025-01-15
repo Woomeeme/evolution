@@ -34,15 +34,11 @@
 #include "e-cal-base-shell-view.h"
 #include "e-cal-base-shell-backend.h"
 
-#define E_CAL_BASE_SHELL_BACKEND_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CAL_BASE_SHELL_BACKEND, ECalBaseShellBackendPrivate))
-
 struct _ECalBaseShellBackendPrivate {
 	gint placeholder;
 };
 
-G_DEFINE_ABSTRACT_TYPE (ECalBaseShellBackend, e_cal_base_shell_backend, E_TYPE_SHELL_BACKEND)
+G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (ECalBaseShellBackend, e_cal_base_shell_backend, E_TYPE_SHELL_BACKEND)
 
 static void
 cal_base_shell_backend_handle_webcal_uri (EShellBackend *shell_backend,
@@ -104,23 +100,22 @@ cal_base_shell_backend_handle_webcal_uri (EShellBackend *shell_backend,
 				e_source_get_extension (candidate, extension_name));
 			if (g_strcmp0 (backend_name, "webcal") == 0) {
 				ESourceWebdav *webdav_extension;
-				SoupURI *soup_uri;
+				GUri *guri;
 
-				soup_uri = soup_uri_new (uri);
-				if (!soup_uri) {
+				guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+				if (!guri) {
 					/* Just a fallback when the passed-in URI is invalid,
 					   to have set something in the UI. */
-					soup_uri = soup_uri_new (NULL);
-					soup_uri_set_path (soup_uri, uri);
+					guri = g_uri_build (G_URI_FLAGS_NONE, "https", NULL, NULL, -1, uri, NULL, NULL);
+				} else if (g_strcmp0 (g_uri_get_scheme (guri), "https") != 0) {
+					/* https everywhere */
+					e_util_change_uri_component (&guri, SOUP_URI_SCHEME, "https");
 				}
 
-				/* https everywhere */
-				soup_uri_set_scheme (soup_uri, "https");
-
-				if (soup_uri_get_path (soup_uri)) {
+				if (g_uri_get_path (guri)) {
 					gchar *basename;
 
-					basename = g_path_get_basename (soup_uri_get_path (soup_uri));
+					basename = g_path_get_basename (g_uri_get_path (guri));
 					if (basename && g_utf8_strlen (basename, -1) > 3) {
 						gchar *dot;
 
@@ -136,11 +131,11 @@ cal_base_shell_backend_handle_webcal_uri (EShellBackend *shell_backend,
 				}
 
 				webdav_extension = e_source_get_extension (candidate, E_SOURCE_EXTENSION_WEBDAV_BACKEND);
-				e_source_webdav_set_soup_uri (webdav_extension, soup_uri);
+				e_source_webdav_set_uri (webdav_extension, guri);
 
 				e_source_config_select_page (source_config, candidate);
 
-				soup_uri_free (soup_uri);
+				g_uri_unref (guri);
 				break;
 			}
 		}
@@ -158,7 +153,8 @@ cal_base_shell_backend_handle_uri_cb (EShellBackend *shell_backend,
 	g_return_val_if_fail (E_IS_CAL_BASE_SHELL_BACKEND (shell_backend), FALSE);
 	g_return_val_if_fail (uri != NULL, FALSE);
 
-	if (g_str_has_prefix (uri, "webcal:")) {
+	if (g_str_has_prefix (uri, "webcal:") ||
+	    g_str_has_prefix (uri, "webcals:")) {
 		cal_base_shell_backend_handle_webcal_uri (shell_backend, uri);
 		return TRUE;
 	}
@@ -227,8 +223,6 @@ e_cal_base_shell_backend_class_init (ECalBaseShellBackendClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (ECalBaseShellBackendPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->constructed = cal_base_shell_backend_constructed;
 
@@ -257,7 +251,7 @@ e_cal_base_shell_backend_class_init (ECalBaseShellBackendClass *class)
 static void
 e_cal_base_shell_backend_init (ECalBaseShellBackend *cal_base_shell_backend)
 {
-	cal_base_shell_backend->priv = E_CAL_BASE_SHELL_BACKEND_GET_PRIVATE (cal_base_shell_backend);
+	cal_base_shell_backend->priv = e_cal_base_shell_backend_get_instance_private (cal_base_shell_backend);
 }
 
 void
@@ -395,7 +389,7 @@ cal_base_shell_backend_handle_uri_thread (EAlertSinkThreadJobData *job_data,
 
 		client_cache = e_shell_get_client_cache (shell);
 
-		client = e_client_cache_get_client_sync (client_cache, source, extension_name, 30, cancellable, &local_error);
+		client = e_client_cache_get_client_sync (client_cache, source, extension_name, (guint32) -1, cancellable, &local_error);
 		if (client) {
 			hud->cal_client = E_CAL_CLIENT (client);
 
@@ -462,7 +456,7 @@ e_cal_base_shell_backend_util_handle_uri (EShellBackend *shell_backend,
 {
 	EShell *shell;
 	EShellWindow *shell_window;
-	SoupURI *soup_uri;
+	GUri *guri;
 	const gchar *cp;
 	gchar *source_uid = NULL;
 	gchar *comp_uid = NULL;
@@ -497,9 +491,9 @@ e_cal_base_shell_backend_util_handle_uri (EShellBackend *shell_backend,
 
 	shell = e_shell_backend_get_shell (shell_backend);
 
-	soup_uri = soup_uri_new (uri);
+	guri = g_uri_parse (uri, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
 
-	if (soup_uri == NULL)
+	if (!guri)
 		return FALSE;
 
 	g_date_clear (&start_date, 1);
@@ -525,7 +519,7 @@ e_cal_base_shell_backend_util_handle_uri (EShellBackend *shell_backend,
 
 	g_object_unref (settings);
 
-	cp = soup_uri_get_query (soup_uri);
+	cp = g_uri_get_query (guri);
 	if (cp == NULL)
 		goto exit;
 
@@ -660,7 +654,7 @@ e_cal_base_shell_backend_util_handle_uri (EShellBackend *shell_backend,
 
 		g_object_unref (icomp);
 		g_free (content);
-	} else if (shell_window) {
+	} else {
 		HandleUriData *hud;
 		ESourceRegistry *registry;
 		ESource *source;
@@ -668,6 +662,13 @@ e_cal_base_shell_backend_util_handle_uri (EShellBackend *shell_backend,
 		EActivity *activity;
 		gchar *description = NULL, *alert_ident = NULL, *alert_arg_0 = NULL;
 		gchar *source_display_name = NULL;
+
+		if (!shell_window) {
+			GtkWidget *widget;
+
+			widget = e_shell_create_shell_window (shell, "calendar");
+			shell_window = E_SHELL_WINDOW (widget);
+		}
 
 		hud = g_slice_new0 (HandleUriData);
 		hud->shell_backend = g_object_ref (shell_backend);
@@ -699,8 +700,6 @@ e_cal_base_shell_backend_util_handle_uri (EShellBackend *shell_backend,
 		g_free (description);
 		g_free (alert_ident);
 		g_free (alert_arg_0);
-	} else {
-		g_warn_if_reached ();
 	}
 
  exit:
@@ -709,7 +708,7 @@ e_cal_base_shell_backend_util_handle_uri (EShellBackend *shell_backend,
 	g_free (comp_rid);
 	g_free (new_ics);
 
-	soup_uri_free (soup_uri);
+	g_uri_unref (guri);
 
 	return handled;
 }

@@ -43,22 +43,9 @@
 #include <pkcs11.h>
 #include <pk11func.h>
 
-/* XXX Hack to disable p11-kit's pkcs11.h header, since
- *     NSS headers supply the same PKCS #11 definitions. */
-#define PKCS11_H 1
-
-/* XXX Yeah, yeah... */
-#define GCR_API_SUBJECT_TO_CHANGE
-
-#include <gcr/gcr.h>
+#include <libedataserverui/libedataserverui.h>
 
 #include "shell/e-shell.h"
-
-#define E_CERT_MANAGER_CONFIG_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_CERT_MANAGER_CONFIG, ECertManagerConfigPrivate))
-
-G_DEFINE_TYPE (ECertManagerConfig, e_cert_manager_config, GTK_TYPE_BOX);
 
 enum {
 	PROP_0,
@@ -181,6 +168,8 @@ typedef struct {
 	CertPage  *cp;
 	ECert     *cert;
 } BackupData;
+
+G_DEFINE_TYPE_WITH_PRIVATE (ECertManagerConfig, e_cert_manager_config, GTK_TYPE_BOX)
 
 static void view_cert (GtkWidget *button, CertPage *cp);
 static void edit_cert (GtkWidget *button, CertPage *cp);
@@ -1218,59 +1207,16 @@ load_mail_certs (ECertManagerConfig *ecmc)
 	g_slist_free_full (camel_certs, (GDestroyNotify) camel_cert_unref);
 }
 
-static void
-cert_manager_parser_parsed_cb (GcrParser *parser,
-                               GcrParsed **out_parsed)
-{
-	GcrParsed *parsed;
-
-	parsed = gcr_parser_get_parsed (parser);
-	g_return_if_fail (parsed != NULL);
-
-	*out_parsed = gcr_parsed_ref (parsed);
-}
-
 static GtkWidget *
-cm_prepare_certificate_widget (GcrCertificate *certificate)
+cm_prepare_certificate_widget (gconstpointer data,
+			       gsize length)
 {
-	GcrParser *parser;
-	GcrParsed *parsed = NULL;
-	GckAttributes *attributes;
-	GcrCertificateWidget *certificate_widget;
-	const guchar *der_data = NULL;
-	gsize der_length;
-	GError *local_error = NULL;
+	GtkWidget *widget;
 
-	g_return_val_if_fail (GCR_IS_CERTIFICATE (certificate), NULL);
+	widget = e_certificate_widget_new ();
+	e_certificate_widget_set_der (E_CERTIFICATE_WIDGET (widget), data, length);
 
-	der_data = gcr_certificate_get_der_data (certificate, &der_length);
-
-	parser = gcr_parser_new ();
-	g_signal_connect (
-		parser, "parsed",
-		G_CALLBACK (cert_manager_parser_parsed_cb), &parsed);
-	gcr_parser_parse_data (
-		parser, der_data, der_length, &local_error);
-	g_object_unref (parser);
-
-	/* Sanity check. */
-	g_return_val_if_fail (
-		((parsed != NULL) && (local_error == NULL)) ||
-		((parsed == NULL) && (local_error != NULL)), NULL);
-
-	if (local_error != NULL) {
-		g_warning ("%s: %s", G_STRFUNC, local_error->message);
-		g_clear_error (&local_error);
-		return NULL;
-	}
-
-	attributes = gcr_parsed_get_attributes (parsed);
-	certificate_widget = gcr_certificate_widget_new (certificate);
-	gcr_certificate_widget_set_attributes (certificate_widget, attributes);
-
-	gcr_parsed_unref (parsed);
-
-	return GTK_WIDGET (certificate_widget);
+	return widget;
 }
 
 static void
@@ -1310,7 +1256,6 @@ mail_cert_edit_trust (GtkWidget *parent,
 	GtkWidget *dialog, *label, *expander, *content_area, *certificate_widget;
 	GtkWidget *runknown, *rtemporary, *rnever, *rmarginal, *rfully, *rultimate;
 	GtkGrid *grid;
-	GcrCertificate *certificate;
 	gchar *text;
 	gboolean changed = FALSE;
 	gint row;
@@ -1318,9 +1263,7 @@ mail_cert_edit_trust (GtkWidget *parent,
 	g_return_val_if_fail (camel_cert != NULL, FALSE);
 	g_return_val_if_fail (camel_cert->rawcert != NULL, FALSE);
 
-	certificate = gcr_simple_certificate_new (g_bytes_get_data (camel_cert->rawcert, NULL), g_bytes_get_size (camel_cert->rawcert));
-	certificate_widget = cm_prepare_certificate_widget (certificate);
-	g_clear_object (&certificate);
+	certificate_widget = cm_prepare_certificate_widget (g_bytes_get_data (camel_cert->rawcert, NULL), g_bytes_get_size (camel_cert->rawcert));
 
 	g_return_val_if_fail (certificate_widget != NULL, FALSE);
 
@@ -1332,6 +1275,7 @@ mail_cert_edit_trust (GtkWidget *parent,
 		NULL);
 
 	gtk_container_set_border_width (GTK_CONTAINER (dialog), 5);
+	gtk_window_set_default_size (GTK_WINDOW (dialog), 400, 300);
 
 	content_area = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
 
@@ -2036,8 +1980,6 @@ e_cert_manager_config_class_init (ECertManagerConfigClass *class)
 {
 	GObjectClass *object_class;
 
-	g_type_class_add_private (class, sizeof (ECertManagerConfigPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = cert_manager_config_set_property;
 	object_class->dispose = cert_manager_config_dispose;
@@ -2056,29 +1998,27 @@ e_cert_manager_config_class_init (ECertManagerConfigClass *class)
 static void
 e_cert_manager_config_init (ECertManagerConfig *ecmc)
 {
-	ECertManagerConfigPrivate *priv;
 	GtkWidget *parent, *widget;
 	CertPage *cp;
 
-	priv = E_CERT_MANAGER_CONFIG_GET_PRIVATE (ecmc);
-	ecmc->priv = priv;
+	ecmc->priv = e_cert_manager_config_get_instance_private (ecmc);
 
 	/* We need to peek the db here to make sure it (and NSS) are fully initialized. */
 	e_cert_db_peek ();
 
-	priv->builder = gtk_builder_new ();
-	e_load_ui_builder_definition (priv->builder, "smime-ui.ui");
+	ecmc->priv->builder = gtk_builder_new ();
+	e_load_ui_builder_definition (ecmc->priv->builder, "smime-ui.ui");
 
 	cp = g_new0 (CertPage, 1);
-	priv->yourcerts_page = cp;
-	cp->treeview = GTK_TREE_VIEW (e_builder_get_widget (priv->builder, "yourcerts-treeview"));
+	ecmc->priv->yourcerts_page = cp;
+	cp->treeview = GTK_TREE_VIEW (e_builder_get_widget (ecmc->priv->builder, "yourcerts-treeview"));
 	cp->streemodel = NULL;
-	cp->view_button = e_builder_get_widget (priv->builder, "your-view-button");
-	cp->backup_button = e_builder_get_widget (priv->builder, "your-backup-button");
-	cp->backup_all_button = e_builder_get_widget (priv->builder, "your-backup-all-button");
+	cp->view_button = e_builder_get_widget (ecmc->priv->builder, "your-view-button");
+	cp->backup_button = e_builder_get_widget (ecmc->priv->builder, "your-backup-button");
+	cp->backup_all_button = e_builder_get_widget (ecmc->priv->builder, "your-backup-all-button");
 	cp->edit_button = NULL;
-	cp->import_button = e_builder_get_widget (priv->builder, "your-import-button");
-	cp->delete_button = e_builder_get_widget (priv->builder, "your-delete-button");
+	cp->import_button = e_builder_get_widget (ecmc->priv->builder, "your-import-button");
+	cp->delete_button = e_builder_get_widget (ecmc->priv->builder, "your-delete-button");
 	cp->columns = yourcerts_columns;
 	cp->columns_count = G_N_ELEMENTS (yourcerts_columns);
 	cp->cert_type = E_CERT_USER;
@@ -2087,15 +2027,15 @@ e_cert_manager_config_init (ECertManagerConfig *ecmc)
 	initialize_ui (cp);
 
 	cp = g_new0 (CertPage, 1);
-	priv->contactcerts_page = cp;
-	cp->treeview = GTK_TREE_VIEW (e_builder_get_widget (priv->builder, "contactcerts-treeview"));
+	ecmc->priv->contactcerts_page = cp;
+	cp->treeview = GTK_TREE_VIEW (e_builder_get_widget (ecmc->priv->builder, "contactcerts-treeview"));
 	cp->streemodel = NULL;
-	cp->view_button = e_builder_get_widget (priv->builder, "contact-view-button");
+	cp->view_button = e_builder_get_widget (ecmc->priv->builder, "contact-view-button");
 	cp->backup_button = NULL;
 	cp->backup_all_button = NULL;
-	cp->edit_button = e_builder_get_widget (priv->builder, "contact-edit-button");
-	cp->import_button = e_builder_get_widget (priv->builder, "contact-import-button");
-	cp->delete_button = e_builder_get_widget (priv->builder, "contact-delete-button");
+	cp->edit_button = e_builder_get_widget (ecmc->priv->builder, "contact-edit-button");
+	cp->import_button = e_builder_get_widget (ecmc->priv->builder, "contact-import-button");
+	cp->delete_button = e_builder_get_widget (ecmc->priv->builder, "contact-delete-button");
 	cp->columns = contactcerts_columns;
 	cp->columns_count = G_N_ELEMENTS (contactcerts_columns);
 	cp->cert_type = E_CERT_CONTACT;
@@ -2104,15 +2044,15 @@ e_cert_manager_config_init (ECertManagerConfig *ecmc)
 	initialize_ui (cp);
 
 	cp = g_new0 (CertPage, 1);
-	priv->authoritycerts_page = cp;
-	cp->treeview = GTK_TREE_VIEW (e_builder_get_widget (priv->builder, "authoritycerts-treeview"));
+	ecmc->priv->authoritycerts_page = cp;
+	cp->treeview = GTK_TREE_VIEW (e_builder_get_widget (ecmc->priv->builder, "authoritycerts-treeview"));
 	cp->streemodel = NULL;
-	cp->view_button = e_builder_get_widget (priv->builder, "authority-view-button");
+	cp->view_button = e_builder_get_widget (ecmc->priv->builder, "authority-view-button");
 	cp->backup_button = NULL;
 	cp->backup_all_button = NULL;
-	cp->edit_button = e_builder_get_widget (priv->builder, "authority-edit-button");
-	cp->import_button = e_builder_get_widget (priv->builder, "authority-import-button");
-	cp->delete_button = e_builder_get_widget (priv->builder, "authority-delete-button");
+	cp->edit_button = e_builder_get_widget (ecmc->priv->builder, "authority-edit-button");
+	cp->import_button = e_builder_get_widget (ecmc->priv->builder, "authority-import-button");
+	cp->delete_button = e_builder_get_widget (ecmc->priv->builder, "authority-delete-button");
 	cp->columns = authoritycerts_columns;
 	cp->columns_count = G_N_ELEMENTS (authoritycerts_columns);
 	cp->cert_type = E_CERT_CA;
@@ -2120,7 +2060,7 @@ e_cert_manager_config_init (ECertManagerConfig *ecmc)
 	cp->cert_mime_types = authoritycerts_mime_types;
 	initialize_ui (cp);
 
-	cm_add_mail_certificate_page (ecmc, GTK_NOTEBOOK (e_builder_get_widget (priv->builder, "cert-manager-notebook")));
+	cm_add_mail_certificate_page (ecmc, GTK_NOTEBOOK (e_builder_get_widget (ecmc->priv->builder, "cert-manager-notebook")));
 
 	/* Run this in an idle callback so Evolution has a chance to
 	 * fully initialize itself and start its main loop before we
@@ -2132,14 +2072,14 @@ e_cert_manager_config_init (ECertManagerConfig *ecmc)
 
 	/* Disconnect cert-manager-notebook from it's window and attach it
 	 * to this ECertManagerConfig */
-	widget = e_builder_get_widget (priv->builder, "cert-manager-notebook");
+	widget = e_builder_get_widget (ecmc->priv->builder, "cert-manager-notebook");
 	parent = gtk_widget_get_parent (widget);
 	gtk_container_remove (GTK_CONTAINER (parent), widget);
 	gtk_box_pack_start (GTK_BOX (ecmc), widget, TRUE, TRUE, 0);
 	gtk_widget_show_all (widget);
 
 	/* FIXME: remove when implemented */
-	gtk_widget_set_visible (priv->yourcerts_page->backup_all_button, FALSE);
+	gtk_widget_set_visible (ecmc->priv->yourcerts_page->backup_all_button, FALSE);
 }
 
 GtkWidget *
@@ -2156,36 +2096,43 @@ GtkWidget *
 e_cert_manager_new_certificate_viewer (GtkWindow *parent,
                                        ECert *cert)
 {
-	GcrCertificate *certificate;
 	GtkWidget *content_area;
 	GtkWidget *dialog;
 	GtkWidget *widget, *certificate_widget;
-	gchar *subject_name;
+	gchar *data = NULL;
+	guint32 len = 0;
+	const gchar *title;
 
 	g_return_val_if_fail (cert != NULL, NULL);
 
-	certificate = GCR_CERTIFICATE (cert);
+	if (!e_cert_get_raw_der (cert, &data, &len)) {
+		data = NULL;
+		len = 0;
+	}
 
-	certificate_widget = cm_prepare_certificate_widget (certificate);
+	certificate_widget = cm_prepare_certificate_widget (data, (gsize) len);
 
-	subject_name = gcr_certificate_get_subject_name (certificate);
+	title = e_cert_get_cn (cert);
+	if (!title || !*title)
+		title = e_cert_get_email (cert);
+	if (!title || !*title)
+		title = e_cert_get_subject_name (cert);
 
 	dialog = gtk_dialog_new_with_buttons (
-		subject_name, parent,
+		title, parent,
 		GTK_DIALOG_DESTROY_WITH_PARENT,
 		_("_Close"), GTK_RESPONSE_CLOSE,
 		NULL);
 
 	gtk_container_set_border_width (GTK_CONTAINER (dialog), 5);
+	gtk_window_set_default_size (GTK_WINDOW (dialog), 400, 300);
 
 	content_area = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
 
 	widget = GTK_WIDGET (certificate_widget);
 	gtk_container_set_border_width (GTK_CONTAINER (widget), 5);
 	gtk_box_pack_start (GTK_BOX (content_area), widget, TRUE, TRUE, 0);
-	gtk_widget_show (widget);
-
-	g_free (subject_name);
+	gtk_widget_show_all (widget);
 
 	return dialog;
 }

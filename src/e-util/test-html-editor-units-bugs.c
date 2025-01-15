@@ -2179,8 +2179,8 @@ test_issue_1157 (TestFixture *fixture)
 		"action:paste\n",
 		HTML_PREFIX "<div style=\"width: 12ch;\">Credits:</div>"
 		"<blockquote type=\"cite\">"
-		"<div style=\"width: 12ch;\">" QUOTE_SPAN (QUOTE_CHR) "123 567 90</div>"
-		"<div style=\"width: 12ch;\">" QUOTE_SPAN (QUOTE_CHR) "2345678901</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "123 567 90</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "2345678901</div>"
 		"</blockquote>"
 		"<div style=\"width: 12ch;\"><a href=\"http://e.c/\">http://e.c/</a></div>"
 		HTML_SUFFIX,
@@ -2783,6 +2783,331 @@ test_issue_1392 (TestFixture *fixture)
 		g_test_fail ();
 }
 
+static void
+test_issue_1708 (TestFixture *fixture)
+{
+	test_utils_fixture_change_setting_int32 (fixture, "org.gnome.evolution.mail", "composer-word-wrap-length", 10);
+
+	if (!test_utils_process_commands (fixture,
+		"mode:plain\n")) {
+		g_test_fail ();
+		return;
+	}
+
+	test_utils_insert_content (fixture,
+		"<body><div>aaa bbb ccc</div>"
+		"<div>1234567</div>"
+		"<div>dd 1234567</div>"
+		"<div>1234567 ee</div>"
+		"<div>ff 1234567 gg</div>"
+		"<div>12345678</div>"
+		"<div>12345678 hh</div>"
+		"<div>ii 12345678</div>"
+		"<div>jj 12345678 kk</div>"
+		"<div>1234567890123456</div>"
+		"<div>ll 1234567890123456</div>"
+		"<div>1234567890123456 mm</div>"
+		"<div>nn 1234567890123456 oo</div>"
+		"<div>123456789012345678901</div>"
+		"<div>pp 123456789012345678901</div>"
+		"<div>123456789012345678901 qq</div>"
+		"<div>rr 123456789012345678901 tt</div>"
+		"<div>uuu 123456789012345678901 vvv</div>"
+		"<span class=\"-x-evo-to-body\" data-credits=\"Credits:\"></span>"
+		"<span class=\"-x-evo-cite-body\"></span></body>",
+		E_CONTENT_EDITOR_INSERT_REPLACE_ALL | E_CONTENT_EDITOR_INSERT_TEXT_HTML);
+
+	if (!test_utils_run_simple_test (fixture,
+		"",
+		HTML_PREFIX "<div style=\"width: 10ch;\">Credits:</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "aaa bbb" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "ccc</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "1234567</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "dd" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "1234567</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "1234567" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "ee</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "ff" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "1234567" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "gg</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "hh</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "ii" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "12345678</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "jj" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "kk</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "90123456</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "ll" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "90123456</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "90123456" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "mm</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "nn" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "90123456" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "oo</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "90123456" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "78901</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "pp" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "90123456" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "78901</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "90123456" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "78901 qq</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "rr" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "90123456" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "78901 tt</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "uuu" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "12345678" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "90123456" WRAP_BR
+		QUOTE_SPAN (QUOTE_CHR) "78901" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "vvv</div>"
+		"</blockquote>"
+		HTML_SUFFIX,
+		"Credits:\n"
+		"> aaa bbb\n"
+		"> ccc\n"
+		"> 1234567\n"
+		"> dd\n"
+		"> 1234567\n"
+		"> 1234567\n"
+		"> ee\n"
+		"> ff\n"
+		"> 1234567\n"
+		"> gg\n"
+		"> 12345678\n"
+		"> 12345678\n"
+		"> hh\n"
+		"> ii\n"
+		"> 12345678\n"
+		"> jj\n"
+		"> 12345678\n"
+		"> kk\n"
+		"> 12345678\n"
+		"> 90123456\n"
+		"> ll\n"
+		"> 12345678\n"
+		"> 90123456\n"
+		"> 12345678\n"
+		"> 90123456\n"
+		"> mm\n"
+		"> nn\n"
+		"> 12345678\n"
+		"> 90123456\n"
+		"> oo\n"
+		"> 12345678\n"
+		"> 90123456\n"
+		"> 78901\n"
+		"> pp\n"
+		"> 12345678\n"
+		"> 90123456\n"
+		"> 78901\n"
+		"> 12345678\n"
+		"> 90123456\n"
+		"> 78901 qq\n"
+		"> rr\n"
+		"> 12345678\n"
+		"> 90123456\n"
+		"> 78901 tt\n"
+		"> uuu\n"
+		"> 12345678\n"
+		"> 90123456\n"
+		"> 78901\n"
+		"> vvv\n"))
+		g_test_fail ();
+}
+
+static void
+test_issue_1763 (TestFixture *fixture)
+{
+	test_utils_fixture_change_setting_int32 (fixture, "org.gnome.evolution.mail", "composer-word-wrap-length", 20);
+
+	if (!test_utils_process_commands (fixture,
+		"mode:plain\n")) {
+		g_test_fail ();
+		return;
+	}
+
+	test_utils_insert_content (fixture,
+		"<body><div>aaa &lt;u@no.where&gt; bbb ccc</div>"
+		"<div>12345678 0123 5678</div>"
+		"<blockquote type=\"cite\">"
+		"<div>ddd www.no.whr eee fff ggg hhh iii jjj</div>"
+		"<div>123 4567890 123456 789012 34567</div>"
+		"</blockquote>"
+		"<span class=\"-x-evo-to-body\" data-credits=\"Credits:\"></span>"
+		"<span class=\"-x-evo-cite-body\"></span></body>",
+		E_CONTENT_EDITOR_INSERT_REPLACE_ALL | E_CONTENT_EDITOR_INSERT_TEXT_HTML);
+
+	if (!test_utils_run_simple_test (fixture,
+		"",
+		HTML_PREFIX "<div style=\"width: 20ch;\">Credits:</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "aaa &lt;<a href=\"mailto:u@no.where\">u@no.where</a>&gt;" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "bbb ccc</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678 0123 5678</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "ddd <a href=\"https://www.no.whr\">www.no.whr</a>" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "eee fff ggg hhh" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "iii jjj</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "123 4567890" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "123456 789012" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "34567</div>"
+		"</blockquote>"
+		"</blockquote>"
+		HTML_SUFFIX,
+		"Credits:\n"
+		"> aaa <u@no.where>\n"
+		"> bbb ccc\n"
+		"> 12345678 0123 5678\n"
+		"> > ddd www.no.whr\n"
+		"> > eee fff ggg hhh\n"
+		"> > iii jjj\n"
+		"> > 123 4567890\n"
+		"> > 123456 789012\n"
+		"> > 34567\n")) {
+		g_test_fail ();
+		return;
+	}
+
+	if (!test_utils_run_simple_test (fixture,
+		"seq:d\n"
+		"type:1",
+		HTML_PREFIX "<div style=\"width: 20ch;\">Credits:</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "1aaa &lt;<a href=\"mailto:u@no.where\">u@no.where</a>&gt;" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "bbb ccc</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678 0123 5678</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "ddd <a href=\"https://www.no.whr\">www.no.whr</a>" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "eee fff ggg hhh" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "iii jjj</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "123 4567890" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "123456 789012" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "34567</div>"
+		"</blockquote>"
+		"</blockquote>"
+		HTML_SUFFIX,
+		"Credits:\n"
+		"> 1aaa <u@no.where>\n"
+		"> bbb ccc\n"
+		"> 12345678 0123 5678\n"
+		"> > ddd www.no.whr\n"
+		"> > eee fff ggg hhh\n"
+		"> > iii jjj\n"
+		"> > 123 4567890\n"
+		"> > 123456 789012\n"
+		"> > 34567\n")) {
+		g_test_fail ();
+		return;
+	}
+
+	if (!test_utils_run_simple_test (fixture,
+		"type:2",
+		HTML_PREFIX "<div style=\"width: 20ch;\">Credits:</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12aaa &lt;<a href=\"mailto:u@no.where\">u@no.where</a>&gt;" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "bbb ccc</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678 0123 5678</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "ddd <a href=\"https://www.no.whr\">www.no.whr</a>" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "eee fff ggg hhh" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "iii jjj</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "123 4567890" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "123456 789012" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "34567</div>"
+		"</blockquote>"
+		"</blockquote>"
+		HTML_SUFFIX,
+		"Credits:\n"
+		"> 12aaa <u@no.where>\n"
+		"> bbb ccc\n"
+		"> 12345678 0123 5678\n"
+		"> > ddd www.no.whr\n"
+		"> > eee fff ggg hhh\n"
+		"> > iii jjj\n"
+		"> > 123 4567890\n"
+		"> > 123456 789012\n"
+		"> > 34567\n")) {
+		g_test_fail ();
+		return;
+	}
+
+	if (!test_utils_run_simple_test (fixture,
+		"type:3",
+		HTML_PREFIX "<div style=\"width: 20ch;\">Credits:</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "123aaa" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "&lt;<a href=\"mailto:u@no.where\">u@no.where</a>&gt; bbb" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "ccc</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678 0123 5678</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "ddd <a href=\"https://www.no.whr\">www.no.whr</a>" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "eee fff ggg hhh" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "iii jjj</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "123 4567890" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "123456 789012" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "34567</div>"
+		"</blockquote>"
+		"</blockquote>"
+		HTML_SUFFIX,
+		"Credits:\n"
+		"> 123aaa\n"
+		"> <u@no.where> bbb\n"
+		"> ccc\n"
+		"> 12345678 0123 5678\n"
+		"> > ddd www.no.whr\n"
+		"> > eee fff ggg hhh\n"
+		"> > iii jjj\n"
+		"> > 123 4567890\n"
+		"> > 123456 789012\n"
+		"> > 34567\n")) {
+		g_test_fail ();
+		return;
+	}
+
+	if (!test_utils_run_simple_test (fixture,
+		"type:4",
+		HTML_PREFIX "<div style=\"width: 20ch;\">Credits:</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "1234aaa" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "&lt;<a href=\"mailto:u@no.where\">u@no.where</a>&gt; bbb" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR) "ccc</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR) "12345678 0123 5678</div>"
+		"<blockquote type=\"cite\">"
+		"<div>" QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "ddd <a href=\"https://www.no.whr\">www.no.whr</a>" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "eee fff ggg hhh" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "iii jjj</div>"
+		"<div>" QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "123 4567890" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "123456 789012" WRAP_BR_SPC
+		QUOTE_SPAN (QUOTE_CHR QUOTE_CHR) "34567</div>"
+		"</blockquote>"
+		"</blockquote>"
+		HTML_SUFFIX,
+		"Credits:\n"
+		"> 1234aaa\n"
+		"> <u@no.where> bbb\n"
+		"> ccc\n"
+		"> 12345678 0123 5678\n"
+		"> > ddd www.no.whr\n"
+		"> > eee fff ggg hhh\n"
+		"> > iii jjj\n"
+		"> > 123 4567890\n"
+		"> > 123456 789012\n"
+		"> > 34567\n")) {
+		g_test_fail ();
+		return;
+	}
+}
+
 void
 test_add_html_editor_bug_tests (void)
 {
@@ -2831,4 +3156,6 @@ test_add_html_editor_bug_tests (void)
 	test_utils_add_test ("/issue/1424-level2", test_issue_1424_level2);
 	test_utils_add_test ("/issue/1439", test_issue_1439);
 	test_utils_add_test ("/issue/1392", test_issue_1392);
+	test_utils_add_test ("/issue/1708", test_issue_1708);
+	test_utils_add_test ("/issue/1763", test_issue_1763);
 }

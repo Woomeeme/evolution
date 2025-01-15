@@ -11,12 +11,13 @@
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
- * published by the Free Software Foundation; either the
+ * published by the Free Software Foundation; either the version 2 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * for more details.
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser  General Public
+ * License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -212,6 +213,16 @@ void		e_date_edit_set_get_time_callback
 GtkWidget *	e_date_edit_get_entry		(EDateEdit *dedit);
 
 gboolean	e_date_edit_has_focus		(EDateEdit *dedit);
+
+gint		e_date_edit_get_shorten_time	(EDateEdit *self);
+void		e_date_edit_set_shorten_time	(EDateEdit *self,
+						 gint minutes);
+gboolean	e_date_edit_get_shorten_time_end(EDateEdit *self);
+void		e_date_edit_set_shorten_time_end(EDateEdit *self,
+						 gboolean shorten_time_end);
+const gchar *	e_date_edit_get_date_format	(EDateEdit *self);
+void		e_date_edit_set_date_format	(EDateEdit *self,
+						 const gchar *strftime_format);
 
 G_END_DECLS
 

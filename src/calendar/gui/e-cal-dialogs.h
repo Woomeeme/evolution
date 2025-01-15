@@ -22,10 +22,18 @@
 #include <calendar/gui/e-cal-model.h>
 #include <calendar/gui/e-calendar-view.h>
 
+gboolean	e_cal_dialogs_delete_with_comment
+						(GtkWindow *parent,
+						 ECalClient *cal_client,
+						 ECalComponent *comp,
+						 gboolean organizer_is_user,
+						 gboolean attendee_is_user,
+						 gboolean *out_can_send_notice);
 gboolean	e_cal_dialogs_cancel_component	(GtkWindow *parent,
 						 ECalClient *cal_client,
 						 ECalComponent *comp,
-						 gboolean deleting);
+						 gboolean can_set_cancel_comment,
+						 gboolean organizer_is_user);
 void		e_cal_dialogs_copy_source	(GtkWindow *parent,
 						 ECalModel *model,
 						 ESource *from_source);
@@ -71,6 +79,8 @@ GtkResponseType	e_cal_dialogs_send_dragged_or_resized_component
 						 gboolean *only_new_attendees);
 gboolean	e_cal_dialogs_send_component_prompt_subject
 						(GtkWindow *parent,
+						 ICalComponent *icomp);
+gboolean	e_cal_dialogs_detach_and_copy	(GtkWindow *parent,
 						 ICalComponent *icomp);
 
 #endif /* E_CAL_DIALOGS_H */

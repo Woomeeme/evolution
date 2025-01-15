@@ -21,6 +21,8 @@
 #include "evolution-config.h"
 
 #include "e-book-shell-view-private.h"
+#include "addressbook/gui/widgets/e-bulk-edit-contacts.h"
+#include "addressbook/gui/widgets/gal-view-minicard.h"
 
 #include <e-util/e-util.h>
 
@@ -570,7 +572,6 @@ action_address_book_save_as_cb (GtkAction *action,
 	EShellWindow *shell_window;
 	EShellBackend *shell_backend;
 	EBookShellContent *book_shell_content;
-	EAddressbookModel *model;
 	EAddressbookView *view;
 	EActivity *activity;
 	EBookQuery *query;
@@ -588,8 +589,7 @@ action_address_book_save_as_cb (GtkAction *action,
 	view = e_book_shell_content_get_current_view (book_shell_content);
 	g_return_if_fail (view != NULL);
 
-	model = e_addressbook_view_get_model (view);
-	book = e_addressbook_model_get_client (model);
+	book = e_addressbook_view_get_client (view);
 
 	query = e_book_query_any_field_contains ("");
 	string = e_book_query_to_string (query);
@@ -601,7 +601,7 @@ action_address_book_save_as_cb (GtkAction *action,
 	if (list == NULL)
 		goto exit;
 
-	string = eab_suggest_filename (list);
+	string = eab_suggest_filename ((!list || list->next) ? NULL : list->data);
 	file = e_shell_run_save_dialog (
 		/* Translators: This is a save dialog title */
 		shell, _("Save as vCard"), string,
@@ -656,6 +656,125 @@ action_address_book_stop_cb (GtkAction *action,
 	e_addressbook_view_stop (view);
 }
 
+typedef struct _RetrieveSelectedData {
+	EShellBackend *shell_backend;
+	EShellView *shell_view;
+	EShell *shell;
+	EActivity *activity;
+} RetrieveSelectedData;
+
+static RetrieveSelectedData *
+retrieve_selected_data_new (EShellView *shell_view)
+{
+	RetrieveSelectedData *rsd;
+	EActivity *activity;
+	GCancellable *cancellable;
+
+	activity = e_activity_new ();
+	cancellable = camel_operation_new ();
+
+	e_activity_set_alert_sink (activity, E_ALERT_SINK (e_shell_view_get_shell_content (shell_view)));
+	e_activity_set_cancellable (activity, cancellable);
+	e_activity_set_text (activity, _("Retrieving selected contacts…"));
+
+	camel_operation_push_message (cancellable, "%s", e_activity_get_text (activity));
+
+	e_shell_backend_add_activity (e_shell_view_get_shell_backend (shell_view), activity);
+
+	rsd = g_new0 (RetrieveSelectedData, 1);
+	rsd->shell_backend = g_object_ref (e_shell_view_get_shell_backend (shell_view));
+	rsd->shell_view = g_object_ref (shell_view);
+	rsd->shell = g_object_ref (e_shell_backend_get_shell (rsd->shell_backend));
+	rsd->activity = activity;
+
+	g_object_unref (cancellable);
+
+	return rsd;
+}
+
+static void
+retrieve_selected_data_free (RetrieveSelectedData *rsd)
+{
+	if (rsd) {
+		g_clear_object (&rsd->shell_backend);
+		g_clear_object (&rsd->shell_view);
+		g_clear_object (&rsd->shell);
+		g_free (rsd);
+	}
+}
+
+static void
+action_contact_bulk_edit_run (EShellView *shell_view,
+			      EBookClient *book_client,
+			      GPtrArray *contacts)
+{
+	GtkWidget *bulk_edit;
+
+	bulk_edit = e_bulk_edit_contacts_new (GTK_WINDOW (e_shell_view_get_shell_window (shell_view)), book_client, contacts);
+
+	gtk_widget_show (bulk_edit);
+}
+
+static void
+action_contact_bulk_edit_got_selected_cb (GObject *source_object,
+					  GAsyncResult *result,
+					  gpointer user_data)
+{
+	RetrieveSelectedData *rsd = user_data;
+	EAddressbookView *view = E_ADDRESSBOOK_VIEW (source_object);
+	GPtrArray *contacts;
+	GError *error = NULL;
+
+	g_return_if_fail (rsd != NULL);
+
+	contacts = e_addressbook_view_dup_selected_contacts_finish (view, result, &error);
+	if (contacts) {
+		e_activity_set_state (rsd->activity, E_ACTIVITY_COMPLETED);
+
+		action_contact_bulk_edit_run (rsd->shell_view, e_addressbook_view_get_client (view), contacts);
+	} else if (!e_activity_handle_cancellation (rsd->activity, error)) {
+		g_warning ("%s: Failed to retrieve selected contacts: %s", G_STRFUNC, error ? error->message : "Unknown error");
+		e_activity_set_state (rsd->activity, E_ACTIVITY_COMPLETED);
+	}
+
+	g_clear_pointer (&contacts, g_ptr_array_unref);
+	g_clear_error (&error);
+
+	retrieve_selected_data_free (rsd);
+}
+
+static void
+action_contact_bulk_edit_cb (GtkAction *action,
+			     EBookShellView *book_shell_view)
+{
+	EShellView *shell_view;
+	EBookShellContent *book_shell_content;
+	EAddressbookView *view;
+	GPtrArray *contacts;
+
+	shell_view = E_SHELL_VIEW (book_shell_view);
+
+	book_shell_content = book_shell_view->priv->book_shell_content;
+	view = e_book_shell_content_get_current_view (book_shell_content);
+	g_return_if_fail (view != NULL);
+
+	contacts = e_addressbook_view_peek_selected_contacts (view);
+	if (!contacts) {
+		RetrieveSelectedData *rsd;
+
+		rsd = retrieve_selected_data_new (shell_view);
+
+		e_addressbook_view_dup_selected_contacts (view, e_activity_get_cancellable (rsd->activity),
+			action_contact_bulk_edit_got_selected_cb, rsd);
+
+		return;
+	}
+
+	action_contact_bulk_edit_run (shell_view, e_addressbook_view_get_client (view), contacts);
+
+	g_ptr_array_unref (contacts);
+}
+
 static void
 action_contact_copy_cb (GtkAction *action,
                         EBookShellView *book_shell_view)
@@ -698,6 +817,57 @@ action_contact_find_cb (GtkAction *action,
 }
 
 static void
+action_contact_forward_run (EShell *shell,
+			    GPtrArray *contacts)
+{
+	GSList *destinations = NULL;
+	guint ii;
+
+	for (ii = 0; ii < (contacts ? contacts->len : 0); ii++) {
+		EContact *contact = g_ptr_array_index (contacts, ii);
+		EDestination *destination;
+
+		destination = e_destination_new ();
+		e_destination_set_contact (destination, contact, 0);
+
+		destinations = g_slist_prepend (destinations, destination);
+	}
+
+	destinations = g_slist_reverse (destinations);
+
+	eab_send_as_attachment (shell, destinations);
+
+	g_slist_free_full (destinations, g_object_unref);
+}
+
+static void
+action_contact_forward_got_selected_cb (GObject *source_object,
+					GAsyncResult *result,
+					gpointer user_data)
+{
+	RetrieveSelectedData *rsd = user_data;
+	GPtrArray *contacts;
+	GError *error = NULL;
+
+	g_return_if_fail (rsd != NULL);
+
+	contacts = e_addressbook_view_dup_selected_contacts_finish (E_ADDRESSBOOK_VIEW (source_object), result, &error);
+	if (contacts) {
+		e_activity_set_state (rsd->activity, E_ACTIVITY_COMPLETED);
+
+		action_contact_forward_run (rsd->shell, contacts);
+	} else if (!e_activity_handle_cancellation (rsd->activity, error)) {
+		g_warning ("%s: Failed to retrieve selected contacts: %s", G_STRFUNC, error ? error->message : "Unknown error");
+		e_activity_set_state (rsd->activity, E_ACTIVITY_COMPLETED);
+	}
+
+	g_clear_pointer (&contacts, g_ptr_array_unref);
+	g_clear_error (&error);
+
+	retrieve_selected_data_free (rsd);
+}
+
+static void
 action_contact_forward_cb (GtkAction *action,
                            EBookShellView *book_shell_view)
 {
@@ -706,7 +876,7 @@ action_contact_forward_cb (GtkAction *action,
 	EShellWindow *shell_window;
 	EBookShellContent *book_shell_content;
 	EAddressbookView *view;
-	GSList *list, *iter;
+	GPtrArray *contacts;
 
 	shell_view = E_SHELL_VIEW (book_shell_view);
 	shell_window = e_shell_view_get_shell_window (shell_view);
@@ -716,24 +886,21 @@ action_contact_forward_cb (GtkAction *action,
 	view = e_book_shell_content_get_current_view (book_shell_content);
 	g_return_if_fail (view != NULL);
 
-	list = e_addressbook_view_get_selected (view);
-	g_return_if_fail (list != NULL);
+	contacts = e_addressbook_view_peek_selected_contacts (view);
+	if (!contacts) {
+		RetrieveSelectedData *rsd;
 
-	/* Convert the list of contacts to a list of destinations. */
-	for (iter = list; iter != NULL; iter = iter->next) {
-		EContact *contact = iter->data;
-		EDestination *destination;
+		rsd = retrieve_selected_data_new (shell_view);
 
-		destination = e_destination_new ();
-		e_destination_set_contact (destination, contact, 0);
-		g_object_unref (contact);
+		e_addressbook_view_dup_selected_contacts (view, e_activity_get_cancellable (rsd->activity),
+			action_contact_forward_got_selected_cb, rsd);
 
-		iter->data = destination;
+		return;
 	}
 
-	eab_send_as_attachment (shell, list);
+	action_contact_forward_run (shell, contacts);
 
-	g_slist_free_full (list, (GDestroyNotify) g_object_unref);
+	g_ptr_array_unref (contacts);
 }
 
 static void
@@ -759,7 +926,6 @@ action_contact_new_cb (GtkAction *action,
 	EShellWindow *shell_window;
 	EBookShellContent *book_shell_content;
 	EAddressbookView *view;
-	EAddressbookModel *model;
 	EContact *contact;
 	EABEditor *editor;
 	EBookClient *book;
@@ -772,8 +938,7 @@ action_contact_new_cb (GtkAction *action,
 	view = e_book_shell_content_get_current_view (book_shell_content);
 	g_return_if_fail (view != NULL);
 
-	model = e_addressbook_view_get_model (view);
-	book = e_addressbook_model_get_client (model);
+	book = e_addressbook_view_get_client (view);
 	g_return_if_fail (book != NULL);
 
 	contact = e_contact_new ();
@@ -787,36 +952,21 @@ static void
 action_contact_new_list_cb (GtkAction *action,
                             EBookShellView *book_shell_view)
 {
-	EShell *shell;
 	EShellView *shell_view;
-	EShellWindow *shell_window;
 	EBookShellContent *book_shell_content;
 	EAddressbookView *view;
-	EAddressbookModel *model;
-	EContact *contact;
-	EABEditor *editor;
 	EBookClient *book;
 
 	shell_view = E_SHELL_VIEW (book_shell_view);
-	shell_window = e_shell_view_get_shell_window (shell_view);
-	shell = e_shell_window_get_shell (shell_window);
 
 	book_shell_content = book_shell_view->priv->book_shell_content;
 	view = e_book_shell_content_get_current_view (book_shell_content);
 	g_return_if_fail (view != NULL);
 
-	model = e_addressbook_view_get_model (view);
-	book = e_addressbook_model_get_client (model);
+	book = e_addressbook_view_get_client (view);
 	g_return_if_fail (book != NULL);
 
-	contact = e_contact_new ();
-
-	e_book_shell_view_maybe_prefill_list_with_selection (shell_view, contact);
-
-	editor = e_contact_list_editor_new (shell, book, contact, TRUE, TRUE);
-	gtk_window_set_transient_for (eab_editor_get_window (editor), GTK_WINDOW (shell_window));
-	eab_editor_show (editor);
-	g_object_unref (contact);
+	e_book_shell_view_open_list_editor_with_prefill (shell_view, book);
 }
 
 static void
@@ -874,35 +1024,16 @@ action_contact_print_cb (GtkAction *action,
 }
 
 static void
-action_contact_save_as_cb (GtkAction *action,
-                           EBookShellView *book_shell_view)
+action_contact_save_as_run (EShell *shell,
+			    EShellBackend *shell_backend,
+			    GPtrArray *contacts)
 {
-	EShell *shell;
-	EShellView *shell_view;
-	EShellWindow *shell_window;
-	EShellBackend *shell_backend;
-	EBookShellContent *book_shell_content;
-	EAddressbookView *view;
 	EActivity *activity;
-	GSList *list;
 	GFile *file;
 	gchar *string;
 
-	shell_view = E_SHELL_VIEW (book_shell_view);
-	shell_window = e_shell_view_get_shell_window (shell_view);
-	shell_backend = e_shell_view_get_shell_backend (shell_view);
-	shell = e_shell_window_get_shell (shell_window);
+	string = eab_suggest_filename ((!contacts || !contacts->len || contacts->len > 1) ? NULL : g_ptr_array_index (contacts, 0));
 
-	book_shell_content = book_shell_view->priv->book_shell_content;
-	view = e_book_shell_content_get_current_view (book_shell_content);
-	g_return_if_fail (view != NULL);
-
-	list = e_addressbook_view_get_selected (view);
-
-	if (list == NULL)
-		goto exit;
-
-	string = eab_suggest_filename (list);
 	file = e_shell_run_save_dialog (
 		/* Translators: This is a save dialog title */
 		shell, _("Save as vCard"), string,
@@ -910,13 +1041,13 @@ action_contact_save_as_cb (GtkAction *action,
 	g_free (string);
 
 	if (file == NULL)
-		goto exit;
+		return;
 
-	string = eab_contact_list_to_string (list);
+	string = eab_contact_array_to_string (contacts);
 	if (string == NULL) {
-		g_warning ("Could not convert contact list to a string");
+		g_warning ("Could not convert contact array to a string");
 		g_object_unref (file);
-		goto exit;
+		return;
 	}
 
 	/* XXX No callback means errors are discarded.
@@ -938,9 +1069,126 @@ action_contact_save_as_cb (GtkAction *action,
 		(GDestroyNotify) g_free);
 
 	g_object_unref (file);
+}
 
- exit:
-	g_slist_free_full (list, (GDestroyNotify) g_object_unref);
+static void
+action_contact_save_as_got_selected_cb (GObject *source_object,
+					GAsyncResult *result,
+					gpointer user_data)
+{
+	RetrieveSelectedData *rsd = user_data;
+	GPtrArray *contacts;
+	GError *error = NULL;
+
+	g_return_if_fail (rsd != NULL);
+
+	contacts = e_addressbook_view_dup_selected_contacts_finish (E_ADDRESSBOOK_VIEW (source_object), result, &error);
+	if (!contacts) {
+		if (!e_activity_handle_cancellation (rsd->activity, error)) {
+			g_warning ("%s: Failed to retrieve selected contacts: %s", G_STRFUNC, error ? error->message : "Unknown error");
+			e_activity_set_state (rsd->activity, E_ACTIVITY_COMPLETED);
+		}
+	} else {
+		e_activity_set_state (rsd->activity, E_ACTIVITY_COMPLETED);
+
+		action_contact_save_as_run (rsd->shell, rsd->shell_backend, contacts);
+	}
+
+	g_clear_pointer (&contacts, g_ptr_array_unref);
+	g_clear_error (&error);
+
+	retrieve_selected_data_free (rsd);
+}
+
+static void
+action_contact_save_as_cb (GtkAction *action,
+                           EBookShellView *book_shell_view)
+{
+	EShell *shell;
+	EShellView *shell_view;
+	EShellWindow *shell_window;
+	EShellBackend *shell_backend;
+	EBookShellContent *book_shell_content;
+	EAddressbookView *view;
+	GPtrArray *contacts;
+
+	shell_view = E_SHELL_VIEW (book_shell_view);
+	shell_window = e_shell_view_get_shell_window (shell_view);
+	shell_backend = e_shell_view_get_shell_backend (shell_view);
+	shell = e_shell_window_get_shell (shell_window);
+
+	book_shell_content = book_shell_view->priv->book_shell_content;
+	view = e_book_shell_content_get_current_view (book_shell_content);
+	g_return_if_fail (view != NULL);
+
+	contacts = e_addressbook_view_peek_selected_contacts (view);
+	if (!contacts) {
+		RetrieveSelectedData *rsd;
+
+		rsd = retrieve_selected_data_new (shell_view);
+
+		e_addressbook_view_dup_selected_contacts (view, e_activity_get_cancellable (rsd->activity),
+			action_contact_save_as_got_selected_cb, rsd);
+
+		return;
+	}
+
+	action_contact_save_as_run (shell, shell_backend, contacts);
+
+	g_ptr_array_unref (contacts);
+}
+
+static void
+action_contact_send_message_run (EShell *shell,
+				 GPtrArray *contacts)
+{
+	GSList *destinations = NULL;
+	guint ii;
+
+	for (ii = 0; ii < (contacts ? contacts->len : 0); ii++) {
+		EContact *contact = g_ptr_array_index (contacts, ii);
+		EDestination *destination;
+
+		destination = e_destination_new ();
+		e_destination_set_contact (destination, contact, 0);
+
+		destinations = g_slist_prepend (destinations, destination);
+	}
+
+	destinations = g_slist_reverse (destinations);
+
+	eab_send_as_to (shell, destinations);
+
+	g_slist_free_full (destinations, g_object_unref);
+}
+
+static void
+action_contact_send_message_got_selected_cb (GObject *source_object,
+					     GAsyncResult *result,
+					     gpointer user_data)
+{
+	RetrieveSelectedData *rsd = user_data;
+	GPtrArray *contacts;
+	GError *error = NULL;
+
+	g_return_if_fail (rsd != NULL);
+
+	contacts = e_addressbook_view_dup_selected_contacts_finish (E_ADDRESSBOOK_VIEW (source_object), result, &error);
+	if (contacts) {
+		e_activity_set_state (rsd->activity, E_ACTIVITY_COMPLETED);
+
+		action_contact_send_message_run (rsd->shell, contacts);
+	} else {
+		if (!e_activity_handle_cancellation (rsd->activity, error)) {
+			g_warning ("%s: Failed to retrieve selected contacts: %s", G_STRFUNC, error ? error->message : "Unknown error");
+			e_activity_set_state (rsd->activity, E_ACTIVITY_COMPLETED);
+		}
+	}
+
+	g_clear_pointer (&contacts, g_ptr_array_unref);
+	g_clear_error (&error);
+
+	retrieve_selected_data_free (rsd);
 }
 
 static void
@@ -952,7 +1200,7 @@ action_contact_send_message_cb (GtkAction *action,
 	EShellWindow *shell_window;
 	EBookShellContent *book_shell_content;
 	EAddressbookView *view;
-	GSList *list, *iter;
+	GPtrArray *contacts;
 
 	shell_view = E_SHELL_VIEW (book_shell_view);
 	shell_window = e_shell_view_get_shell_window (shell_view);
@@ -962,24 +1210,21 @@ action_contact_send_message_cb (GtkAction *action,
 	view = e_book_shell_content_get_current_view (book_shell_content);
 	g_return_if_fail (view != NULL);
 
-	list = e_addressbook_view_get_selected (view);
-	g_return_if_fail (list != NULL);
+	contacts = e_addressbook_view_peek_selected_contacts (view);
+	if (!contacts) {
+		RetrieveSelectedData *rsd;
 
-	/* Convert the list of contacts to a list of destinations. */
-	for (iter = list; iter != NULL; iter = iter->next) {
-		EContact *contact = iter->data;
-		EDestination *destination;
+		rsd = retrieve_selected_data_new (shell_view);
 
-		destination = e_destination_new ();
-		e_destination_set_contact (destination, contact, 0);
-		g_object_unref (contact);
+		e_addressbook_view_dup_selected_contacts (view, e_activity_get_cancellable (rsd->activity),
+			action_contact_send_message_got_selected_cb, rsd);
 
-		iter->data = destination;
+		return;
 	}
 
-	eab_send_as_to (shell, list);
+	action_contact_send_message_run (shell, contacts);
 
-	g_slist_free_full (list, (GDestroyNotify) g_object_unref);
+	g_ptr_array_unref (contacts);
 }
 
 static void
@@ -1006,6 +1251,25 @@ action_contact_view_cb (GtkRadioAction *action,
 	}
 
 	gtk_orientable_set_orientation (orientable, orientation);
+}
+
+static void
+action_contact_cards_sort_by_cb (GtkRadioAction *action,
+				 GtkRadioAction *current,
+				 EBookShellView *book_shell_view)
+{
+	GalViewInstance *view_instance;
+	GalView *gl_view;
+	EAddressbookView *addr_view;
+
+	addr_view = e_book_shell_content_get_current_view (book_shell_view->priv->book_shell_content);
+	view_instance = e_addressbook_view_get_view_instance (addr_view);
+	gl_view = gal_view_instance_get_current_view (view_instance);
+
+	if (GAL_IS_VIEW_MINICARD (gl_view))
+		gal_view_minicard_set_sort_by (GAL_VIEW_MINICARD (gl_view), gtk_radio_action_get_current_value (action));
+	else
+		g_warn_if_reached ();
 }
 
 static GtkActionEntry contact_entries[] = {
@@ -1087,6 +1351,13 @@ static GtkActionEntry contact_entries[] = {
 	  N_("Stop loading"),
 	  G_CALLBACK (action_address_book_stop_cb) },
 
+	{ "contact-bulk-edit",
+	  NULL,
+	  N_("_Bulk Edit…"),
+	  "<Control>b",
+	  N_("Edit selected contacts in a bulk"),
+	  G_CALLBACK (action_contact_bulk_edit_cb) },
+
 	{ "contact-copy",
 	  NULL,
 	  N_("_Copy Contact To…"),
@@ -1164,7 +1435,14 @@ static GtkActionEntry contact_entries[] = {
 	  N_("_Preview"),
 	  NULL,
 	  NULL,
-	  NULL }
+	  NULL },
+
+	{ "contact-cards-sort-by-menu",
+	  NULL,
+	  N_("_Sort Cards By"),
+	  NULL,
+	  NULL,
+	  NULL },
 };
 
 static EPopupActionEntry contact_popup_entries[] = {
@@ -1304,12 +1582,50 @@ static GtkRadioActionEntry contact_search_entries[] = {
 	  NULL,  /* XXX Add a tooltip! */
 	  CONTACT_SEARCH_EMAIL_BEGINS_WITH },
 
+	{ "contact-search-email-contains",
+	  NULL,
+	  N_("Email contains"),
+	  NULL,
+	  NULL,  /* XXX Add a tooltip! */
+	  CONTACT_SEARCH_EMAIL_CONTAINS },
+
+	{ "contact-search-phone-contains",
+	  NULL,
+	  N_("Phone contains"),
+	  NULL,
+	  NULL,  /* XXX Add a tooltip! */
+	  CONTACT_SEARCH_PHONE_CONTAINS },
+
 	{ "contact-search-name-contains",
 	  NULL,
 	  N_("Name contains"),
 	  NULL,
 	  NULL,  /* XXX Add a tooltip! */
 	  CONTACT_SEARCH_NAME_CONTAINS }
+};
+
+static GtkRadioActionEntry contact_cards_sort_by_entries[] = {
+
+	{ "contact-cards-sort-by-file-as",
+	  NULL,
+	  N_("_File Under"),
+	  NULL,
+	  NULL,
+	  E_CARDS_SORT_BY_FILE_AS },
+
+	{ "contact-cards-sort-by-given-name",
+	  NULL,
+	  N_("_Given Name"),
+	  NULL,
+	  NULL,
+	  E_CARDS_SORT_BY_GIVEN_NAME },
+
+	{ "contact-cards-sort-by-family-name",
+	  NULL,
+	  N_("Family _Name"),
+	  NULL,
+	  NULL,
+	  E_CARDS_SORT_BY_FAMILY_NAME },
 };
 
 static GtkActionEntry lockdown_printing_entries[] = {
@@ -1413,6 +1729,10 @@ e_book_shell_view_actions_init (EBookShellView *book_shell_view)
 		action_group, contact_search_entries,
 		G_N_ELEMENTS (contact_search_entries),
 		-1, NULL, NULL);
+	gtk_action_group_add_radio_actions (
+		action_group, contact_cards_sort_by_entries,
+		G_N_ELEMENTS (contact_cards_sort_by_entries), -1,
+		G_CALLBACK (action_contact_cards_sort_by_cb), book_shell_view);
 
 	/* Advanced Search Action */
 	action = ACTION (CONTACT_SEARCH_ADVANCED_HIDDEN);
@@ -1488,6 +1808,9 @@ e_book_shell_view_actions_init (EBookShellView *book_shell_view)
 	   See also accum_address_map() in eab-contact-formatter.cpp.
 	*/
 	gtk_action_set_visible (ACTION (CONTACT_PREVIEW_SHOW_MAPS), FALSE);
+
+	/* Hide it from the start */
+	gtk_action_set_visible (ACTION (CONTACT_CARDS_SORT_BY_MENU), FALSE);
 }
 
 void

@@ -2,7 +2,7 @@
 include /usr/share/dpkg/pkg-info.mk
 include /usr/share/gnome-pkg-tools/1/rules/gnome-version.mk
 
-export DEB_LDFLAGS_MAINT_APPEND = -Wl,-O1 -Wl,-z,defs -Wl,--as-needed
+export DEB_LDFLAGS_MAINT_APPEND = -Wl,-O1 -Wl,-z,defs
 # see https://bugzilla.gnome.org/show_bug.cgi?id=594473 for details
 export DEB_LDFLAGS_MAINT_STRIP = -Wl,-Bsymbolic-functions
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all reproducible=+fixfilepath
@@ -37,8 +37,11 @@ ifneq ($(filter libevolution,$(shell dh_listpackages)),)
 	find debian/libevolution/ -name 'module-spamassassin.so' -delete
 endif
 
-override_dh_missing:
-	dh_missing --fail-missing
+execute_after_dh_install-arch:
+	rm debian/evolution-dev/usr/lib/evolution/libevolution-rss-common.so
 
 override_dh_makeshlibs:
 	dh_makeshlibs -V'libevolution (>= $(DEB_VERSION_UPSTREAM)), libevolution (<< $(DEB_GNOME_NEXTVERSION))' -n
+
+override_dh_gnome_clean:
+	dh_gnome_clean --no-control

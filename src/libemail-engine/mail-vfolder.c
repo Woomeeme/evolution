@@ -147,7 +147,7 @@ vfolder_setup_desc (struct _setup_msg *m)
 {
 	return g_strdup_printf (
 		_("Setting up Search Folder: %s"),
-		camel_folder_get_full_name (m->folder));
+		camel_folder_get_full_display_name (m->folder));
 }
 
 static void
@@ -782,12 +782,23 @@ mail_vfolder_rename_folder (CamelStore *store,
 static void context_rule_added (ERuleContext *ctx, EFilterRule *rule, EMailSession *session);
 
 static void
+rule_add_source (GList **psources_uri,
+		 const gchar *uri,
+		 EMVFolderRule *rule)
+{
+	/* "tag" uris with subfolders with a star prefix */
+	if (!rule || !em_vfolder_rule_source_get_include_subfolders (rule, uri))
+		*psources_uri = g_list_prepend (*psources_uri, g_strdup (uri));
+	else
+		*psources_uri = g_list_prepend (*psources_uri, g_strconcat ("*", uri, NULL));
+}
+
+static void
 rule_add_sources (EMailSession *session,
                   GQueue *queue,
                   GList **sources_urip,
                   EMVFolderRule *rule)
 {
-	GList *sources_uri = *sources_urip;
 	GList *head, *link;
 
 	head = g_queue_peek_head_link (queue);
@@ -796,16 +807,20 @@ rule_add_sources (EMailSession *session,
 
 		/* always pick fresh folders - they are
 		 * from CamelStore's folders bag anyway */
-		if (vfolder_cache_has_folder_info (session, uri)) {
-			/* "tag" uris with subfolders with a star prefix */
-			if (!rule || !em_vfolder_rule_source_get_include_subfolders (rule, uri))
-				sources_uri = g_list_prepend (sources_uri, g_strdup (uri));
-			else
-				sources_uri = g_list_prepend (sources_uri, g_strconcat ("*", uri, NULL));
-		}
+		if (vfolder_cache_has_folder_info (session, uri))
+			rule_add_source (sources_urip, uri, rule);
 	}
+}
 
-	*sources_urip = sources_uri;
+static gboolean
+mail_vfolder_foreach_folder_uri_cb (const gchar *uri,
+				    gpointer user_data)
+{
+	GList **psources_uri = user_data;
+
+	rule_add_source (psources_uri, uri, NULL);
+
+	return TRUE;
 }
 
 static void
@@ -819,6 +834,7 @@ rule_changed (EFilterRule *rule,
 	GList *sources_uri = NULL;
 	GString *query;
 	const gchar *full_name;
+	em_vfolder_rule_with_t rule_with;
 
 	full_name = camel_folder_get_full_name (folder);
 	store = camel_folder_get_parent_store (folder);
@@ -880,34 +896,15 @@ rule_changed (EFilterRule *rule,
 
 	G_LOCK (vfolder);
 
-	if (em_vfolder_rule_get_with ((EMVFolderRule *) rule) == EM_VFOLDER_RULE_WITH_LOCAL ||
-	    em_vfolder_rule_get_with ((EMVFolderRule *) rule) == EM_VFOLDER_RULE_WITH_LOCAL_REMOTE_ACTIVE) {
-
-		GQueue queue = G_QUEUE_INIT;
-
-		mail_folder_cache_get_local_folder_uris (cache, &queue);
-
-		rule_add_sources (
-			E_MAIL_SESSION (session),
-			&queue, &sources_uri, NULL);
-
-		while (!g_queue_is_empty (&queue))
-			g_free (g_queue_pop_head (&queue));
+	rule_with = em_vfolder_rule_get_with (EM_VFOLDER_RULE (rule));
+	if (rule_with == EM_VFOLDER_RULE_WITH_LOCAL ||
+	    rule_with == EM_VFOLDER_RULE_WITH_LOCAL_REMOTE_ACTIVE) {
+		mail_folder_cache_foreach_local_folder_uri (cache, mail_vfolder_foreach_folder_uri_cb, &sources_uri);
 	}
 
-	if (em_vfolder_rule_get_with ((EMVFolderRule *) rule) == EM_VFOLDER_RULE_WITH_REMOTE_ACTIVE ||
-	    em_vfolder_rule_get_with ((EMVFolderRule *) rule) == EM_VFOLDER_RULE_WITH_LOCAL_REMOTE_ACTIVE) {
-
-		GQueue queue = G_QUEUE_INIT;
-
-		mail_folder_cache_get_remote_folder_uris (cache, &queue);
-
-		rule_add_sources (
-			E_MAIL_SESSION (session),
-			&queue, &sources_uri, NULL);
-
-		while (!g_queue_is_empty (&queue))
-			g_free (g_queue_pop_head (&queue));
+	if (rule_with == EM_VFOLDER_RULE_WITH_REMOTE_ACTIVE ||
+	    rule_with == EM_VFOLDER_RULE_WITH_LOCAL_REMOTE_ACTIVE) {
+		mail_folder_cache_foreach_remote_folder_uri (cache, mail_vfolder_foreach_folder_uri_cb, &sources_uri);
 	}
 
 	G_UNLOCK (vfolder);
@@ -1123,6 +1120,46 @@ folder_renamed_cb (MailFolderCache *cache,
 	mail_vfolder_rename_folder (store, old_folder_name, new_folder_name);
 }
 
+static gboolean glob_thread_subject = FALSE;
+
+static void
+mail_vfolder_thread_subject_changed_cb (GSettings *settings,
+					const gchar *key,
+					gpointer user_data)
+{
+	gboolean thread_subject;
+
+	thread_subject = g_settings_get_boolean (settings, key);
+
+	/* maybe it changed, verify it did */
+	if ((!thread_subject) != (!glob_thread_subject)) {
+		glob_thread_subject = thread_subject;
+
+		if (context && !vfolder_shutdown) {
+			EFilterRule *rule;
+			GSList *rules = NULL, *link;
+
+			G_LOCK (vfolder);
+
+			rule = NULL;
+			while ((rule = e_rule_context_next_rule ((ERuleContext *) context, rule, NULL))) {
+				if (rule->name && rule->threading != E_FILTER_THREAD_NONE)
+					rules = g_slist_prepend (rules, g_object_ref (rule));
+			}
+
+			G_UNLOCK (vfolder);
+
+			for (link = rules; link; link = g_slist_next (link)) {
+				rule = link->data;
+
+				e_filter_rule_emit_changed (rule);
+			}
+
+			g_slist_free_full (rules, g_object_unref);
+		}
+	}
+}
+
 void
 vfolder_load_storage (EMailSession *session)
 {
@@ -1133,6 +1170,7 @@ vfolder_load_storage (EMailSession *session)
 	const gchar *config_dir;
 	gchar *user;
 	EFilterRule *rule;
+	GSettings *settings;
 	MailFolderCache *folder_cache;
 	gchar *xmlfile;
 
@@ -1161,7 +1199,7 @@ vfolder_load_storage (EMailSession *session)
 
 	/* load our rules */
 	user = g_build_filename (config_dir, "vfolders.xml", NULL);
-	/* This needs editor context which is only in the mail/. But really to run here we dont need editor context.
+	/* This needs editor context which is only in the mail/. But really to run here we don't need editor context.
 	 * So till we split this to EDS, we would let mail/ create this and later one it is any ways two separate
 	 * contexts. */
 	context = e_mail_session_create_vfolder_context (session);
@@ -1206,6 +1244,12 @@ vfolder_load_storage (EMailSession *session)
 	g_signal_connect (
 		folder_cache, "folder-renamed",
 		G_CALLBACK (folder_renamed_cb), NULL);
+
+	settings = e_util_ref_settings ("org.gnome.evolution.mail");
+	g_signal_connect_object (settings, "changed::thread-subject",
+		G_CALLBACK (mail_vfolder_thread_subject_changed_cb), context, 0);
+	glob_thread_subject = g_settings_get_boolean (settings, "thread-subject");
+	g_clear_object (&settings);
 }
 
 static void

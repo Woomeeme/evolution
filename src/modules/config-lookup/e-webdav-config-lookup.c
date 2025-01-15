@@ -132,6 +132,9 @@ webdav_config_lookup_to_result (EConfigLookup *config_lookup,
 	e_config_lookup_result_simple_add_string (lookup_result, E_SOURCE_EXTENSION_AUTHENTICATION,
 		"user", user);
 
+	e_config_lookup_result_simple_add_string (lookup_result, E_SOURCE_EXTENSION_AUTHENTICATION,
+		"method", "plain/password");
+
 	if (has_calendar) {
 		e_config_lookup_result_simple_add_string (lookup_result, E_SOURCE_EXTENSION_COLLECTION,
 			"calendar-url", url);
@@ -157,7 +160,7 @@ webdav_config_lookup_propagate_error (GError **error,
 				      GTlsCertificateFlags certificate_errors,
 				      gboolean *out_authentication_failed)
 {
-	if (g_error_matches (local_error, SOUP_HTTP_ERROR, SOUP_STATUS_UNAUTHORIZED)) {
+	if (g_error_matches (local_error, E_SOUP_SESSION_ERROR, SOUP_STATUS_UNAUTHORIZED)) {
 		g_set_error_literal (error, E_CONFIG_LOOKUP_WORKER_ERROR, E_CONFIG_LOOKUP_WORKER_ERROR_REQUIRES_PASSWORD,
 			_("Requires password to continue."));
 
@@ -169,7 +172,7 @@ webdav_config_lookup_propagate_error (GError **error,
 		return TRUE;
 	}
 
-	if (g_error_matches (local_error, SOUP_HTTP_ERROR, SOUP_STATUS_SSL_FAILED) &&
+	if (g_error_matches (local_error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE) &&
 	    certificate_pem && *certificate_pem && certificate_errors) {
 		gchar *description = e_trust_prompt_describe_certificate_errors (certificate_errors);
 
@@ -190,21 +193,21 @@ static void
 webdav_config_lookup_set_host_from_url (ESourceAuthentication *authentication_extension,
 					const gchar *url)
 {
-	SoupURI *suri = NULL;
+	GUri *guri = NULL;
 	const gchar *host = NULL;
 
 	g_return_if_fail (E_IS_SOURCE_AUTHENTICATION (authentication_extension));
 
 	if (url) {
-		suri = soup_uri_new (url);
-		if (suri)
-			host = soup_uri_get_host (suri);
+		guri = g_uri_parse (url, SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_PARSE_RELAXED, NULL);
+		if (guri)
+			host = g_uri_get_host (guri);
 	}
 
 	e_source_authentication_set_host (authentication_extension, host);
 
-	if (suri)
-		soup_uri_free (suri);
+	if (guri)
+		g_uri_unref (guri);
 }
 
 static const gchar *
@@ -382,7 +385,7 @@ webdav_config_lookup_worker_run (EConfigLookupWorker *lookup_worker,
 
 			g_clear_error (error);
 
-			should_stop = webdav_config_lookup_discover (dummy_source, url, trust_response, certificate, config_lookup,
+			webdav_config_lookup_discover (dummy_source, url, trust_response, certificate, config_lookup,
 				params, out_restart_params, &authentication_failed, cancellable, error);
 
 			if (authentication_failed && at_pos &&
@@ -394,7 +397,7 @@ webdav_config_lookup_worker_run (EConfigLookupWorker *lookup_worker,
 
 				g_clear_error (error);
 
-				should_stop = webdav_config_lookup_discover (dummy_source, url, trust_response, certificate, config_lookup,
+				webdav_config_lookup_discover (dummy_source, url, trust_response, certificate, config_lookup,
 					params, out_restart_params, NULL, cancellable, error);
 
 				/* Restore back to full email address */

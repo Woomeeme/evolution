@@ -342,7 +342,7 @@ test_utils_jsc_call_bool_sync (TestFixture *fixture,
 	test_utils_jsc_call_sync (fixture, script, &result);
 
 	g_assert_nonnull (result);
-	g_assert (jsc_value_is_boolean (result));
+	g_assert_true (jsc_value_is_boolean (result));
 
 	res = jsc_value_to_boolean (result);
 
@@ -361,7 +361,7 @@ test_utils_jsc_call_int32_sync (TestFixture *fixture,
 	test_utils_jsc_call_sync (fixture, script, &result);
 
 	g_assert_nonnull (result);
-	g_assert (jsc_value_is_number (result));
+	g_assert_true (jsc_value_is_number (result));
 
 	res = jsc_value_to_int32 (result);
 
@@ -380,7 +380,7 @@ test_utils_jsc_call_string_sync (TestFixture *fixture,
 	test_utils_jsc_call_sync (fixture, script, &result);
 
 	g_assert_nonnull (result);
-	g_assert (jsc_value_is_null (result) || jsc_value_is_string (result));
+	g_assert_true (jsc_value_is_null (result) || jsc_value_is_string (result));
 
 	if (jsc_value_is_null (result))
 		res = NULL;
@@ -555,12 +555,12 @@ test_jsc_object_properties (TestFixture *fixture)
 	g_free (str);
 
 	g_assert_nonnull (jsc_object);
-	g_assert (jsc_value_is_object (jsc_object));
+	g_assert_true (jsc_value_is_object (jsc_object));
 
-	g_assert (e_web_view_jsc_get_object_property_boolean (jsc_object, "btrue", FALSE));
-	g_assert (!e_web_view_jsc_get_object_property_boolean (jsc_object, "bfalse", TRUE));
-	g_assert (!e_web_view_jsc_get_object_property_boolean (jsc_object, "budenfined", FALSE));
-	g_assert (e_web_view_jsc_get_object_property_boolean (jsc_object, "budenfined", TRUE));
+	g_assert_true (e_web_view_jsc_get_object_property_boolean (jsc_object, "btrue", FALSE));
+	g_assert_true (!e_web_view_jsc_get_object_property_boolean (jsc_object, "bfalse", TRUE));
+	g_assert_true (!e_web_view_jsc_get_object_property_boolean (jsc_object, "budenfined", FALSE));
+	g_assert_true (e_web_view_jsc_get_object_property_boolean (jsc_object, "budenfined", TRUE));
 	g_assert_cmpint (e_web_view_jsc_get_object_property_int32 (jsc_object, "i2", 0), ==, 2);
 	g_assert_cmpint (e_web_view_jsc_get_object_property_int32 (jsc_object, "i67890", 0), ==, 67890);
 	g_assert_cmpint (e_web_view_jsc_get_object_property_int32 (jsc_object, "i-12345", 0), ==, -12345);
@@ -592,72 +592,72 @@ test_set_element_hidden (TestFixture *fixture)
 {
 	test_utils_load_body (fixture, LOAD_ALL);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
 
 	e_web_view_jsc_set_element_hidden (fixture->web_view, "", "btn1", TRUE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
 
 	e_web_view_jsc_set_element_hidden (fixture->web_view, "frm1_1", "btn1", TRUE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
 
 	e_web_view_jsc_set_element_hidden (fixture->web_view, "frm2", "btn2", TRUE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
 
 	e_web_view_jsc_set_element_hidden (fixture->web_view, "", "btn1", FALSE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
 
 	e_web_view_jsc_set_element_hidden (fixture->web_view, "frm2", "btn1", FALSE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
 
 	e_web_view_jsc_set_element_hidden (fixture->web_view, "frm1_1", "btn1", FALSE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").hidden"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").hidden"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").hidden"));
 }
 
 static void
@@ -665,72 +665,72 @@ test_set_element_disabled (TestFixture *fixture)
 {
 	test_utils_load_body (fixture, LOAD_ALL);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
 
 	e_web_view_jsc_set_element_disabled (fixture->web_view, "", "btn1", TRUE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
 
 	e_web_view_jsc_set_element_disabled (fixture->web_view, "frm1_1", "btn1", TRUE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
 
 	e_web_view_jsc_set_element_disabled (fixture->web_view, "frm2", "btn2", TRUE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
 
 	e_web_view_jsc_set_element_disabled (fixture->web_view, "", "btn1", FALSE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
 
 	e_web_view_jsc_set_element_disabled (fixture->web_view, "frm2", "btn1", FALSE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
 
 	e_web_view_jsc_set_element_disabled (fixture->web_view, "frm1_1", "btn1", FALSE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"btn3\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"btn1\").disabled"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn1\").disabled"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"btn2\").disabled"));
 }
 
 static void
@@ -738,52 +738,52 @@ test_set_element_checked (TestFixture *fixture)
 {
 	test_utils_load_body (fixture, LOAD_ALL);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
 
 	e_web_view_jsc_set_element_checked (fixture->web_view, "", "chk1", TRUE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
 
 	e_web_view_jsc_set_element_checked (fixture->web_view, "frm1_1", "chk1", TRUE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
 
 	e_web_view_jsc_set_element_checked (fixture->web_view, "", "chk1", FALSE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
 
 	e_web_view_jsc_set_element_checked (fixture->web_view, "frm2", "chk2", FALSE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
 
 	e_web_view_jsc_set_element_checked (fixture->web_view, "", "chk1", TRUE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
 
 	e_web_view_jsc_set_element_checked (fixture->web_view, "frm1_1", "chk1", FALSE, NULL);
 	e_web_view_jsc_set_element_checked (fixture->web_view, "frm2", "chk2", TRUE, NULL);
 	test_utils_wait_noop (fixture);
 
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
-	g_assert (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
-	g_assert (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"\", \"chk1\").checked"));
+	g_assert_true (!test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm1_1\", \"chk1\").checked"));
+	g_assert_true (test_utils_jsc_call_bool_sync (fixture, "Evo.FindElement(\"frm2\", \"chk2\").checked"));
 }
 
 static void
@@ -1263,7 +1263,7 @@ test_need_input_changed (TestFixture *fixture)
 
 	test_utils_load_body (fixture, LOAD_FRM1_1);
 
-	g_assert (!e_web_view_get_need_input (E_WEB_VIEW (fixture->web_view)));
+	g_assert_true (!e_web_view_get_need_input (E_WEB_VIEW (fixture->web_view)));
 
 	nid.fixture = fixture;
 	nid.expects = FALSE;
@@ -1292,7 +1292,7 @@ test_need_input_changed (TestFixture *fixture)
 
 	g_signal_handler_disconnect (fixture->web_view, handler_id);
 
-	g_assert (!e_web_view_get_need_input (E_WEB_VIEW (fixture->web_view)));
+	g_assert_true (!e_web_view_get_need_input (E_WEB_VIEW (fixture->web_view)));
 }
 
 static void
@@ -1363,13 +1363,13 @@ test_selection_ready_cb (GObject *source_object,
 	gboolean success;
 	GError *error = NULL;
 
-	g_assert (WEBKIT_IS_WEB_VIEW (source_object));
+	g_assert_true (WEBKIT_IS_WEB_VIEW (source_object));
 	g_assert_nonnull (gcd);
 
 	success = e_web_view_jsc_get_selection_finish (WEBKIT_WEB_VIEW (source_object), result, &texts, &error);
 
 	g_assert_no_error (error);
-	g_assert (success);
+	g_assert_true (success);
 
 	test_verify_get_content_data (gcd, texts);
 
@@ -1437,15 +1437,15 @@ test_selection (TestFixture *fixture)
 
 	g_assert_cmpint (e_web_view_has_selection (E_WEB_VIEW (fixture->web_view)) ? 1 : 0, ==, 1);
 	test_selection_verify (fixture, "er text\nin PR", NULL);
-	test_selection_verify (fixture, NULL, "<pre>er text\nin PR</pre>");
-	test_selection_verify (fixture, "er text\nin PR", "<pre>er text\nin PR</pre>");
+	test_selection_verify (fixture, NULL, "<pre><span id=\"pr1\"></span>er text\nin PR<span id=\"pr2\"></span></pre>");
+	test_selection_verify (fixture, "er text\nin PR", "<pre><span id=\"pr1\"></span>er text\nin PR<span id=\"pr2\"></span></pre>");
 
 	test_selection_select_in_iframe (fixture, "", "br1", "br2");
 
 	g_assert_cmpint (e_web_view_has_selection (E_WEB_VIEW (fixture->web_view)) ? 1 : 0, ==, 1);
-	test_selection_verify (fixture, "\norange; bolditalic", NULL);
-	test_selection_verify (fixture, NULL, "<br id=\"br1\">o<font color=\"orange\">rang</font>e; <b>bold</b><i>italic</i>");
-	test_selection_verify (fixture, "\norange; bolditalic", "<br id=\"br1\">o<font color=\"orange\">rang</font>e; <b>bold</b><i>italic</i>");
+	test_selection_verify (fixture, "\norange; bolditalic\n", NULL);
+	test_selection_verify (fixture, NULL, "<br id=\"br1\">o<font color=\"orange\">rang</font>e; <b>bold</b><i>italic</i><br id=\"br2\">");
+	test_selection_verify (fixture, "\norange; bolditalic\n", "<br id=\"br1\">o<font color=\"orange\">rang</font>e; <b>bold</b><i>italic</i><br id=\"br2\">");
 
 	test_selection_select_in_iframe (fixture, "frm1", "plain", "rgb");
 
@@ -1465,15 +1465,15 @@ test_selection (TestFixture *fixture)
 
 	g_assert_cmpint (e_web_view_has_selection (E_WEB_VIEW (fixture->web_view)) ? 1 : 0, ==, 1);
 	test_selection_verify (fixture, "RGB", NULL);
-	test_selection_verify (fixture, NULL, "<font color=\"red\">R</font><font color=\"green\">G</font><font color=\"blue\">B</font>");
-	test_selection_verify (fixture, "RGB", "<font color=\"red\">R</font><font color=\"green\">G</font><font color=\"blue\">B</font>");
+	test_selection_verify (fixture, NULL, "<font color=\"red\">R</font><font color=\"green\">G</font><font color=\"blue\">B</font><span id=\"rgb-end\"></span>");
+	test_selection_verify (fixture, "RGB", "<font color=\"red\">R</font><font color=\"green\">G</font><font color=\"blue\">B</font><span id=\"rgb-end\"></span>");
 
 	test_selection_select_in_iframe (fixture, "frm1", "styled", "end");
 
 	g_assert_cmpint (e_web_view_has_selection (E_WEB_VIEW (fixture->web_view)) ? 1 : 0, ==, 1);
-	test_selection_verify (fixture, "bbggrr", NULL);
-	test_selection_verify (fixture, NULL, "<span style=\"color:blue;\">bb</span><span style=\"color:green;\">gg</span><span style=\"color:red;\">rr</span>");
-	test_selection_verify (fixture, "bbggrr", "<span style=\"color:blue;\">bb</span><span style=\"color:green;\">gg</span><span style=\"color:red;\">rr</span>");
+	test_selection_verify (fixture, "bbggrr\n", NULL);
+	test_selection_verify (fixture, NULL, "<div id=\"styled\"><span style=\"color:blue;\">bb</span><span style=\"color:green;\">gg</span><span style=\"color:red;\">rr</span></div><div id=\"end\"></div>");
+	test_selection_verify (fixture, "bbggrr\n", "<div id=\"styled\"><span style=\"color:blue;\">bb</span><span style=\"color:green;\">gg</span><span style=\"color:red;\">rr</span></div><div id=\"end\"></div>");
 
 	test_selection_select_in_iframe (fixture, "frm1", "end", "end");
 
@@ -1491,13 +1491,13 @@ test_get_document_content_ready_cb (GObject *source_object,
 	gboolean success;
 	GError *error = NULL;
 
-	g_assert (WEBKIT_IS_WEB_VIEW (source_object));
+	g_assert_true (WEBKIT_IS_WEB_VIEW (source_object));
 	g_assert_nonnull (gcd);
 
 	success = e_web_view_jsc_get_document_content_finish (WEBKIT_WEB_VIEW (source_object), result, &texts, &error);
 
 	g_assert_no_error (error);
-	g_assert (success);
+	g_assert_true (success);
 
 	test_verify_get_content_data (gcd, texts);
 
@@ -1541,13 +1541,13 @@ test_get_element_content_ready_cb (GObject *source_object,
 	gboolean success;
 	GError *error = NULL;
 
-	g_assert (WEBKIT_IS_WEB_VIEW (source_object));
+	g_assert_true (WEBKIT_IS_WEB_VIEW (source_object));
 	g_assert_nonnull (gcd);
 
 	success = e_web_view_jsc_get_element_content_finish (WEBKIT_WEB_VIEW (source_object), result, &texts, &error);
 
 	g_assert_no_error (error);
-	g_assert (success);
+	g_assert_true (success);
 
 	test_verify_get_content_data (gcd, texts);
 
@@ -1587,13 +1587,13 @@ static void
 test_get_content (TestFixture *fixture)
 {
 	const gchar *html_main =
-		"<html style=\"\"><head><meta charset=\"utf-8\"></head><body>"
+		"<html><head><meta charset=\"utf-8\"></head><body>"
 		"<div id=\"frst\">first div</div>"
 		"<div id=\"scnd\">second div</div>"
 		"<iframe id=\"frm1\" src=\"empty:///\"></iframe>"
 		"</body></html>";
 	const gchar *html_frm1 =
-		"<html style=\"\"><head><meta name=\"keywords\" value=\"test\"></head><body>"
+		"<html><head><meta name=\"keywords\" value=\"test\"></head><body>"
 		"<span id=\"frm1p\">"
 		"<div id=\"frst\">frm1 div</div>"
 		"</span>"
@@ -1724,13 +1724,13 @@ test_get_element_from_point_ready_cb (GObject *source_object,
 	gboolean success;
 	GError *error = NULL;
 
-	g_assert (WEBKIT_IS_WEB_VIEW (source_object));
+	g_assert_true (WEBKIT_IS_WEB_VIEW (source_object));
 	g_assert_nonnull (gefp);
 
 	success = e_web_view_jsc_get_element_from_point_finish (WEBKIT_WEB_VIEW (source_object), result, &iframe_src, &iframe_id, &element_id, &error);
 
 	g_assert_no_error (error);
-	g_assert (success);
+	g_assert_true (success);
 
 	g_assert_cmpstr (iframe_src, ==, gefp->expect_iframe_src);
 	g_assert_cmpstr (iframe_id, ==, gefp->expect_iframe_id);
@@ -1833,7 +1833,6 @@ test_get_element_from_point (TestFixture *fixture)
 
 	for (ii = 0; ii < G_N_ELEMENTS (elems); ii++) {
 		const gchar *iframe_src;
-		gchar *script;
 		JSCValue *value;
 		gint xx, yy;
 
@@ -1842,7 +1841,7 @@ test_get_element_from_point (TestFixture *fixture)
 		test_utils_jsc_call_sync (fixture, script, &value);
 
 		g_assert_nonnull (value);
-		g_assert (jsc_value_is_object (value));
+		g_assert_true (jsc_value_is_object (value));
 
 		xx = e_web_view_jsc_get_object_property_int32 (value, "left", -1);
 		yy = e_web_view_jsc_get_object_property_int32 (value, "top", -1);
@@ -1891,8 +1890,6 @@ test_get_element_from_point (TestFixture *fixture)
 
 	test_utils_wait_noop (fixture);
 
-	scroll_x = test_utils_jsc_call_int32_sync (fixture, "window.scrollX;");
-	scroll_y = test_utils_jsc_call_int32_sync (fixture, "window.scrollY;");
 	client_width = test_utils_jsc_call_int32_sync (fixture, "document.body.clientWidth;");
 	client_height = test_utils_jsc_call_int32_sync (fixture, "document.body.clientHeight;");
 
@@ -1900,7 +1897,6 @@ test_get_element_from_point (TestFixture *fixture)
 
 	for (ii = 0; ii < G_N_ELEMENTS (elems); ii++) {
 		const gchar *iframe_src;
-		gchar *script;
 		JSCValue *value;
 		gint xx, yy;
 
@@ -1909,7 +1905,7 @@ test_get_element_from_point (TestFixture *fixture)
 		test_utils_jsc_call_sync (fixture, script, &value);
 
 		g_assert_nonnull (value);
-		g_assert (jsc_value_is_object (value));
+		g_assert_true (jsc_value_is_object (value));
 
 		xx = e_web_view_jsc_get_object_property_int32 (value, "right", -1);
 		yy = e_web_view_jsc_get_object_property_int32 (value, "top", -1);
@@ -2680,6 +2676,21 @@ test_convert_to_plain (TestFixture *fixture)
 		"-- \n"
 		"hh ii\n"
 		"jj kk\n",
+		10 },
+	/* 72 */{ HTML ("<div>a72<b>\n</b>b72<div>"),
+		"a72\nb72\n",
+		10 },
+	/* 73 */{ HTML ("<div>a73<b> </b>b73<div>"),
+		"a73 b73\n",
+		10 },
+	/* 74 */{ HTML ("<div>a74<b>    \t   </b>b74<div>"),
+		"a74 b74\n",
+		10 },
+	/* 75 */{ HTML ("<div>a75<b>  \n \t \r\n  </b>b75<div>"),
+		"a75 b75\n",
+		10 },
+	/* 76 */{ HTML ("<div>a76  \n <b> x  </b>\r\n  </b>b76<div>"),
+		"a76 x b76\n",
 		10 }
 	};
 
@@ -3054,6 +3065,550 @@ test_convert_to_plain_quoted (TestFixture *fixture)
 	}
 }
 
+static void
+test_convert_to_plain_links_none (TestFixture *fixture)
+{
+	#define HTML(_body) ("<html><head><style><!-- span.Apple-tab-span { white-space:pre; } --></style></head><body style='font-family:monospace;'>" _body "</body></html>")
+
+	struct _tests {
+		const gchar *html;
+		const gchar *plain;
+		gint normal_div_width;
+	} tests[] = {
+	/* 0 */ { HTML ("<div>before <a href='https://gnome.org'>https://gnome.org</a> after</div>"),
+		"before https://gnome.org after\n",
+		71 },
+	/* 1 */ { HTML ("<div>before <a href='https://gnome.org'>GNOME</a> after</div>"),
+		"before GNOME after\n",
+		71 },
+	/* 2 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org/'>https://gnome.org/</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"),
+		"b1 GNOME-a a1\n"
+		"b2 https://gnome.org/ a2\n"
+		"b3 GNOME-b a3\n"
+		"b4 GNOME-c a4\n",
+		71 },
+	/* 3 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org'>https://gnome.org/</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"
+		"<div>b5 <a href='https://gnome.org/d'>GNOME-d</a> a5</div>"
+		"<div>b6 <a href='https://gnome.org/e'>GNOME-e</a> a6</div>"
+		"<div>b7 <a href='https://gnome.org/f'>GNOME-f</a> a7</div>"
+		"<div>b8 <a href='https://gnome.org/g'>GNOME-g</a> a8</div>"
+		"<div>b9 <a href='https://gnome.org/h'>GNOME-h</a> a9</div>"
+		"<div>b10 <a href='https://gnome.org/i'>GNOME-i</a> a10</div>"),
+		"b1 GNOME-a a1\n"
+		"b2 https://gnome.org/ a2\n"
+		"b3 GNOME-b a3\n"
+		"b4 GNOME-c a4\n"
+		"b5 GNOME-d a5\n"
+		"b6 GNOME-e a6\n"
+		"b7 GNOME-f a7\n"
+		"b8 GNOME-g a8\n"
+		"b9 GNOME-h a9\n"
+		"b10 GNOME-i a10\n",
+		71 },
+	/* 4 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a<br>next line<br>text</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org/'>https://gnome.org</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"
+		"<div>b5 <a href='https://gnome.org/d'>GNOME-d</a> a5</div>"
+		"<div>b6 <a href='https://gnome.org/e'>GNOME-e</a> a6</div>"
+		"<div>b7 <a href='https://gnome.org/f'>GNOME-f</a> a7</div>"
+		"<div>b8 <a href='https://gnome.org/g'>GNOME-g</a> a8</div>"
+		"<div>b9 <a href='https://gnome.org/h'>GNOME-h</a> a9</div>"
+		"<div>b10 <a href='https://gnome.org/i'>GNOME-i</a> a10</div>"
+		"<div>b11 <a href='https://gnome.org/j'>GNOME-j</a> a11</div>"),
+		"b1 GNOME-a\nnext line\ntext a1\n"
+		"b2 https://gnome.org a2\n"
+		"b3 GNOME-b a3\n"
+		"b4 GNOME-c a4\n"
+		"b5 GNOME-d a5\n"
+		"b6 GNOME-e a6\n"
+		"b7 GNOME-f a7\n"
+		"b8 GNOME-g a8\n"
+		"b9 GNOME-h a9\n"
+		"b10 GNOME-i a10\n"
+		"b11 GNOME-j a11\n",
+		71 },
+	/* 5 */ { HTML ("<ul><li>first line</li>"
+		"<li>b2 <a href='https://gnome.org/'>GNOME</a> a2</li>"
+		"<li><div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div></li>"
+		"<li>last line</li></ul>"),
+		" * first line\n"
+		" * b2 GNOME a2\n"
+		" * b3 GNOME-b a3\n"
+		" * last line\n",
+		71 },
+	/* 6 */ { HTML ("<ol><li>first line</li>"
+		"<li>b2 <a href='https://gnome.org/'>GNOME</a> a2</li>"
+		"<li><div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div></li>"
+		"<li>last line</li></ol>"),
+		"   1. first line\n"
+		"   2. b2 GNOME a2\n"
+		"   3. b3 GNOME-b a3\n"
+		"   4. last line\n",
+		71 },
+	/* 7 */ { HTML ("<div>before <a href='gnome.org'>GNOME</a> after</div>"
+		"<div>before <a href='mailto:user@no.where'>Mail the User</a> after</div>"
+		"<div>before <a href='https://gnome.org'>https GNOME</a> after</div>"
+		"<div>before <a href='http://gnome.org'>http GNOME</a> after</div>"),
+		"before GNOME after\n"
+		"before Mail the User after\n"
+		"before https GNOME after\n"
+		"before http GNOME after\n",
+		71 },
+	/* 8 */ { HTML ("<div>before <a href='https://gnome.org/#%C3%A4bc'>https://gnome.org/#äbc</a> after</div>"),
+		"before https://gnome.org/#äbc after\n",
+		71 }
+	};
+
+	#undef HTML
+
+	gchar *script;
+	gint ii;
+
+	for (ii = 0; ii < G_N_ELEMENTS (tests); ii++) {
+		test_utils_load_string (fixture, tests[ii].html);
+
+		script = e_web_view_jsc_printf_script ("EvoConvert.ToPlainText(document.body, %d, %d);", tests[ii].normal_div_width, E_HTML_LINK_TO_TEXT_NONE);
+
+		test_utils_jsc_call_string_and_verify (fixture, script, tests[ii].plain);
+
+		g_free (script);
+	}
+}
+
+static void
+test_convert_to_plain_links_inline (TestFixture *fixture)
+{
+	#define HTML(_body) ("<html><head><style><!-- span.Apple-tab-span { white-space:pre; } --></style></head><body style='font-family:monospace;'>" _body "</body></html>")
+
+	struct _tests {
+		const gchar *html;
+		const gchar *plain;
+		gint normal_div_width;
+	} tests[] = {
+	/* 0 */ { HTML ("<div>before <a href='https://gnome.org'>https://gnome.org</a> after</div>"),
+		"before https://gnome.org after\n",
+		71 },
+	/* 1 */ { HTML ("<div>before <a href='https://gnome.org'>GNOME</a> after</div>"),
+		"before GNOME <https://gnome.org/> after\n",
+		71 },
+	/* 2 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org/'>https://gnome.org/</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"),
+		"b1 GNOME-a <https://gnome.org/a> a1\n"
+		"b2 https://gnome.org/ a2\n"
+		"b3 GNOME-b <https://gnome.org/b> a3\n"
+		"b4 GNOME-c <https://gnome.org/c> a4\n",
+		71 },
+	/* 3 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org'>https://gnome.org/</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"
+		"<div>b5 <a href='https://gnome.org/d'>GNOME-d</a> a5</div>"
+		"<div>b6 <a href='https://gnome.org/e'>GNOME-e</a> a6</div>"
+		"<div>b7 <a href='https://gnome.org/f'>GNOME-f</a> a7</div>"
+		"<div>b8 <a href='https://gnome.org/g'>GNOME-g</a> a8</div>"
+		"<div>b9 <a href='https://gnome.org/h'>GNOME-h</a> a9</div>"
+		"<div>b10 <a href='https://gnome.org/i'>GNOME-i</a> a10</div>"),
+		"b1 GNOME-a <https://gnome.org/a> a1\n"
+		"b2 https://gnome.org/ a2\n"
+		"b3 GNOME-b <https://gnome.org/b> a3\n"
+		"b4 GNOME-c <https://gnome.org/c> a4\n"
+		"b5 GNOME-d <https://gnome.org/d> a5\n"
+		"b6 GNOME-e <https://gnome.org/e> a6\n"
+		"b7 GNOME-f <https://gnome.org/f> a7\n"
+		"b8 GNOME-g <https://gnome.org/g> a8\n"
+		"b9 GNOME-h <https://gnome.org/h> a9\n"
+		"b10 GNOME-i <https://gnome.org/i> a10\n",
+		71 },
+	/* 4 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a<br>next line<br>text</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org/'>https://gnome.org</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"
+		"<div>b5 <a href='https://gnome.org/d'>GNOME-d</a> a5</div>"
+		"<div>b6 <a href='https://gnome.org/e'>GNOME-e</a> a6</div>"
+		"<div>b7 <a href='https://gnome.org/f'>GNOME-f</a> a7</div>"
+		"<div>b8 <a href='https://gnome.org/g'>GNOME-g</a> a8</div>"
+		"<div>b9 <a href='https://gnome.org/h'>GNOME-h</a> a9</div>"
+		"<div>b10 <a href='https://gnome.org/i'>GNOME-i</a> a10</div>"
+		"<div>b11 <a href='https://gnome.org/j'>GNOME-j</a> a11</div>"),
+		"b1 GNOME-a\nnext line\ntext <https://gnome.org/a> a1\n"
+		"b2 https://gnome.org a2\n"
+		"b3 GNOME-b <https://gnome.org/b> a3\n"
+		"b4 GNOME-c <https://gnome.org/c> a4\n"
+		"b5 GNOME-d <https://gnome.org/d> a5\n"
+		"b6 GNOME-e <https://gnome.org/e> a6\n"
+		"b7 GNOME-f <https://gnome.org/f> a7\n"
+		"b8 GNOME-g <https://gnome.org/g> a8\n"
+		"b9 GNOME-h <https://gnome.org/h> a9\n"
+		"b10 GNOME-i <https://gnome.org/i> a10\n"
+		"b11 GNOME-j <https://gnome.org/j> a11\n",
+		71 },
+	/* 5 */ { HTML ("<ul><li>first line</li>"
+		"<li>b2 <a href='https://gnome.org/'>GNOME</a> a2</li>"
+		"<li><div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div></li>"
+		"<li>last line</li></ul>"),
+		" * first line\n"
+		" * b2 GNOME <https://gnome.org/> a2\n"
+		" * b3 GNOME-b <https://gnome.org/b> a3\n"
+		" * last line\n",
+		71 },
+	/* 6 */ { HTML ("<ol><li>first line</li>"
+		"<li>b2 <a href='https://gnome.org/'>GNOME</a> a2</li>"
+		"<li><div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div></li>"
+		"<li>last line</li></ol>"),
+		"   1. first line\n"
+		"   2. b2 GNOME <https://gnome.org/> a2\n"
+		"   3. b3 GNOME-b <https://gnome.org/b> a3\n"
+		"   4. last line\n",
+		71 },
+	/* 7 */ { HTML ("<div>before <a href='http://gnome.org'>GNOME</a> after</div>"
+		"<div>before <a href='mailto:user@no.where'>Mail the User</a> after</div>"
+		"<div>before <a href='https://gnome.org'>https GNOME</a> after</div>"
+		"<div>before <a href='http://gnome.org/'>http GNOME</a> after</div>"),
+		"before GNOME <http://gnome.org/> after\n"
+		"before Mail the User after\n"
+		"before https GNOME <https://gnome.org/> after\n"
+		"before http GNOME <http://gnome.org/> after\n",
+		71 },
+	/* 8 */ { HTML ("<div>before <a href='https://gnome.org/#%C3%A4bc'>https://gnome.org/#äbc</a> after</div>"),
+		"before https://gnome.org/#äbc after\n",
+		71 }
+	};
+
+	#undef HTML
+
+	gchar *script;
+	gint ii;
+
+	for (ii = 0; ii < G_N_ELEMENTS (tests); ii++) {
+		test_utils_load_string (fixture, tests[ii].html);
+
+		script = e_web_view_jsc_printf_script ("EvoConvert.ToPlainText(document.body, %d, %d);", tests[ii].normal_div_width, E_HTML_LINK_TO_TEXT_INLINE);
+
+		test_utils_jsc_call_string_and_verify (fixture, script, tests[ii].plain);
+
+		g_free (script);
+	}
+}
+
+static void
+test_convert_to_plain_links_reference (TestFixture *fixture)
+{
+	#define HTML(_body) ("<html><head><style><!-- span.Apple-tab-span { white-space:pre; } --></style></head><body style='font-family:monospace;'>" _body "</body></html>")
+
+	struct _tests {
+		const gchar *html;
+		const gchar *plain;
+		gint normal_div_width;
+	} tests[] = {
+	/* 0 */ { HTML ("<div>before <a href='https://gnome.org'>https://gnome.org</a> after</div>"),
+		"before https://gnome.org after\n",
+		40 },
+	/* 1 */ { HTML ("<div>before <a href='https://gnome.org'>GNOME</a> after</div>"),
+		"before GNOME [1] after\n"
+		"\n"
+		"[1] GNOME https://gnome.org/\n",
+		40 },
+	/* 2 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org/'>https://gnome.org/</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"),
+		"b1 GNOME-a [1] a1\n"
+		"b2 https://gnome.org/ a2\n"
+		"b3 GNOME-b [2] a3\n"
+		"b4 GNOME-c [3] a4\n"
+		"\n"
+		"[1] GNOME-a https://gnome.org/a\n"
+		"[2] GNOME-b https://gnome.org/b\n"
+		"[3] GNOME-c https://gnome.org/c\n",
+		40 },
+	/* 3 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org'>https://gnome.org/</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"
+		"<div>b5 <a href='https://gnome.org/d'>GNOME-d</a> a5</div>"
+		"<div>b6 <a href='https://gnome.org/e'>GNOME-e</a> a6</div>"
+		"<div>b7 <a href='https://gnome.org/f'>GNOME-f</a> a7</div>"
+		"<div>b8 <a href='https://gnome.org/g'>GNOME-g</a> a8</div>"
+		"<div>b9 <a href='https://gnome.org/h'>GNOME-h</a> a9</div>"
+		"<div>b10 <a href='https://gnome.org/i'>GNOME-i</a> a10</div>"),
+		"b1 GNOME-a [1] a1\n"
+		"b2 https://gnome.org/ a2\n"
+		"b3 GNOME-b [2] a3\n"
+		"b4 GNOME-c [3] a4\n"
+		"b5 GNOME-d [4] a5\n"
+		"b6 GNOME-e [5] a6\n"
+		"b7 GNOME-f [6] a7\n"
+		"b8 GNOME-g [7] a8\n"
+		"b9 GNOME-h [8] a9\n"
+		"b10 GNOME-i [9] a10\n"
+		"\n"
+		"[1] GNOME-a https://gnome.org/a\n"
+		"[2] GNOME-b https://gnome.org/b\n"
+		"[3] GNOME-c https://gnome.org/c\n"
+		"[4] GNOME-d https://gnome.org/d\n"
+		"[5] GNOME-e https://gnome.org/e\n"
+		"[6] GNOME-f https://gnome.org/f\n"
+		"[7] GNOME-g https://gnome.org/g\n"
+		"[8] GNOME-h https://gnome.org/h\n"
+		"[9] GNOME-i https://gnome.org/i\n",
+		40 },
+	/* 4 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a<br>next line<br>text</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org/'>https://gnome.org</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"
+		"<div>b5 <a href='https://gnome.org/d'>GNOME-d</a> a5</div>"
+		"<div>b6 <a href='https://gnome.org/e'>GNOME-e</a> a6</div>"
+		"<div>b7 <a href='https://gnome.org/f'>GNOME-f</a> a7</div>"
+		"<div>b8 <a href='https://gnome.org/g'>GNOME-g</a> a8</div>"
+		"<div>b9 <a href='https://gnome.org/h'>GNOME-h</a> a9</div>"
+		"<div>b10 <a href='https://gnome.org/i'>GNOME-i</a> a10</div>"
+		"<div>b11 <a href='https://gnome.org/j'>GNOME-j long text here</a> a11</div>"),
+		"b1 GNOME-a\nnext line\ntext [1] a1\n"
+		"b2 https://gnome.org a2\n"
+		"b3 GNOME-b [2] a3\n"
+		"b4 GNOME-c [3] a4\n"
+		"b5 GNOME-d [4] a5\n"
+		"b6 GNOME-e [5] a6\n"
+		"b7 GNOME-f [6] a7\n"
+		"b8 GNOME-g [7] a8\n"
+		"b9 GNOME-h [8] a9\n"
+		"b10 GNOME-i [9] a10\n"
+		"b11 GNOME-j long text here [10] a11\n"
+		"\n"
+		"[1] GNOME-a next line text\n"
+		"    https://gnome.org/a\n"
+		"[2] GNOME-b https://gnome.org/b\n"
+		"[3] GNOME-c https://gnome.org/c\n"
+		"[4] GNOME-d https://gnome.org/d\n"
+		"[5] GNOME-e https://gnome.org/e\n"
+		"[6] GNOME-f https://gnome.org/f\n"
+		"[7] GNOME-g https://gnome.org/g\n"
+		"[8] GNOME-h https://gnome.org/h\n"
+		"[9] GNOME-i https://gnome.org/i\n"
+		"[10] GNOME-j long text here\n"
+		"     https://gnome.org/j\n",
+		40 },
+	/* 5 */ { HTML ("<ul><li>first line</li>"
+		"<li>b2 <a href='https://gnome.org/'>GNOME</a> a2</li>"
+		"<li><div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div></li>"
+		"<li>last line</li></ul>"),
+		" * first line\n"
+		" * b2 GNOME [1] a2\n"
+		" * b3 GNOME-b [2] a3\n"
+		" * last line\n"
+		"\n"
+		"[1] GNOME https://gnome.org/\n"
+		"[2] GNOME-b https://gnome.org/b\n",
+		40 },
+	/* 6 */ { HTML ("<ol><li>first line</li>"
+		"<li>b2 <a href='https://gnome.org/'>GNOME</a> a2</li>"
+		"<li><div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div></li>"
+		"<li>last line</li></ol>"),
+		"   1. first line\n"
+		"   2. b2 GNOME [1] a2\n"
+		"   3. b3 GNOME-b [2] a3\n"
+		"   4. last line\n"
+		"\n"
+		"[1] GNOME https://gnome.org/\n"
+		"[2] GNOME-b https://gnome.org/b\n",
+		40 },
+	/* 7 */ { HTML ("<div>before <a href='http://gnome.org'>GNOME</a> after</div>"
+		"<div>before <a href='mailto:user@no.where'>Mail the User</a> after</div>"
+		"<div>before <a href='https://gnome.org'>https GNOME</a> after</div>"
+		"<div>before <a href='http://gnome.org/'>http GNOME</a> after</div>"),
+		"before GNOME [1] after\n"
+		"before Mail the User after\n"
+		"before https GNOME [2] after\n"
+		"before http GNOME [1] after\n"
+		"\n"
+		"[1] GNOME http://gnome.org/\n"
+		"[2] https GNOME https://gnome.org/\n",
+		40 },
+	/* 8 */ { HTML ("<div>before <a href='https://gnome.org/#%C3%A4bc'>https://gnome.org/#äbc</a> after</div>"),
+		"before https://gnome.org/#äbc after\n",
+		40 }
+	};
+
+	#undef HTML
+
+	gchar *script;
+	gint ii;
+
+	for (ii = 0; ii < G_N_ELEMENTS (tests); ii++) {
+		test_utils_load_string (fixture, tests[ii].html);
+
+		script = e_web_view_jsc_printf_script ("EvoConvert.ToPlainText(document.body, %d, %d);", tests[ii].normal_div_width, E_HTML_LINK_TO_TEXT_REFERENCE);
+
+		test_utils_jsc_call_string_and_verify (fixture, script, tests[ii].plain);
+
+		g_free (script);
+	}
+}
+
+static void
+test_convert_to_plain_links_reference_without_label (TestFixture *fixture)
+{
+	#define HTML(_body) ("<html><head><style><!-- span.Apple-tab-span { white-space:pre; } --></style></head><body style='font-family:monospace;'>" _body "</body></html>")
+
+	#define HTML(_body) ("<html><head><style><!-- span.Apple-tab-span { white-space:pre; } --></style></head><body style='font-family:monospace;'>" _body "</body></html>")
+
+	struct _tests {
+		const gchar *html;
+		const gchar *plain;
+		gint normal_div_width;
+	} tests[] = {
+	/* 0 */ { HTML ("<div>before <a href='https://gnome.org'>https://gnome.org</a> after</div>"),
+		"before https://gnome.org after\n",
+		40 },
+	/* 1 */ { HTML ("<div>before <a href='https://gnome.org'>GNOME</a> after</div>"),
+		"before GNOME [1] after\n"
+		"\n"
+		"[1] https://gnome.org/\n",
+		40 },
+	/* 2 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org/'>https://gnome.org/</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"),
+		"b1 GNOME-a [1] a1\n"
+		"b2 https://gnome.org/ a2\n"
+		"b3 GNOME-b [2] a3\n"
+		"b4 GNOME-c [3] a4\n"
+		"\n"
+		"[1] https://gnome.org/a\n"
+		"[2] https://gnome.org/b\n"
+		"[3] https://gnome.org/c\n",
+		40 },
+	/* 3 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org'>https://gnome.org/</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"
+		"<div>b5 <a href='https://gnome.org/d'>GNOME-d</a> a5</div>"
+		"<div>b6 <a href='https://gnome.org/e'>GNOME-e</a> a6</div>"
+		"<div>b7 <a href='https://gnome.org/f'>GNOME-f</a> a7</div>"
+		"<div>b8 <a href='https://gnome.org/g'>GNOME-g</a> a8</div>"
+		"<div>b9 <a href='https://gnome.org/h'>GNOME-h</a> a9</div>"
+		"<div>b10 <a href='https://gnome.org/i'>GNOME-i</a> a10</div>"),
+		"b1 GNOME-a [1] a1\n"
+		"b2 https://gnome.org/ a2\n"
+		"b3 GNOME-b [2] a3\n"
+		"b4 GNOME-c [3] a4\n"
+		"b5 GNOME-d [4] a5\n"
+		"b6 GNOME-e [5] a6\n"
+		"b7 GNOME-f [6] a7\n"
+		"b8 GNOME-g [7] a8\n"
+		"b9 GNOME-h [8] a9\n"
+		"b10 GNOME-i [9] a10\n"
+		"\n"
+		"[1] https://gnome.org/a\n"
+		"[2] https://gnome.org/b\n"
+		"[3] https://gnome.org/c\n"
+		"[4] https://gnome.org/d\n"
+		"[5] https://gnome.org/e\n"
+		"[6] https://gnome.org/f\n"
+		"[7] https://gnome.org/g\n"
+		"[8] https://gnome.org/h\n"
+		"[9] https://gnome.org/i\n",
+		40 },
+	/* 4 */ { HTML ("<div>b1 <a href='https://gnome.org/a'>GNOME-a<br>next line<br>text</a> a1</div>"
+		"<div>b2 <a href='https://gnome.org/'>https://gnome.org</a> a2</div>"
+		"<div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div>"
+		"<div>b4 <a href='https://gnome.org/c'>GNOME-c</a> a4</div>"
+		"<div>b5 <a href='https://gnome.org/d'>GNOME-d</a> a5</div>"
+		"<div>b6 <a href='https://gnome.org/e'>GNOME-e</a> a6</div>"
+		"<div>b7 <a href='https://gnome.org/f'>GNOME-f</a> a7</div>"
+		"<div>b8 <a href='https://gnome.org/g'>GNOME-g</a> a8</div>"
+		"<div>b9 <a href='https://gnome.org/h'>GNOME-h</a> a9</div>"
+		"<div>b10 <a href='https://gnome.org/i'>GNOME-i</a> a10</div>"
+		"<div>b11 <a href='https://gnome.org/j'>GNOME-j long text here</a> a11</div>"),
+		"b1 GNOME-a\nnext line\ntext [1] a1\n"
+		"b2 https://gnome.org a2\n"
+		"b3 GNOME-b [2] a3\n"
+		"b4 GNOME-c [3] a4\n"
+		"b5 GNOME-d [4] a5\n"
+		"b6 GNOME-e [5] a6\n"
+		"b7 GNOME-f [6] a7\n"
+		"b8 GNOME-g [7] a8\n"
+		"b9 GNOME-h [8] a9\n"
+		"b10 GNOME-i [9] a10\n"
+		"b11 GNOME-j long text here [10] a11\n"
+		"\n"
+		"[1] https://gnome.org/a\n"
+		"[2] https://gnome.org/b\n"
+		"[3] https://gnome.org/c\n"
+		"[4] https://gnome.org/d\n"
+		"[5] https://gnome.org/e\n"
+		"[6] https://gnome.org/f\n"
+		"[7] https://gnome.org/g\n"
+		"[8] https://gnome.org/h\n"
+		"[9] https://gnome.org/i\n"
+		"[10] https://gnome.org/j\n",
+		40 },
+	/* 5 */ { HTML ("<ul><li>first line</li>"
+		"<li>b2 <a href='https://gnome.org/'>GNOME</a> a2</li>"
+		"<li><div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div></li>"
+		"<li>last line</li></ul>"),
+		" * first line\n"
+		" * b2 GNOME [1] a2\n"
+		" * b3 GNOME-b [2] a3\n"
+		" * last line\n"
+		"\n"
+		"[1] https://gnome.org/\n"
+		"[2] https://gnome.org/b\n",
+		40 },
+	/* 6 */ { HTML ("<ol><li>first line</li>"
+		"<li>b2 <a href='https://gnome.org/'>GNOME</a> a2</li>"
+		"<li><div>b3 <a href='https://gnome.org/b'>GNOME-b</a> a3</div></li>"
+		"<li>last line</li></ol>"),
+		"   1. first line\n"
+		"   2. b2 GNOME [1] a2\n"
+		"   3. b3 GNOME-b [2] a3\n"
+		"   4. last line\n"
+		"\n"
+		"[1] https://gnome.org/\n"
+		"[2] https://gnome.org/b\n",
+		40 },
+	/* 7 */ { HTML ("<div>before <a href='http://gnome.org'>GNOME</a> after</div>"
+		"<div>before <a href='mailto:user@no.where'>Mail the User</a> after</div>"
+		"<div>before <a href='https://gnome.org'>https GNOME</a> after</div>"
+		"<div>before <a href='http://gnome.org/'>http GNOME</a> after</div>"),
+		"before GNOME [1] after\n"
+		"before Mail the User after\n"
+		"before https GNOME [2] after\n"
+		"before http GNOME [1] after\n"
+		"\n"
+		"[1] http://gnome.org/\n"
+		"[2] https://gnome.org/\n",
+		40 },
+	/* 8 */ { HTML ("<div>before <a href='https://gnome.org/#%C3%A4bc'>https://gnome.org/#äbc</a> after</div>"),
+		"before https://gnome.org/#äbc after\n",
+		40 }
+	};
+
+	#undef HTML
+
+	gchar *script;
+	gint ii;
+
+	for (ii = 0; ii < G_N_ELEMENTS (tests); ii++) {
+		test_utils_load_string (fixture, tests[ii].html);
+
+		script = e_web_view_jsc_printf_script ("EvoConvert.ToPlainText(document.body, %d, %d);", tests[ii].normal_div_width, E_HTML_LINK_TO_TEXT_REFERENCE_WITHOUT_LABEL);
+
+		test_utils_jsc_call_string_and_verify (fixture, script, tests[ii].plain);
+
+		g_free (script);
+	}
+}
+
 gint
 main (gint argc,
       gchar *argv[])
@@ -3090,6 +3645,10 @@ main (gint argc,
 	test_utils_add_test ("/EWebView/GetElementFromPoint", test_get_element_from_point);
 	test_utils_add_test ("/EWebView/ConvertToPlain", test_convert_to_plain);
 	test_utils_add_test ("/EWebView/ConvertToPlainQuoted", test_convert_to_plain_quoted);
+	test_utils_add_test ("/EWebView/ConvertToPlainLinksNone", test_convert_to_plain_links_none);
+	test_utils_add_test ("/EWebView/ConvertToPlainLinksInline", test_convert_to_plain_links_inline);
+	test_utils_add_test ("/EWebView/ConvertToPlainLinksReference", test_convert_to_plain_links_reference);
+	test_utils_add_test ("/EWebView/ConvertToPlainLinksReferenceWithoutLabel", test_convert_to_plain_links_reference_without_label);
 
 	res = g_test_run ();
 

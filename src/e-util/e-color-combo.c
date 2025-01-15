@@ -26,10 +26,6 @@
 #include <gdk/gdkkeysyms.h>
 #include <cairo/cairo.h>
 
-#define E_COLOR_COMBO_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_COLOR_COMBO, EColorComboPrivate))
-
 struct _EColorComboPrivate {
 	GtkWidget *color_frame;		/* not referenced */
 	GtkWidget *arrow;		/* not referenced */
@@ -68,10 +64,7 @@ enum {
 static guint signals[LAST_SIGNAL];
 static GdkRGBA black = { 0, 0, 0, 1 };
 
-G_DEFINE_TYPE (
-	EColorCombo,
-	e_color_combo,
-	GTK_TYPE_BUTTON);
+G_DEFINE_TYPE_WITH_PRIVATE (EColorCombo, e_color_combo, GTK_TYPE_BUTTON);
 
 static void
 color_combo_popup (EColorCombo *combo)
@@ -363,45 +356,34 @@ color_combo_get_property (GObject *object,
                           GValue *value,
                           GParamSpec *pspec)
 {
-	EColorComboPrivate *priv;
+	EColorCombo *self = E_COLOR_COMBO (object);
 	GdkRGBA color;
-
-	priv = E_COLOR_COMBO_GET_PRIVATE (object);
 
 	switch (property_id) {
 		case PROP_CURRENT_COLOR:
-			e_color_combo_get_current_color (
-				E_COLOR_COMBO (object), &color);
+			e_color_combo_get_current_color (self, &color);
 			g_value_set_boxed (value, &color);
 			return;
 
 		case PROP_DEFAULT_COLOR:
-			e_color_combo_get_default_color (
-				E_COLOR_COMBO (object), &color);
+			e_color_combo_get_default_color (self, &color);
 			g_value_set_boxed (value, &color);
 			return;
 
 		case PROP_DEFAULT_LABEL:
-			g_value_set_string (
-				value, e_color_combo_get_default_label (
-				E_COLOR_COMBO (object)));
+			g_value_set_string (value, e_color_combo_get_default_label (self));
 			return;
 
 		case PROP_DEFAULT_TRANSPARENT:
-			g_value_set_boolean (
-				value,
-				e_color_combo_get_default_transparent (
-				E_COLOR_COMBO (object)));
+			g_value_set_boolean (value, e_color_combo_get_default_transparent (self));
 			return;
 
 		case PROP_PALETTE:
-			g_value_set_object (
-				value, e_color_combo_get_palette (
-				E_COLOR_COMBO (object)));
+			g_value_set_object (value, e_color_combo_get_palette (self));
 			return;
 
 		case PROP_POPUP_SHOWN:
-			g_value_set_boolean (value, priv->popup_shown);
+			g_value_set_boolean (value, self->priv->popup_shown);
 			return;
 	}
 
@@ -411,15 +393,14 @@ color_combo_get_property (GObject *object,
 static void
 color_combo_dispose (GObject *object)
 {
-	EColorComboPrivate *priv;
+	EColorCombo *self = E_COLOR_COMBO (object);
 
-	priv = E_COLOR_COMBO_GET_PRIVATE (object);
-	g_clear_pointer (&priv->popover, gtk_widget_destroy);
-	g_clear_pointer (&priv->current_color, gdk_rgba_free);
-	g_clear_pointer (&priv->default_color, gdk_rgba_free);
+	g_clear_pointer (&self->priv->popover, gtk_widget_destroy);
+	g_clear_pointer (&self->priv->current_color, gdk_rgba_free);
+	g_clear_pointer (&self->priv->default_color, gdk_rgba_free);
 
-	g_list_free_full (priv->palette, (GDestroyNotify) gdk_rgba_free);
-	priv->palette = NULL;
+	g_list_free_full (self->priv->palette, (GDestroyNotify) gdk_rgba_free);
+	self->priv->palette = NULL;
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_color_combo_parent_class)->dispose (object);
@@ -430,8 +411,6 @@ e_color_combo_class_init (EColorComboClass *class)
 {
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
-
-	g_type_class_add_private (class, sizeof (EColorComboPrivate));
 
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = color_combo_set_property;
@@ -555,63 +534,10 @@ e_color_combo_class_init (EColorComboClass *class)
 static void
 e_color_combo_init (EColorCombo *combo)
 {
-	struct {
-		const gchar *color;
-		const gchar *tooltip;
-		GdkRGBA rgba;
-	} default_colors[] = {
-
-		{ "#000000", N_("black"), { 0, } },
-		{ "#993300", N_("light brown"), { 0, } },
-		{ "#333300", N_("brown gold"), { 0, } },
-		{ "#003300", N_("dark green #2"), { 0, } },
-		{ "#003366", N_("navy"), { 0, } },
-		{ "#000080", N_("dark blue"), { 0, } },
-		{ "#333399", N_("purple #2"), { 0, } },
-		{ "#333333", N_("very dark gray"), { 0, } },
-
-		{ "#800000", N_("dark red"), { 0, } },
-		{ "#FF6600", N_("red-orange"), { 0, } },
-		{ "#808000", N_("gold"), { 0, } },
-		{ "#008000", N_("dark green"), { 0, } },
-		{ "#008080", N_("dull blue"), { 0, } },
-		{ "#0000FF", N_("blue"), { 0, } },
-		{ "#666699", N_("dull purple"), { 0, } },
-		{ "#808080", N_("dark grey"), { 0, } },
-
-		{ "#FF0000", N_("red"), { 0, } },
-		{ "#FF9900", N_("orange"), { 0, } },
-		{ "#99CC00", N_("lime"), { 0, } },
-		{ "#339966", N_("dull green"), { 0, } },
-		{ "#33CCCC", N_("dull blue #2"), { 0, } },
-		{ "#3366FF", N_("sky blue #2"), { 0, } },
-		{ "#800080", N_("purple"), { 0, } },
-		{ "#969696", N_("gray"), { 0, } },
-
-		{ "#FF00FF", N_("magenta"), { 0, } },
-		{ "#FFCC00", N_("bright orange"), { 0, } },
-		{ "#FFFF00", N_("yellow"), { 0, } },
-		{ "#00FF00", N_("green"), { 0, } },
-		{ "#00FFFF", N_("cyan"), { 0, } },
-		{ "#00CCFF", N_("bright blue"), { 0, } },
-		{ "#993366", N_("red purple"), { 0, } },
-		{ "#C0C0C0", N_("light grey"), { 0, } },
-
-		{ "#FF99CC", N_("pink"), { 0, } },
-		{ "#FFCC99", N_("light orange"), { 0, } },
-		{ "#FFFF99", N_("light yellow"), { 0, } },
-		{ "#CCFFCC", N_("light green"), { 0, } },
-		{ "#CCFFFF", N_("light cyan"), { 0, } },
-		{ "#99CCFF", N_("light blue"), { 0, } },
-		{ "#CC99FF", N_("light purple"), { 0, } },
-		{ "#FFFFFF", N_("white"), { 0, } }
-	};
 	GtkWidget *container;
 	GtkWidget *widget;
-	GList *palette;
-	gint ii;
 
-	combo->priv = E_COLOR_COMBO_GET_PRIVATE (combo);
+	combo->priv = e_color_combo_get_instance_private (combo);
 
 	widget = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
 	gtk_container_add (GTK_CONTAINER (combo), widget);
@@ -684,15 +610,6 @@ e_color_combo_init (EColorCombo *combo)
 	g_signal_connect_swapped (
 		widget, "editor-activated",
 		G_CALLBACK (color_combo_popdown), combo);
-
-	palette = NULL;
-	for (ii = G_N_ELEMENTS (default_colors) - 1; ii >= 0 ; ii--) {
-		gdk_rgba_parse (&(default_colors[ii].rgba), default_colors[ii].color);
-
-		palette = g_list_prepend (palette, &(default_colors[ii].rgba));
-	}
-	e_color_combo_set_palette (combo, palette);
-	g_list_free (palette);
 
 	combo->priv->current_color = gdk_rgba_copy (&black);
 	combo->priv->default_color = gdk_rgba_copy (&black);

@@ -31,16 +31,14 @@
 
 #include <libebackend/libebackend.h>
 
+#include "e-util/e-util.h"
+
 #include "e-composer-actions.h"
 #include "e-composer-header-table.h"
 
 #ifdef HAVE_XFREE
 #include <X11/XF86keysym.h>
 #endif
-
-#define E_MSG_COMPOSER_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MSG_COMPOSER, EMsgComposerPrivate))
 
 /* Shorthand, requires a variable named "composer". */
 #define ACTION(name)	(E_COMPOSER_ACTION_##name (composer))
@@ -81,6 +79,8 @@ struct _EMsgComposerPrivate {
 
 	GtkWidget *address_dialog;
 
+	EMenuBar *menu_bar;
+
 	gchar *mime_type;
 	gchar *mime_body;
 	gchar *charset;
@@ -89,6 +89,7 @@ struct _EMsgComposerPrivate {
 	guint32 mode_post : 1;
 	guint32 in_signature_insert : 1;
 	guint32 application_exiting : 1;
+	guint32 is_imip : 1;
 
 	CamelMimeMessage *redirect;
 
@@ -104,7 +105,6 @@ struct _EMsgComposerPrivate {
 	gboolean dnd_history_saved;
 	gboolean check_if_signature_is_changed;
 	gboolean ignore_next_signature_change;
-	gboolean last_signal_was_paste_primary;
 
 	gint focused_entry_selection_start;
 	gint focused_entry_selection_end;
@@ -113,6 +113,8 @@ struct _EMsgComposerPrivate {
 	gulong notify_destinations_cc_handler;
 	gulong notify_destinations_to_handler;
 	gulong notify_identity_uid_handler;
+	gulong notify_mail_followup_to_handler;
+	gulong notify_mail_reply_to_handler;
 	gulong notify_reply_to_handler;
 	gulong notify_signature_uid_handler;
 	gulong notify_subject_handler;
@@ -126,6 +128,7 @@ struct _EMsgComposerPrivate {
 	EContentEditorContentHash *content_hash;
 
 	GCancellable *load_signature_cancellable;
+	EAttachment *alternative_body_attachment; /* not referenced, only used for pointer comparison  */
 };
 
 void		e_composer_private_constructed	(EMsgComposer *composer);
@@ -149,6 +152,10 @@ gboolean	e_composer_selection_is_base64_uris
 gboolean	e_composer_selection_is_image_uris
 						(EMsgComposer *composer,
 						 GtkSelectionData *selection);
+gboolean	e_composer_selection_is_moz_url_image
+						(EMsgComposer *composer,
+						 GtkSelectionData *selection,
+						 gchar **out_moz_url);
 void		e_composer_update_signature	(EMsgComposer *composer);
 void		e_composer_emit_before_destroy	(EMsgComposer *composer);
 

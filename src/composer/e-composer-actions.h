@@ -40,6 +40,8 @@
 	E_COMPOSER_ACTION ((composer), "prioritize-message")
 #define E_COMPOSER_ACTION_REQUEST_READ_RECEIPT(composer) \
 	E_COMPOSER_ACTION ((composer), "request-read-receipt")
+#define E_COMPOSER_ACTION_DELIVERY_STATUS_NOTIFICATION(composer) \
+	E_COMPOSER_ACTION ((composer), "delivery-status-notification")
 #define E_COMPOSER_ACTION_SAVE(composer) \
 	E_COMPOSER_ACTION ((composer), "save")
 #define E_COMPOSER_ACTION_SAVE_AS(composer) \
@@ -56,6 +58,10 @@
 	E_COMPOSER_ACTION ((composer), "smime-encrypt")
 #define E_COMPOSER_ACTION_SMIME_SIGN(composer) \
 	E_COMPOSER_ACTION ((composer), "smime-sign")
+#define E_COMPOSER_ACTION_TOOLBAR_SHOW_MAIN(composer) \
+	E_COMPOSER_ACTION ((composer), "toolbar-show-main")
+#define E_COMPOSER_ACTION_TOOLBAR_SHOW_EDIT(composer) \
+	E_COMPOSER_ACTION ((composer), "toolbar-show-edit")
 #define E_COMPOSER_ACTION_TOOLBAR_PGP_ENCRYPT(composer) \
 	E_COMPOSER_ACTION ((composer), "toolbar-pgp-encrypt")
 #define E_COMPOSER_ACTION_TOOLBAR_PGP_SIGN(composer) \
@@ -74,6 +80,10 @@
 	E_COMPOSER_ACTION ((composer), "view-cc")
 #define E_COMPOSER_ACTION_VIEW_FROM_OVERRIDE(composer) \
 	E_COMPOSER_ACTION ((composer), "view-from-override")
+#define E_COMPOSER_ACTION_VIEW_MAIL_FOLLOWUP_TO(composer) \
+	E_COMPOSER_ACTION ((composer), "view-mail-followup-to")
+#define E_COMPOSER_ACTION_VIEW_MAIL_REPLY_TO(composer) \
+	E_COMPOSER_ACTION ((composer), "view-mail-reply-to")
 #define E_COMPOSER_ACTION_VIEW_REPLY_TO(composer) \
 	E_COMPOSER_ACTION ((composer), "view-reply-to")
 #define E_COMPOSER_ACTION_VISUALLY_WRAP_LONG_LINES(composer) \

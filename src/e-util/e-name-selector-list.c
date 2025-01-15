@@ -31,10 +31,6 @@
 #include "e-name-selector-list.h"
 #include "e-name-selector-entry.h"
 
-#define E_NAME_SELECTOR_LIST_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_NAME_SELECTOR_LIST, ENameSelectorListPrivate))
-
 #define MAX_ROW	10
 
 struct _ENameSelectorListPrivate {
@@ -46,7 +42,7 @@ struct _ENameSelectorListPrivate {
 	GdkDevice *grab_pointer;
 };
 
-G_DEFINE_TYPE (ENameSelectorList, e_name_selector_list, E_TYPE_NAME_SELECTOR_ENTRY)
+G_DEFINE_TYPE_WITH_PRIVATE (ENameSelectorList, e_name_selector_list, E_TYPE_NAME_SELECTOR_ENTRY)
 
 /* Signals */
 
@@ -184,20 +180,6 @@ enl_popup_ungrab (ENameSelectorList *list)
 
 	list->priv->grab_pointer = NULL;
 	list->priv->grab_keyboard = NULL;
-}
-
-static gboolean
-enl_entry_focus_in (ENameSelectorList *list,
-                    GdkEventFocus *event,
-                    gpointer dummy)
-{
-	gint len;
-
-	/* FIXME: Dont select every thing by default- Code is there but still it does */
-	len = strlen (gtk_entry_get_text (GTK_ENTRY (list)));
-	gtk_editable_select_region (GTK_EDITABLE (list), len, -1);
-
-	return TRUE;
 }
 
 static gboolean
@@ -699,8 +681,6 @@ e_name_selector_list_class_init (ENameSelectorListClass *class)
 	GObjectClass *object_class;
 	GtkWidgetClass *widget_class;
 
-	g_type_class_add_private (class, sizeof (ENameSelectorListPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->dispose = name_selector_list_dispose;
 
@@ -719,7 +699,7 @@ e_name_selector_list_init (ENameSelectorList *list)
 	EDestinationStore *store;
 	GtkEntryCompletion *completion;
 
-	list->priv = E_NAME_SELECTOR_LIST_GET_PRIVATE (list);
+	list->priv = e_name_selector_list_get_instance_private (list);
 	list->priv->menu = NULL;
 
 	entry = E_NAME_SELECTOR_ENTRY (list);
@@ -775,9 +755,6 @@ e_name_selector_list_init (ENameSelectorList *list)
 	gtk_container_add (GTK_CONTAINER (scroll), list->priv->tree_view);
 	gtk_container_add (GTK_CONTAINER (vgrid), scroll);
 
-	g_signal_connect_after (
-		GTK_WIDGET (list), "focus-in-event",
-		G_CALLBACK (enl_entry_focus_in), NULL);
 	g_signal_connect (
 		GTK_WIDGET (list), "focus-out-event",
 		G_CALLBACK (enl_entry_focus_out), NULL);

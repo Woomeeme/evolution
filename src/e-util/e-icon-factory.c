@@ -41,6 +41,20 @@
 
 #define d(x)
 
+static gboolean prefer_symbolic_icons = FALSE;
+
+void
+e_icon_factory_set_prefer_symbolic_icons (gboolean prefer)
+{
+	prefer_symbolic_icons = prefer;
+}
+
+gboolean
+e_icon_factory_get_prefer_symbolic_icons (void)
+{
+	return prefer_symbolic_icons;
+}
+
 /**
  * e_icon_factory_get_icon_filename:
  * @icon_name: name of the icon
@@ -67,7 +81,9 @@ e_icon_factory_get_icon_filename (const gchar *icon_name,
 		return NULL;
 
 	icon_info = gtk_icon_theme_lookup_icon (
-		icon_theme, icon_name, height, 0);
+		icon_theme, icon_name, height, prefer_symbolic_icons ? GTK_ICON_LOOKUP_FORCE_SYMBOLIC : GTK_ICON_LOOKUP_FORCE_REGULAR);
+	if (!icon_info)
+		icon_info = gtk_icon_theme_lookup_icon (icon_theme, icon_name, height, 0);
 	if (icon_info != NULL) {
 		filename = g_strdup (
 			gtk_icon_info_get_filename (icon_info));
@@ -104,7 +120,13 @@ e_icon_factory_get_icon (const gchar *icon_name,
 		width = height = 16;
 
 	pixbuf = gtk_icon_theme_load_icon (
-		icon_theme, icon_name, height, GTK_ICON_LOOKUP_FORCE_SIZE, &error);
+		icon_theme, icon_name, height, GTK_ICON_LOOKUP_FORCE_SIZE |
+		(prefer_symbolic_icons ? GTK_ICON_LOOKUP_FORCE_SYMBOLIC : GTK_ICON_LOOKUP_FORCE_REGULAR), &error);
+	if (!pixbuf) {
+		pixbuf = gtk_icon_theme_load_icon (icon_theme, icon_name, height, GTK_ICON_LOOKUP_FORCE_SIZE, NULL);
+		if (pixbuf)
+			g_clear_error (&error);
+	}
 
 	if (error != NULL) {
 		g_warning ("%s", error->message);
@@ -170,6 +192,9 @@ e_icon_factory_create_thumbnail (const gchar *filename)
 	static GnomeDesktopThumbnailFactory *thumbnail_factory = NULL;
 	struct stat file_stat;
 	gchar *thumbnail = NULL;
+#if defined(GNOME_DESKTOP_PLATFORM_VERSION) && GNOME_DESKTOP_PLATFORM_VERSION >= 43
+	GError *error = NULL;
+#endif
 
 	g_return_val_if_fail (filename != NULL, NULL);
 
@@ -194,10 +219,26 @@ e_icon_factory_create_thumbnail (const gchar *filename)
 			if (!thumbnail && gnome_desktop_thumbnail_factory_can_thumbnail (thumbnail_factory, uri, mime, file_stat.st_mtime)) {
 				GdkPixbuf *pixbuf;
 
+#if defined(GNOME_DESKTOP_PLATFORM_VERSION) && GNOME_DESKTOP_PLATFORM_VERSION >= 43
+				pixbuf = gnome_desktop_thumbnail_factory_generate_thumbnail (thumbnail_factory, uri, mime, NULL, &error);
+				if (!pixbuf) {
+					g_warning ("Failed to generate thumbnail for %s: %s", uri, error ? error->message : "Unknown error");
+					g_clear_error (&error);
+				}
+#else
 				pixbuf = gnome_desktop_thumbnail_factory_generate_thumbnail (thumbnail_factory, uri, mime);
+#endif
 
 				if (pixbuf) {
+#if defined(GNOME_DESKTOP_PLATFORM_VERSION) && GNOME_DESKTOP_PLATFORM_VERSION >= 43
+					gnome_desktop_thumbnail_factory_save_thumbnail (thumbnail_factory, pixbuf, uri, file_stat.st_mtime, NULL, &error);
+					if (error) {
+						g_warning ("Failed to save thumbnail for %s: %s", uri, error ? error->message : "Unknown error");
+						g_clear_error (&error);
+					}
+#else
 					gnome_desktop_thumbnail_factory_save_thumbnail (thumbnail_factory, pixbuf, uri, file_stat.st_mtime);
+#endif
 					g_object_unref (pixbuf);
 
 					thumbnail = gnome_desktop_thumbnail_factory_lookup (thumbnail_factory, uri, file_stat.st_mtime);

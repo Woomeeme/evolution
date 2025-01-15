@@ -27,10 +27,8 @@ enum {
 	PROP_VFOLDER_ALLOW_EXPUNGE
 };
 
-G_DEFINE_DYNAMIC_TYPE (
-	EMailShellView,
-	e_mail_shell_view,
-	E_TYPE_SHELL_VIEW)
+G_DEFINE_DYNAMIC_TYPE_EXTENDED (EMailShellView, e_mail_shell_view, E_TYPE_SHELL_VIEW, 0,
+	G_ADD_PRIVATE_DYNAMIC (EMailShellView))
 
 /* ETable spec for search results */
 static const gchar *SEARCH_RESULTS_STATE =
@@ -538,53 +536,50 @@ mail_shell_view_constructed (GObject *object)
 static void
 mail_shell_view_toggled (EShellView *shell_view)
 {
-	EMailShellViewPrivate *priv;
+	EMailShellView *self = E_MAIL_SHELL_VIEW (shell_view);
 	EShellWindow *shell_window;
 	EMailReader *reader;
 	GtkUIManager *ui_manager;
 	const gchar *basename;
 	gboolean view_is_active;
 
-	priv = E_MAIL_SHELL_VIEW_GET_PRIVATE (shell_view);
-
 	shell_window = e_shell_view_get_shell_window (shell_view);
 	ui_manager = e_shell_window_get_ui_manager (shell_window);
 	view_is_active = e_shell_view_is_active (shell_view);
-	reader = E_MAIL_READER (e_mail_shell_content_get_mail_view (priv->mail_shell_content));
+	reader = E_MAIL_READER (e_mail_shell_content_get_mail_view (self->priv->mail_shell_content));
 	basename = E_MAIL_READER_UI_DEFINITION;
 
-	if (view_is_active && priv->merge_id == 0) {
-		priv->merge_id = e_load_ui_manager_definition (ui_manager, basename);
+	if (view_is_active && self->priv->merge_id == 0) {
+		self->priv->merge_id = e_load_ui_manager_definition (ui_manager, basename);
 
-		e_mail_reader_create_charset_menu (reader, ui_manager, priv->merge_id);
+		e_mail_reader_create_charset_menu (reader, ui_manager, self->priv->merge_id);
 
 		/* This also fills the Label menu */
 		e_mail_reader_update_actions (reader, e_mail_reader_check_state (reader));
-	} else if (!view_is_active && priv->merge_id != 0) {
+	} else if (!view_is_active && self->priv->merge_id != 0) {
 		e_mail_reader_remove_ui (reader);
-		gtk_ui_manager_remove_ui (ui_manager, priv->merge_id);
+		gtk_ui_manager_remove_ui (ui_manager, self->priv->merge_id);
 		gtk_ui_manager_ensure_update (ui_manager);
-		priv->merge_id = 0;
+		self->priv->merge_id = 0;
 	}
 
 	/* Chain up to parent's toggled() method. */
-	E_SHELL_VIEW_CLASS (e_mail_shell_view_parent_class)->
-		toggled (shell_view);
+	E_SHELL_VIEW_CLASS (e_mail_shell_view_parent_class)->toggled (shell_view);
 }
 
 static gchar *
 mail_shell_view_construct_filter_message_thread (EMailShellView *mail_shell_view,
 						 const gchar *with_query)
 {
-	EMailShellViewPrivate *priv;
+	EMailShellView *self;
 	GString *query;
 	GSList *link;
 
 	g_return_val_if_fail (E_IS_MAIL_SHELL_VIEW (mail_shell_view), NULL);
 
-	priv = E_MAIL_SHELL_VIEW_GET_PRIVATE (mail_shell_view);
+	self = E_MAIL_SHELL_VIEW (mail_shell_view);
 
-	if (!priv->selected_uids) {
+	if (!self->priv->selected_uids) {
 		EShellContent *shell_content;
 		EMailView *mail_view;
 		GPtrArray *uids;
@@ -597,14 +592,14 @@ mail_shell_view_construct_filter_message_thread (EMailShellView *mail_shell_view
 			gint ii;
 
 			for (ii = 0; ii < uids->len; ii++) {
-				priv->selected_uids = g_slist_prepend (priv->selected_uids, (gpointer) camel_pstring_strdup (uids->pdata[ii]));
+				self->priv->selected_uids = g_slist_prepend (self->priv->selected_uids, (gpointer) camel_pstring_strdup (uids->pdata[ii]));
 			}
 
 			g_ptr_array_unref (uids);
 		}
 
-		if (!priv->selected_uids)
-			priv->selected_uids = g_slist_prepend (priv->selected_uids, (gpointer) camel_pstring_strdup (""));
+		if (!self->priv->selected_uids)
+			self->priv->selected_uids = g_slist_prepend (self->priv->selected_uids, (gpointer) camel_pstring_strdup (""));
 	}
 
 	query = g_string_new ("");
@@ -618,7 +613,7 @@ mail_shell_view_construct_filter_message_thread (EMailShellView *mail_shell_view
 
 	g_string_append (query, "(match-threads \"all\" (match-all (uid");
 
-	for (link = priv->selected_uids; link; link = g_slist_next (link)) {
+	for (link = self->priv->selected_uids; link; link = g_slist_next (link)) {
 		const gchar *uid = link->data;
 
 		g_string_append_c (query, ' ');
@@ -636,9 +631,257 @@ mail_shell_view_construct_filter_message_thread (EMailShellView *mail_shell_view
 }
 
 static void
+mail_shell_view_restore_selected_folder (EShellView *shell_view)
+{
+	EShellSidebar *shell_sidebar;
+	EMailReader *reader;
+	EMFolderTree *folder_tree;
+	CamelStore *selected_store = NULL;
+	gchar *selected_folder_name = NULL;
+
+	shell_sidebar = e_shell_view_get_shell_sidebar (shell_view);
+	folder_tree = e_mail_shell_sidebar_get_folder_tree (E_MAIL_SHELL_SIDEBAR (shell_sidebar));
+
+	reader = E_MAIL_READER (e_mail_shell_content_get_mail_view (E_MAIL_SHELL_CONTENT (e_shell_view_get_shell_content (shell_view))));
+
+	/* Reset the message list to the current folder tree
+	 * selection.  This needs to happen synchronously to
+	 * avoid search conflicts, so we can't just grab the
+	 * folder URI and let the asynchronous callbacks run
+	 * after we've already kicked off the search. */
+	em_folder_tree_get_selected (folder_tree, &selected_store, &selected_folder_name);
+	if (selected_store != NULL && selected_folder_name != NULL) {
+		CamelFolder *sel_folder;
+
+		sel_folder = camel_store_get_folder_sync (
+			selected_store, selected_folder_name,
+			0, NULL, NULL);
+		e_mail_reader_set_folder (reader, sel_folder);
+		g_clear_object (&sel_folder);
+	}
+
+	g_clear_object (&selected_store);
+	g_free (selected_folder_name);
+}
+
+static void
+mail_shell_view_stop_and_clear_search_vfolders (EMailShellView *mail_shell_view)
+{
+	if (mail_shell_view->priv->search_account_cancel) {
+		g_cancellable_cancel (mail_shell_view->priv->search_account_cancel);
+		g_clear_object (&mail_shell_view->priv->search_account_cancel);
+	}
+
+	g_clear_object (&mail_shell_view->priv->search_folder_and_subfolders);
+	g_clear_object (&mail_shell_view->priv->search_account_all);
+	g_clear_object (&mail_shell_view->priv->search_account_current);
+}
+
+static gboolean
+mail_shell_view_option_is_contains (EFilterElement *elem)
+{
+	EFilterOption *opt;
+
+	if (!E_IS_FILTER_OPTION (elem))
+		return FALSE;
+
+	opt = E_FILTER_OPTION (elem);
+
+	return opt->current && g_strcmp0 (opt->current->value, "contains") == 0;
+}
+
+static gchar *
+mail_shell_view_dup_input_text (EFilterElement *elem)
+{
+	EFilterInput *inpt;
+	GString *str;
+	GList *link;
+
+	if (!E_IS_FILTER_INPUT (elem))
+		return NULL;
+
+	inpt = E_FILTER_INPUT (elem);
+	str = g_string_new ("");
+
+	for (link = inpt->values; link; link = g_list_next (link)) {
+		const gchar *value = link->data;
+
+		if (value && *value) {
+			if (str->len)
+				g_string_append_c (str, ' ');
+			g_string_append (str, value);
+		}
+	}
+
+	return g_string_free (str, FALSE);
+}
+
+static void
+mail_shell_view_custom_search (EShellView *shell_view,
+			       EFilterRule *custom_rule)
+{
+	gboolean processed = FALSE;
+
+	/* Make sure the <ruleset> from src/mail/searchtypes.xml.in matches below code */
+
+	if (custom_rule && custom_rule->threading == E_FILTER_THREAD_NONE &&
+	    custom_rule->grouping == E_FILTER_GROUP_ANY &&
+	    custom_rule->parts && custom_rule->parts->data) {
+		EShellWindow *shell_window = e_shell_view_get_shell_window (shell_view);
+		EShellSearchbar *searchbar = E_SHELL_SEARCHBAR (e_shell_view_get_searchbar (shell_view));
+		EFilterPart *part = custom_rule->parts->data;
+		GtkAction *search_action = NULL;
+		gchar *search_text = NULL;
+
+		if (!custom_rule->parts->next && g_list_length (part->elements) == 2) {
+			EFilterElement *elem0, *elem1;
+
+			elem0 = part->elements->data;
+			elem1 = part->elements->next->data;
+
+			if (mail_shell_view_option_is_contains (elem0)) {
+				if (g_strcmp0 (part->name, "sender") == 0)
+					search_action = ACTION (MAIL_SEARCH_SENDER_CONTAINS);
+				else if (g_strcmp0 (part->name, "subject") == 0)
+					search_action = ACTION (MAIL_SEARCH_SUBJECT_CONTAINS);
+				else if (g_strcmp0 (part->name, "to") == 0)
+					search_action = ACTION (MAIL_SEARCH_RECIPIENTS_CONTAIN);
+				else if (g_strcmp0 (part->name, "body") == 0)
+					search_action = ACTION (MAIL_SEARCH_BODY_CONTAINS);
+
+				if (search_action)
+					search_text = mail_shell_view_dup_input_text (elem1);
+			}
+		} else if (!custom_rule->parts->next && g_list_length (part->elements) == 1 &&
+			   g_strcmp0 (part->name, "mail-free-form-exp") == 0) {
+			EFilterElement *elem;
+
+			elem = part->elements->data;
+
+			search_action = ACTION (MAIL_SEARCH_FREE_FORM_EXPR);
+			search_text = mail_shell_view_dup_input_text (elem);
+		} else if (g_list_length (custom_rule->parts) == 3) {
+			GList *link;
+			gboolean has_subject = FALSE, has_sender = FALSE, has_to = FALSE;
+
+			for (link = custom_rule->parts; link; link = g_list_next (link)) {
+				part = link->data;
+
+				if (!part || g_list_length (part->elements) != 2 ||
+				    !mail_shell_view_option_is_contains (part->elements->data))
+					continue;
+
+				if (!has_subject && g_strcmp0 (part->name, "subject") == 0)
+					has_subject = TRUE;
+				else if (!has_sender  && g_strcmp0 (part->name, "sender") == 0)
+					has_sender = TRUE;
+				else if (!has_to && g_strcmp0 (part->name, "to") == 0)
+					has_to = TRUE;
+			}
+
+			if (has_subject && has_sender && has_to) {
+				for (link = custom_rule->parts; link; link = g_list_next (link)) {
+					EFilterElement *elem;
+					gchar *text;
+
+					part = link->data;
+
+					if (!part || !part->elements || !part->elements->next)
+						continue;
+
+					elem = part->elements->next->data;
+					text = mail_shell_view_dup_input_text (elem);
+
+					/* all three options should have set the same text to search for */
+					if (!text || (search_text && g_strcmp0 (search_text, text) != 0)) {
+						g_clear_pointer (&search_text, g_free);
+						g_free (text);
+						break;
+					}
+
+					if (search_text)
+						g_free (text);
+					else
+						search_text = text;
+				}
+
+				if (search_text)
+					search_action = ACTION (MAIL_SEARCH_SUBJECT_OR_ADDRESSES_CONTAIN);
+			}
+		} else if (g_list_length (custom_rule->parts) == 4) {
+			GList *link;
+			gboolean has_subject = FALSE, has_sender = FALSE, has_to = FALSE, has_body = FALSE;
+
+			for (link = custom_rule->parts; link; link = g_list_next (link)) {
+				part = link->data;
+
+				if (!part || g_list_length (part->elements) != 2 ||
+				    !mail_shell_view_option_is_contains (part->elements->data))
+					continue;
+
+				if (!has_subject && g_strcmp0 (part->name, "subject") == 0)
+					has_subject = TRUE;
+				else if (!has_sender  && g_strcmp0 (part->name, "sender") == 0)
+					has_sender = TRUE;
+				else if (!has_to && g_strcmp0 (part->name, "to") == 0)
+					has_to = TRUE;
+				else if (!has_body && g_strcmp0 (part->name, "body") == 0)
+					has_body = TRUE;
+			}
+
+			if (has_subject && has_sender && has_to && has_body) {
+				for (link = custom_rule->parts; link; link = g_list_next (link)) {
+					EFilterElement *elem;
+					gchar *text;
+
+					part = link->data;
+
+					if (!part || !part->elements || !part->elements->next)
+						continue;
+
+					elem = part->elements->next->data;
+					text = mail_shell_view_dup_input_text (elem);
+
+					/* all four options should have set the same text to search for */
+					if (!text || (search_text && g_strcmp0 (search_text, text) != 0)) {
+						g_clear_pointer (&search_text, g_free);
+						g_free (text);
+						break;
+					}
+
+					if (search_text)
+						g_free (text);
+					else
+						search_text = text;
+				}
+
+				if (search_text)
+					search_action = ACTION (MAIL_SEARCH_MESSAGE_CONTAINS);
+			}
+		}
+
+		if (search_action && search_text) {
+			e_shell_view_block_execute_search (shell_view);
+			e_shell_view_set_search_rule (shell_view, NULL);
+			gtk_action_activate (search_action);
+			e_shell_searchbar_set_search_text (searchbar, search_text);
+			e_shell_view_unblock_execute_search (shell_view);
+			e_shell_view_execute_search (shell_view);
+
+			processed = TRUE;
+		}
+
+		g_free (search_text);
+	}
+
+	if (!processed)
+		E_SHELL_VIEW_CLASS (e_mail_shell_view_parent_class)->custom_search (shell_view, custom_rule);
+}
+
+static void
 mail_shell_view_execute_search (EShellView *shell_view)
 {
-	EMailShellViewPrivate *priv;
+	EMailShellView *self = E_MAIL_SHELL_VIEW (shell_view);
 	EMailShellContent *mail_shell_content;
 	EMailShellSidebar *mail_shell_sidebar;
 	EShellWindow *shell_window;
@@ -673,8 +916,6 @@ mail_shell_view_execute_search (EShellView *shell_view)
 	gchar *tag;
 	const gchar *use_tag;
 	gint value;
-
-	priv = E_MAIL_SHELL_VIEW_GET_PRIVATE (shell_view);
 
 	shell_window = e_shell_view_get_shell_window (shell_view);
 	shell_backend = e_shell_view_get_shell_backend (shell_view);
@@ -719,7 +960,7 @@ mail_shell_view_execute_search (EShellView *shell_view)
 	 * current search text and extract a query string. */
 
 	g_return_if_fail (value >= 0 && value < MAIL_NUM_SEARCH_RULES);
-	rule = priv->search_rules[value];
+	rule = self->priv->search_rules[value];
 
 	/* Set the search rule in EShellView so that "Create
 	 * Search Folder from Search" works for quick searches. */
@@ -777,8 +1018,8 @@ filter:
 	value = e_action_combo_box_get_current_value (combo_box);
 
 	if (value != MAIL_FILTER_MESSAGE_THREAD) {
-		g_slist_free_full (priv->selected_uids, (GDestroyNotify) camel_pstring_free);
-		priv->selected_uids = NULL;
+		g_slist_free_full (self->priv->selected_uids, (GDestroyNotify) camel_pstring_free);
+		self->priv->selected_uids = NULL;
 	}
 
 	switch (value) {
@@ -935,12 +1176,23 @@ filter:
 			break;
 	}
 
+	gtk_widget_set_sensitive (GTK_WIDGET (folder_tree), TRUE);
+
 	/* Apply selected scope. */
 
 	combo_box = e_shell_searchbar_get_scope_combo_box (searchbar);
 	value = e_action_combo_box_get_current_value (combo_box);
+
+	/* virtual Trash/Junk folders cannot have subfolders, thus
+	   switch internally to "Current Folder" only */
+	if (value == MAIL_SCOPE_CURRENT_FOLDER_AND_SUBFOLDERS &&
+	    CAMEL_IS_VTRASH_FOLDER (folder))
+		value = MAIL_SCOPE_CURRENT_FOLDER;
+
 	switch (value) {
 		case MAIL_SCOPE_CURRENT_FOLDER:
+			mail_shell_view_stop_and_clear_search_vfolders (E_MAIL_SHELL_VIEW (shell_view));
+			mail_shell_view_restore_selected_folder (shell_view);
 			goto execute;
 
 		case MAIL_SCOPE_CURRENT_FOLDER_AND_SUBFOLDERS:
@@ -965,43 +1217,12 @@ filter:
 	 * account-wide searches still in progress. */
 	text = e_shell_searchbar_get_search_text (searchbar);
 	if ((text == NULL || *text == '\0') && !e_shell_view_get_search_rule (shell_view)) {
-		CamelStore *selected_store = NULL;
-		gchar *selected_folder_name = NULL;
-
-		g_clear_object (&priv->search_folder_and_subfolders);
-
-		if (priv->search_account_cancel != NULL) {
-			g_cancellable_cancel (priv->search_account_cancel);
-			g_object_unref (priv->search_account_cancel);
-			priv->search_account_cancel = NULL;
-		}
-
-		/* Reset the message list to the current folder tree
-		 * selection.  This needs to happen synchronously to
-		 * avoid search conflicts, so we can't just grab the
-		 * folder URI and let the asynchronous callbacks run
-		 * after we've already kicked off the search. */
-		em_folder_tree_get_selected (
-			folder_tree, &selected_store, &selected_folder_name);
-		if (selected_store != NULL && selected_folder_name != NULL) {
-			CamelFolder *sel_folder;
-
-			sel_folder = camel_store_get_folder_sync (
-				selected_store, selected_folder_name,
-				0, NULL, NULL);
-			e_mail_reader_set_folder (reader, sel_folder);
-			g_object_unref (sel_folder);
-		}
-
-		g_clear_object (&selected_store);
-		g_free (selected_folder_name);
-
-		gtk_widget_set_sensitive (GTK_WIDGET (combo_box), TRUE);
-
+		mail_shell_view_stop_and_clear_search_vfolders (E_MAIL_SHELL_VIEW (shell_view));
+		mail_shell_view_restore_selected_folder (shell_view);
 		goto execute;
 	}
 
-	search_folder = priv->search_folder_and_subfolders;
+	search_folder = self->priv->search_folder_and_subfolders;
 
 	/* Skip the search if we already have the results. */
 	if (search_folder != NULL) {
@@ -1012,15 +1233,11 @@ filter:
 			goto current_folder_and_subfolders_setup;
 	}
 
-	/* Disable the scope combo while search is in progress. */
-	gtk_widget_set_sensitive (GTK_WIDGET (combo_box), FALSE);
-
 	/* If we already have a search folder, reuse it. */
 	if (search_folder != NULL) {
-		if (priv->search_account_cancel != NULL) {
-			g_cancellable_cancel (priv->search_account_cancel);
-			g_object_unref (priv->search_account_cancel);
-			priv->search_account_cancel = NULL;
+		if (self->priv->search_account_cancel != NULL) {
+			g_cancellable_cancel (self->priv->search_account_cancel);
+			g_clear_object (&self->priv->search_account_cancel);
 		}
 
 		camel_vee_folder_set_expression (search_folder, query);
@@ -1038,13 +1255,15 @@ filter:
 		CAMEL_STORE (service),
 		_("Current Folder and Subfolders Search"),
 		CAMEL_STORE_FOLDER_PRIVATE);
-	priv->search_folder_and_subfolders = search_folder;
+	self->priv->search_folder_and_subfolders = search_folder;
 
 	g_object_unref (service);
 
 	camel_vee_folder_set_expression (search_folder, query);
 
  current_folder_and_subfolders_setup:
+
+	gtk_widget_set_sensitive (GTK_WIDGET (folder_tree), FALSE);
 
 	if (folder != NULL && folder != CAMEL_FOLDER (search_folder)) {
 		/* Just use the folder */
@@ -1063,12 +1282,12 @@ filter:
 		g_free (selected_folder_name);
 	}
 
-	priv->search_account_cancel = camel_operation_new ();
+	self->priv->search_account_cancel = camel_operation_new ();
 
 	mail_shell_view_setup_search_results_folder_and_subfolders (
 		MESSAGE_LIST (message_list),
 		CAMEL_FOLDER (search_folder), folder,
-		priv->search_account_cancel);
+		self->priv->search_account_cancel);
 
 	mail_shell_view_show_search_results_folder (
 		E_MAIL_SHELL_VIEW (shell_view),
@@ -1084,43 +1303,12 @@ all_accounts:
 	 * account-wide searches still in progress. */
 	text = e_shell_searchbar_get_search_text (searchbar);
 	if ((text == NULL || *text == '\0') && !e_shell_view_get_search_rule (shell_view)) {
-		CamelStore *selected_store = NULL;
-		gchar *selected_folder_name = NULL;
-
-		g_clear_object (&priv->search_account_all);
-
-		if (priv->search_account_cancel != NULL) {
-			g_cancellable_cancel (priv->search_account_cancel);
-			g_object_unref (priv->search_account_cancel);
-			priv->search_account_cancel = NULL;
-		}
-
-		/* Reset the message list to the current folder tree
-		 * selection.  This needs to happen synchronously to
-		 * avoid search conflicts, so we can't just grab the
-		 * folder URI and let the asynchronous callbacks run
-		 * after we've already kicked off the search. */
-		em_folder_tree_get_selected (
-			folder_tree, &selected_store, &selected_folder_name);
-		if (selected_store != NULL && selected_folder_name != NULL) {
-			CamelFolder *sel_folder;
-
-			sel_folder = camel_store_get_folder_sync (
-				selected_store, selected_folder_name,
-				0, NULL, NULL);
-			e_mail_reader_set_folder (reader, sel_folder);
-			g_object_unref (sel_folder);
-		}
-
-		g_clear_object (&selected_store);
-		g_free (selected_folder_name);
-
-		gtk_widget_set_sensitive (GTK_WIDGET (combo_box), TRUE);
-
+		mail_shell_view_stop_and_clear_search_vfolders (E_MAIL_SHELL_VIEW (shell_view));
+		mail_shell_view_restore_selected_folder (shell_view);
 		goto execute;
 	}
 
-	search_folder = priv->search_account_all;
+	search_folder = self->priv->search_account_all;
 
 	/* Skip the search if we already have the results. */
 	if (search_folder != NULL) {
@@ -1131,15 +1319,11 @@ all_accounts:
 			goto all_accounts_setup;
 	}
 
-	/* Disable the scope combo while search is in progress. */
-	gtk_widget_set_sensitive (GTK_WIDGET (combo_box), FALSE);
-
 	/* If we already have a search folder, reuse it. */
 	if (search_folder != NULL) {
-		if (priv->search_account_cancel != NULL) {
-			g_cancellable_cancel (priv->search_account_cancel);
-			g_object_unref (priv->search_account_cancel);
-			priv->search_account_cancel = NULL;
+		if (self->priv->search_account_cancel != NULL) {
+			g_cancellable_cancel (self->priv->search_account_cancel);
+			g_clear_object (&self->priv->search_account_cancel);
 		}
 
 		camel_vee_folder_set_expression (search_folder, query);
@@ -1158,7 +1342,7 @@ all_accounts:
 		CAMEL_STORE (service),
 		_("All Account Search"),
 		CAMEL_STORE_FOLDER_PRIVATE);
-	priv->search_account_all = search_folder;
+	self->priv->search_account_all = search_folder;
 
 	g_object_unref (service);
 
@@ -1166,17 +1350,19 @@ all_accounts:
 
 all_accounts_setup:
 
+	gtk_widget_set_sensitive (GTK_WIDGET (folder_tree), FALSE);
+
 	list = em_folder_tree_model_list_stores (EM_FOLDER_TREE_MODEL (
 		gtk_tree_view_get_model (GTK_TREE_VIEW (folder_tree))));
 	g_list_foreach (list, (GFunc) g_object_ref, NULL);
 
-	priv->search_account_cancel = camel_operation_new ();
+	self->priv->search_account_cancel = camel_operation_new ();
 
 	/* This takes ownership of the stores list. */
 	mail_shell_view_setup_search_results_folder (
 		MESSAGE_LIST (message_list),
 		CAMEL_FOLDER (search_folder), list,
-		priv->search_account_cancel);
+		self->priv->search_account_cancel);
 
 	mail_shell_view_show_search_results_folder (
 		E_MAIL_SHELL_VIEW (shell_view),
@@ -1192,43 +1378,12 @@ current_account:
 	 * account-wide searches still in progress. */
 	text = e_shell_searchbar_get_search_text (searchbar);
 	if ((text == NULL || *text == '\0') && !e_shell_view_get_search_rule (shell_view)) {
-		CamelStore *selected_store = NULL;
-		gchar *selected_folder_name = NULL;
-
-		g_clear_object (&priv->search_account_current);
-
-		if (priv->search_account_cancel != NULL) {
-			g_cancellable_cancel (priv->search_account_cancel);
-			g_object_unref (priv->search_account_cancel);
-			priv->search_account_cancel = NULL;
-		}
-
-		/* Reset the message list to the current folder tree
-		 * selection.  This needs to happen synchronously to
-		 * avoid search conflicts, so we can't just grab the
-		 * folder URI and let the asynchronous callbacks run
-		 * after we've already kicked off the search. */
-		em_folder_tree_get_selected (
-			folder_tree, &selected_store, &selected_folder_name);
-		if (selected_store != NULL && selected_folder_name != NULL) {
-			CamelFolder *sel_folder;
-
-			sel_folder = camel_store_get_folder_sync (
-				selected_store, selected_folder_name,
-				0, NULL, NULL);
-			e_mail_reader_set_folder (reader, sel_folder);
-			g_object_unref (sel_folder);
-		}
-
-		g_clear_object (&selected_store);
-		g_free (selected_folder_name);
-
-		gtk_widget_set_sensitive (GTK_WIDGET (combo_box), TRUE);
-
+		mail_shell_view_stop_and_clear_search_vfolders (E_MAIL_SHELL_VIEW (shell_view));
+		mail_shell_view_restore_selected_folder (shell_view);
 		goto execute;
 	}
 
-	search_folder = priv->search_account_current;
+	search_folder = self->priv->search_account_current;
 
 	/* Skip the search if we already have the results. */
 	if (search_folder != NULL) {
@@ -1239,15 +1394,11 @@ current_account:
 			goto current_accout_setup;
 	}
 
-	/* Disable the scope combo while search is in progress. */
-	gtk_widget_set_sensitive (GTK_WIDGET (combo_box), FALSE);
-
 	/* If we already have a search folder, reuse it. */
 	if (search_folder != NULL) {
-		if (priv->search_account_cancel != NULL) {
-			g_cancellable_cancel (priv->search_account_cancel);
-			g_object_unref (priv->search_account_cancel);
-			priv->search_account_cancel = NULL;
+		if (self->priv->search_account_cancel != NULL) {
+			g_cancellable_cancel (self->priv->search_account_cancel);
+			g_clear_object (&self->priv->search_account_cancel);
 		}
 
 		camel_vee_folder_set_expression (search_folder, query);
@@ -1266,13 +1417,15 @@ current_account:
 		CAMEL_STORE (service),
 		_("Account Search"),
 		CAMEL_STORE_FOLDER_PRIVATE);
-	priv->search_account_current = search_folder;
+	self->priv->search_account_current = search_folder;
 
 	g_object_unref (service);
 
 	camel_vee_folder_set_expression (search_folder, query);
 
 current_accout_setup:
+
+	gtk_widget_set_sensitive (GTK_WIDGET (folder_tree), FALSE);
 
 	if (folder != NULL && folder != CAMEL_FOLDER (search_folder)) {
 		store = camel_folder_get_parent_store (folder);
@@ -1288,13 +1441,13 @@ current_accout_setup:
 	if (store != NULL)
 		list = g_list_append (NULL, store);
 
-	priv->search_account_cancel = camel_operation_new ();
+	self->priv->search_account_cancel = camel_operation_new ();
 
 	/* This takes ownership of the stores list. */
 	mail_shell_view_setup_search_results_folder (
 		MESSAGE_LIST (message_list),
 		CAMEL_FOLDER (search_folder), list,
-		priv->search_account_cancel);
+		self->priv->search_account_cancel);
 
 	mail_shell_view_show_search_results_folder (
 		E_MAIL_SHELL_VIEW (shell_view),
@@ -1311,8 +1464,7 @@ execute:
 
 	e_mail_view_set_search_strings (mail_view, search_strings);
 
-	g_slist_foreach (search_strings, (GFunc) g_free, NULL);
-	g_slist_free (search_strings);
+	g_slist_free_full (search_strings, g_free);
 
 	g_free (query);
 
@@ -1482,9 +1634,9 @@ mail_shell_view_update_actions (EShellView *shell_view)
 	/* Look for a CamelStore that supports subscriptions. */
 	list = em_folder_tree_model_list_stores (model);
 	for (link = list; link != NULL; link = g_list_next (link)) {
-		CamelStore *store = CAMEL_STORE (link->data);
+		CamelStore *tmp_store = CAMEL_STORE (link->data);
 
-		if (CAMEL_IS_SUBSCRIBABLE (store)) {
+		if (CAMEL_IS_SUBSCRIBABLE (tmp_store)) {
 			any_store_is_subscribable = TRUE;
 			break;
 		}
@@ -1595,8 +1747,6 @@ e_mail_shell_view_class_init (EMailShellViewClass *class)
 	GObjectClass *object_class;
 	EShellViewClass *shell_view_class;
 
-	g_type_class_add_private (class, sizeof (EMailShellViewPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_shell_view_set_property;
 	object_class->get_property = mail_shell_view_get_property;
@@ -1615,6 +1765,7 @@ e_mail_shell_view_class_init (EMailShellViewClass *class)
 	shell_view_class->new_shell_content = e_mail_shell_content_new;
 	shell_view_class->new_shell_sidebar = e_mail_shell_sidebar_new;
 	shell_view_class->toggled = mail_shell_view_toggled;
+	shell_view_class->custom_search = mail_shell_view_custom_search;
 	shell_view_class->execute_search = mail_shell_view_execute_search;
 	shell_view_class->update_actions = mail_shell_view_update_actions;
 
@@ -1641,8 +1792,7 @@ e_mail_shell_view_class_finalize (EMailShellViewClass *class)
 static void
 e_mail_shell_view_init (EMailShellView *mail_shell_view)
 {
-	mail_shell_view->priv =
-		E_MAIL_SHELL_VIEW_GET_PRIVATE (mail_shell_view);
+	mail_shell_view->priv = e_mail_shell_view_get_instance_private (mail_shell_view);
 
 	e_mail_shell_view_private_init (mail_shell_view);
 }

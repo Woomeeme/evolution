@@ -94,6 +94,7 @@ set(SOURCES
 	e-mail-templates-store.c
 	e-mail-ui-session.c
 	e-mail-view.c
+	e-mail-viewer.c
 	em-composer-utils.c
 	em-config.c
 	em-event.c
@@ -186,6 +187,7 @@ set(HEADERS
 	e-mail-templates-store.h
 	e-mail-ui-session.h
 	e-mail-view.h
+	e-mail-viewer.h
 	em-composer-utils.h
 	em-config.h
 	em-event.h
@@ -235,6 +237,7 @@ target_compile_options(evolution-mail PUBLIC
 	${CANBERRA_CFLAGS}
 	${EVOLUTION_DATA_SERVER_CFLAGS}
 	${GNOME_PLATFORM_CFLAGS}
+	${SQLITE3_CFLAGS}
 )
 
 target_include_directories(evolution-mail PUBLIC
@@ -253,18 +256,20 @@ target_include_directories(evolution-mail PUBLIC
 	${CMAKE_SOURCE_DIR}/src/smime/lib
 	${CMAKE_SOURCE_DIR}/src/smime/gui
 	${CMAKE_CURRENT_SOURCE_DIR}
-	${CERT_UI_INCLUDES}
+	${CERT_UI_INCLUDE_DIRS}
 	${CANBERRA_INCLUDE_DIRS}
 	${EVOLUTION_DATA_SERVER_INCLUDE_DIRS}
 	${GNOME_PLATFORM_INCLUDE_DIRS}
+	${SQLITE3_INCLUDE_DIRS}
 )
 
 target_link_libraries(evolution-mail
 	${DEPENDENCIES}
-	${CERT_UI_LIBS}
+	${CERT_UI_LDFLAGS}
 	${CANBERRA_LDFLAGS}
 	${EVOLUTION_DATA_SERVER_LDFLAGS}
 	${GNOME_PLATFORM_LDFLAGS}
+	${SQLITE3_LDFLAGS}
 )
 
 install(TARGETS evolution-mail

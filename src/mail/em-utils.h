@@ -55,7 +55,7 @@ void em_utils_selection_get_mailbox (GtkSelectionData *data, CamelFolder *folder
 void em_utils_selection_get_message (GtkSelectionData *data, CamelFolder *folder);
 void em_utils_selection_set_uidlist (GtkSelectionData *data, CamelFolder *folder, GPtrArray *uids);
 void em_utils_selection_get_uidlist (GtkSelectionData *data, EMailSession *session, CamelFolder *dest, gint move, GCancellable *cancellable, GError **error);
-void em_utils_selection_set_urilist (GtkSelectionData *data, CamelFolder *folder, GPtrArray *uids);
+void em_utils_selection_set_urilist (GdkDragContext *context, GtkSelectionData *data, CamelFolder *folder, GPtrArray *uids);
 void em_utils_selection_get_urilist (GtkSelectionData *data, CamelFolder *folder);
 
 /* Return TRUE to continue, FALSE to stop further processing */
@@ -126,6 +126,20 @@ gchar *		em_utils_account_path_to_folder_uri
 EMailBrowser *	em_utils_find_message_window	(EMailFormatterMode display_mode,
 						 CamelFolder *folder,
 						 const gchar *message_uid);
+gboolean	em_utils_import_pgp_key		(GtkWindow *parent,
+						 CamelSession *session,
+						 const guint8 *keydata,
+						 gsize keydata_size,
+						 GError **error);
+void		em_utils_print_part_list	(EMailPartList *part_list,
+						 EMailDisplay *mail_display,
+						 GtkPrintOperationAction print_action,
+						 GCancellable *cancellable,
+						 GAsyncReadyCallback callback,
+						 gpointer user_data);
+gboolean	em_utils_print_part_list_finish	(GObject *source_object,
+						 GAsyncResult *result,
+						 GError **error);
 
 G_END_DECLS
 

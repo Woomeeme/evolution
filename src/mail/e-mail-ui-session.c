@@ -59,10 +59,6 @@
 #include "em-utils.h"
 #include "mail-send-recv.h"
 
-#define E_MAIL_UI_SESSION_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE \
-	((obj), E_TYPE_MAIL_UI_SESSION, EMailUISessionPrivate))
-
 #ifdef HAVE_CANBERRA
 static ca_context *cactx = NULL;
 #endif
@@ -98,10 +94,8 @@ enum {
 
 static guint signals[LAST_SIGNAL];
 
-G_DEFINE_TYPE_WITH_CODE (
-	EMailUISession,
-	e_mail_ui_session,
-	E_TYPE_MAIL_SESSION,
+G_DEFINE_TYPE_WITH_CODE (EMailUISession, e_mail_ui_session, E_TYPE_MAIL_SESSION,
+	G_ADD_PRIVATE (EMailUISession)
 	G_IMPLEMENT_INTERFACE (E_TYPE_EXTENSIBLE, NULL))
 
 struct _SourceContext {
@@ -255,16 +249,14 @@ main_get_filter_driver (CamelSession *session,
 			GError **error)
 {
 	EMailSession *ms = E_MAIL_SESSION (session);
+	EMailUISession *self = E_MAIL_UI_SESSION (session);
 	CamelFilterDriver *driver;
 	EFilterRule *rule = NULL;
 	const gchar *config_dir;
 	gchar *user, *system;
 	GSettings *settings;
 	ERuleContext *fc;
-	EMailUISessionPrivate *priv;
 	gboolean add_junk_test;
-
-	priv = E_MAIL_UI_SESSION_GET_PRIVATE (session);
 
 	settings = e_util_ref_settings ("org.gnome.evolution.mail");
 
@@ -281,25 +273,25 @@ main_get_filter_driver (CamelSession *session,
 
 	if (g_settings_get_boolean (settings, "filters-log-actions") ||
 	    camel_debug ("filters")) {
-		if (!priv->filter_logfile &&
+		if (!self->priv->filter_logfile &&
 		    g_settings_get_boolean (settings, "filters-log-actions")) {
 			gchar *filename;
 
 			filename = g_settings_get_string (settings, "filters-log-file");
 			if (filename) {
 				if (!*filename || g_strcmp0 (filename, "stdout") == 0)
-					priv->filter_logfile = stdout;
+					self->priv->filter_logfile = stdout;
 				else
-					priv->filter_logfile = g_fopen (filename, "a+");
+					self->priv->filter_logfile = g_fopen (filename, "a+");
 
 				g_free (filename);
 			}
-		} else if (!priv->filter_logfile) {
-			priv->filter_logfile = stdout;
+		} else if (!self->priv->filter_logfile) {
+			self->priv->filter_logfile = stdout;
 		}
 
-		if (priv->filter_logfile)
-			camel_filter_driver_set_logfile (driver, priv->filter_logfile);
+		if (self->priv->filter_logfile)
+			camel_filter_driver_set_logfile (driver, self->priv->filter_logfile);
 	}
 
 	camel_filter_driver_set_shell_func (driver, mail_execute_shell_command, NULL);
@@ -307,14 +299,14 @@ main_get_filter_driver (CamelSession *session,
 	camel_filter_driver_set_system_beep_func (driver, session_system_beep, NULL);
 
 	add_junk_test = g_str_equal (type, E_FILTER_SOURCE_JUNKTEST) || (
-		priv->check_junk &&
+		self->priv->check_junk &&
 		g_str_equal (type, E_FILTER_SOURCE_INCOMING) &&
 		session_folder_can_filter_junk (for_folder));
 
 	if (add_junk_test) {
 		/* implicit junk check as 1st rule */
 		camel_filter_driver_add_rule (
-			driver, "Junk check", "(junk-test)",
+			driver, "Junk check", "(= (junk-test) 1)",
 			"(begin (set-system-flag \"junk\"))");
 	}
 
@@ -349,7 +341,6 @@ main_get_filter_driver (CamelSession *session,
 	}
 
 	g_object_unref (fc);
-
 	g_object_unref (settings);
 
 	return driver;
@@ -438,24 +429,22 @@ mail_ui_session_get_property (GObject *object,
 static void
 mail_ui_session_dispose (GObject *object)
 {
-	EMailUISessionPrivate *priv;
+	EMailUISession *self = E_MAIL_UI_SESSION (object);
 
-	priv = E_MAIL_UI_SESSION_GET_PRIVATE (object);
-	g_clear_object (&priv->registry);
+	g_clear_object (&self->priv->registry);
 
-	if (priv->account_store != NULL) {
-		e_mail_account_store_clear (priv->account_store);
-		g_object_unref (priv->account_store);
-		priv->account_store = NULL;
+	if (self->priv->account_store != NULL) {
+		e_mail_account_store_clear (self->priv->account_store);
+		g_clear_object (&self->priv->account_store);
 	}
 
-	g_clear_object (&priv->label_store);
-	g_clear_object (&priv->photo_cache);
+	g_clear_object (&self->priv->label_store);
+	g_clear_object (&self->priv->photo_cache);
 
-	g_mutex_lock (&priv->address_cache_mutex);
-	g_slist_free_full (priv->address_cache, address_cache_data_free);
-	priv->address_cache = NULL;
-	g_mutex_unlock (&priv->address_cache_mutex);
+	g_mutex_lock (&self->priv->address_cache_mutex);
+	g_slist_free_full (self->priv->address_cache, address_cache_data_free);
+	self->priv->address_cache = NULL;
+	g_mutex_unlock (&self->priv->address_cache_mutex);
 
 	/* Chain up to parent's dispose() method. */
 	G_OBJECT_CLASS (e_mail_ui_session_parent_class)->dispose (object);
@@ -464,11 +453,9 @@ mail_ui_session_dispose (GObject *object)
 static void
 mail_ui_session_finalize (GObject *object)
 {
-	EMailUISessionPrivate *priv;
+	EMailUISession *self = E_MAIL_UI_SESSION (object);
 
-	priv = E_MAIL_UI_SESSION_GET_PRIVATE (object);
-
-	g_mutex_clear (&priv->address_cache_mutex);
+	g_mutex_clear (&self->priv->address_cache_mutex);
 
 #ifdef HAVE_CANBERRA
 	g_clear_pointer (&cactx, ca_context_destroy);
@@ -481,7 +468,7 @@ mail_ui_session_finalize (GObject *object)
 static void
 mail_ui_session_constructed (GObject *object)
 {
-	EMailUISessionPrivate *priv;
+	EMailUISession *self;
 	EMFolderTreeModel *folder_tree_model;
 	ESourceRegistry *registry;
 	EClientCache *client_cache;
@@ -497,16 +484,16 @@ mail_ui_session_constructed (GObject *object)
 		session, "online",
 		G_BINDING_SYNC_CREATE);
 
-	priv = E_MAIL_UI_SESSION_GET_PRIVATE (object);
-	priv->account_store = e_mail_account_store_new (session);
+	self = E_MAIL_UI_SESSION (object);
+	self->priv->account_store = e_mail_account_store_new (session);
 
 	/* Keep our own reference to the ESourceRegistry so we
 	 * can easily disconnect signal handlers in dispose(). */
 	registry = e_mail_session_get_registry (session);
-	priv->registry = g_object_ref (registry);
+	self->priv->registry = g_object_ref (registry);
 
 	client_cache = e_shell_get_client_cache (shell);
-	priv->photo_cache = e_photo_cache_new (client_cache);
+	self->priv->photo_cache = e_photo_cache_new (client_cache);
 
 	/* XXX Make sure the folder tree model is created before we
 	 *     add built-in CamelStores so it gets signals from the
@@ -577,7 +564,7 @@ mail_ui_session_get_filter_driver (CamelSession *session,
 				   GError **error)
 {
 	return (CamelFilterDriver *) mail_call_main (
-		MAIL_CALL_p_pppp, (MailMainFunc) main_get_filter_driver,
+		MAIL_CALL_p_pppp, G_CALLBACK (main_get_filter_driver),
 		session, type, for_folder, error);
 }
 
@@ -617,6 +604,111 @@ mail_ui_session_lookup_addressbook (CamelSession *session,
 	g_object_unref (cia);
 
 	return known_address;
+}
+
+static gboolean
+mail_ui_session_check_book_contains_sync (EMailUISession *ui_session,
+					  ESource *source,
+					  const gchar *email_address,
+					  GCancellable *cancellable,
+					  GError **error)
+{
+	EPhotoCache *photo_cache;
+	EClientCache *client_cache;
+	EClient *client;
+	gboolean success = FALSE;
+
+	g_return_val_if_fail (E_IS_MAIL_UI_SESSION (ui_session), FALSE);
+	g_return_val_if_fail (E_IS_SOURCE (source), FALSE);
+	g_return_val_if_fail (email_address != NULL, FALSE);
+
+	if (g_cancellable_set_error_if_cancelled (cancellable, error))
+		return FALSE;
+
+	if (!e_source_get_enabled (source))
+		return FALSE;
+
+	/* XXX EPhotoCache holds a reference on EClientCache, which
+	 *     we need.  EMailUISession should probably hold its own
+	 *     EClientCache reference, but this will do for now. */
+	photo_cache = e_mail_ui_session_get_photo_cache (ui_session);
+	client_cache = e_photo_cache_ref_client_cache (photo_cache);
+
+	client = e_client_cache_get_client_sync (
+		client_cache, source,
+		E_SOURCE_EXTENSION_ADDRESS_BOOK, (guint32) -1,
+		cancellable, error);
+
+	if (client != NULL) {
+		success = e_book_client_contains_email_sync (
+			E_BOOK_CLIENT (client), email_address,
+			cancellable, error);
+
+		g_object_unref (client);
+	}
+
+	g_object_unref (client_cache);
+
+	return success;
+}
+
+static gboolean
+mail_ui_session_addressbook_contains_sync (CamelSession *session,
+					   const gchar *book_uid,
+					   const gchar *email_address,
+					   GCancellable *cancellable,
+					   GError **error)
+{
+	EMailUISession *ui_session = E_MAIL_UI_SESSION (session);
+	GError *local_error = NULL;
+	GList *books = NULL, *link;
+	gboolean found = FALSE;
+
+	if (g_strcmp0 (book_uid, CAMEL_SESSION_BOOK_UID_ANY) == 0) {
+		books = e_source_registry_list_enabled (ui_session->priv->registry, E_SOURCE_EXTENSION_ADDRESS_BOOK);
+	} else if (g_strcmp0 (book_uid, CAMEL_SESSION_BOOK_UID_COMPLETION) == 0) {
+		GList *next = NULL;
+
+		books = e_source_registry_list_enabled (ui_session->priv->registry, E_SOURCE_EXTENSION_ADDRESS_BOOK);
+
+		for (link = books; link; link = next) {
+			ESource *source = link->data;
+
+			next = g_list_next (link);
+
+			if (e_source_has_extension (source, E_SOURCE_EXTENSION_AUTOCOMPLETE) &&
+			    !e_source_autocomplete_get_include_me (E_SOURCE_AUTOCOMPLETE (e_source_get_extension (source, E_SOURCE_EXTENSION_AUTOCOMPLETE)))) {
+				g_object_unref (source);
+				books = g_list_delete_link (books, link);
+			}
+		}
+	} else {
+		ESource *source;
+
+		source = e_source_registry_ref_source (ui_session->priv->registry, book_uid);
+		if (source) {
+			found = mail_ui_session_check_book_contains_sync (ui_session, source, email_address, cancellable, error);
+			g_object_unref (source);
+		} else {
+			g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, _("Book '%s' not found"), book_uid);
+		}
+	}
+
+	for (link = books; link && !found && !g_cancellable_is_cancelled (cancellable); link = g_list_next (link)) {
+		ESource *source = link->data;
+
+		/* use the error from the first book, if looking in more books */
+		found = mail_ui_session_check_book_contains_sync (ui_session, source, email_address, cancellable, local_error ? NULL : &local_error);
+	}
+
+	g_list_free_full (books, g_object_unref);
+
+	if (!found && local_error)
+		g_propagate_error (error, local_error);
+	else
+		g_clear_error (&local_error);
+
+	return found;
 }
 
 static void
@@ -705,7 +797,7 @@ mail_ui_session_trust_prompt (CamelSession *session,
 		source_extension = E_SOURCE_EXTENSION_MAIL_ACCOUNT;
 
 	prompt_response = GPOINTER_TO_INT (mail_call_main (MAIL_CALL_p_ppppp,
-                (MailMainFunc) mail_ui_session_call_trust_prompt_in_main_thread_cb,
+                G_CALLBACK (mail_ui_session_call_trust_prompt_in_main_thread_cb),
                 source_extension, camel_service_get_display_name (service), host, certificate_pem, GUINT_TO_POINTER (errors)));
 
 	g_free (certificate_pem);
@@ -985,8 +1077,6 @@ e_mail_ui_session_class_init (EMailUISessionClass *class)
 	CamelSessionClass *session_class;
 	EMailSessionClass *mail_session_class;
 
-	g_type_class_add_private (class, sizeof (EMailUISessionPrivate));
-
 	object_class = G_OBJECT_CLASS (class);
 	object_class->set_property = mail_ui_session_set_property;
 	object_class->get_property = mail_ui_session_get_property;
@@ -999,6 +1089,7 @@ e_mail_ui_session_class_init (EMailUISessionClass *class)
 	session_class->remove_service = mail_ui_session_remove_service;
 	session_class->get_filter_driver = mail_ui_session_get_filter_driver;
 	session_class->lookup_addressbook = mail_ui_session_lookup_addressbook;
+	session_class->addressbook_contains_sync = mail_ui_session_addressbook_contains_sync;
 	session_class->user_alert = mail_ui_session_user_alert;
 	session_class->trust_prompt = mail_ui_session_trust_prompt;
 	session_class->authenticate_sync = mail_ui_session_authenticate_sync;
@@ -1055,7 +1146,7 @@ e_mail_ui_session_class_init (EMailUISessionClass *class)
 static void
 e_mail_ui_session_init (EMailUISession *session)
 {
-	session->priv = E_MAIL_UI_SESSION_GET_PRIVATE (session);
+	session->priv = e_mail_ui_session_get_instance_private (session);
 	g_mutex_init (&session->priv->address_cache_mutex);
 	session->priv->label_store = e_mail_label_list_store_new ();
 }
@@ -1209,10 +1300,8 @@ e_mail_ui_session_check_known_address_sync (EMailUISession *session,
 	EPhotoCache *photo_cache;
 	EClientCache *client_cache;
 	ESourceRegistry *registry;
-	EBookQuery *book_query;
 	GList *list, *link;
 	const gchar *email_address = NULL;
-	gchar *book_query_string;
 	gboolean known_address = FALSE;
 	gboolean success = FALSE;
 
@@ -1243,11 +1332,6 @@ e_mail_ui_session_check_known_address_sync (EMailUISession *session,
 	client_cache = e_photo_cache_ref_client_cache (photo_cache);
 	registry = e_client_cache_ref_registry (client_cache);
 
-	book_query = e_book_query_field_test (
-		E_CONTACT_EMAIL, E_BOOK_QUERY_IS, email_address);
-	book_query_string = e_book_query_to_string (book_query);
-	e_book_query_unref (book_query);
-
 	if (check_local_only) {
 		ESource *source;
 
@@ -1263,7 +1347,6 @@ e_mail_ui_session_check_known_address_sync (EMailUISession *session,
 	for (link = list; link != NULL && !g_cancellable_is_cancelled (cancellable); link = g_list_next (link)) {
 		ESource *source = E_SOURCE (link->data);
 		EClient *client;
-		GSList *uids = NULL;
 		GError *local_error = NULL;
 
 		/* Skip disabled sources. */
@@ -1290,30 +1373,23 @@ e_mail_ui_session_check_known_address_sync (EMailUISession *session,
 			break;
 		}
 
-		success = e_book_client_get_contacts_uids_sync (
-			E_BOOK_CLIENT (client), book_query_string,
-			&uids, cancellable, &local_error);
+		success = e_book_client_contains_email_sync (
+			E_BOOK_CLIENT (client), email_address,
+			cancellable, &local_error);
 
 		g_object_unref (client);
 
 		if (!success) {
-			g_warn_if_fail (uids == NULL);
-
 			/* ignore book-specific errors here and continue with the next */
 			g_clear_error (&local_error);
 			continue;
 		}
 
-		if (uids != NULL) {
-			g_slist_free_full (uids, (GDestroyNotify) g_free);
-			known_address = TRUE;
-			break;
-		}
+		known_address = TRUE;
+		break;
 	}
 
 	g_list_free_full (list, (GDestroyNotify) g_object_unref);
-
-	g_free (book_query_string);
 
 	g_object_unref (registry);
 	g_object_unref (client_cache);

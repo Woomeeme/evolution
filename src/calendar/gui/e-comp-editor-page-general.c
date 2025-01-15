@@ -73,7 +73,7 @@ enum {
 	PROP_SHOW_ATTENDEES
 };
 
-G_DEFINE_TYPE (ECompEditorPageGeneral, e_comp_editor_page_general, E_TYPE_COMP_EDITOR_PAGE)
+G_DEFINE_TYPE_WITH_PRIVATE (ECompEditorPageGeneral, e_comp_editor_page_general, E_TYPE_COMP_EDITOR_PAGE)
 
 static void ecep_general_sensitize_widgets (ECompEditorPage *page,
 					    gboolean force_insensitive);
@@ -239,24 +239,22 @@ ecep_general_remove_attendee (ECompEditorPageGeneral *page_general,
 	ECompEditor *comp_editor;
 	gint pos = 0;
 
+	comp_editor = e_comp_editor_page_ref_editor (E_COMP_EDITOR_PAGE (page_general));
+
 	/* If this was a delegatee, no longer delegate */
 	if (e_meeting_attendee_is_set_delfrom (attendee)) {
 		EMeetingAttendee *ib;
 
 		ib = e_meeting_store_find_attendee (page_general->priv->meeting_store, e_meeting_attendee_get_delfrom (attendee), &pos);
 		if (ib != NULL) {
-			ECompEditor *comp_editor;
 			ECompEditorFlags flags;
 
 			e_meeting_attendee_set_delto (ib, NULL);
 
-			comp_editor = e_comp_editor_page_ref_editor (E_COMP_EDITOR_PAGE (page_general));
 			flags = e_comp_editor_get_flags (comp_editor);
 
 			if (!(flags & E_COMP_EDITOR_FLAG_DELEGATE))
 				e_meeting_attendee_set_edit_level (ib, E_MEETING_ATTENDEE_EDIT_FULL);
-
-			g_clear_object (&comp_editor);
 		}
 	}
 
@@ -278,7 +276,6 @@ ecep_general_remove_attendee (ECompEditorPageGeneral *page_general,
 
 	ecep_general_sensitize_widgets (E_COMP_EDITOR_PAGE (page_general), FALSE);
 
-	comp_editor = e_comp_editor_page_ref_editor (E_COMP_EDITOR_PAGE (page_general));
 	e_comp_editor_set_changed (comp_editor, TRUE);
 	g_clear_object (&comp_editor);
 }
@@ -326,7 +323,7 @@ ecep_general_attendees_remove_clicked_cb (GtkButton *button,
 				errors = g_string_new ("");
 			else
 				g_string_append_c (errors, '\n');
-			g_string_append_printf (errors, _("Not enough rights to delete attendee “%s”"), e_meeting_attendee_get_address (attendee));
+			g_string_append_printf (errors, _("Not enough rights to delete attendee “%s”"), e_cal_util_strip_mailto (e_meeting_attendee_get_address (attendee)));
 			failures++;
 		} else {
 			ecep_general_remove_attendee (page_general, attendee);
@@ -468,7 +465,7 @@ ecep_general_get_organizer (ECompEditorPageGeneral *page_general,
 			if (out_name)
 				*out_name = g_strdup (str_name);
 			if (out_mailto)
-				*out_mailto = g_strconcat ("mailto:", itip_strip_mailto (str_address), NULL);
+				*out_mailto = g_strconcat ("mailto:", e_cal_util_strip_mailto (str_address), NULL);
 		} else if (out_error_message) {
 			*out_error_message = _("Organizer address is not a valid user mail address");
 		}
@@ -527,7 +524,7 @@ ecep_general_pick_organizer_for_email_address (ECompEditorPageGeneral *page_gene
 	if (can_add)
 		ecep_general_remove_organizer_backend_address (combo_box);
 
-	email_address = itip_strip_mailto (email_address);
+	email_address = e_cal_util_strip_mailto (email_address);
 
 	if (!email_address || !*email_address) {
 		if (can_add && gtk_combo_box_get_active (combo_box) == -1 &&
@@ -595,6 +592,31 @@ ecep_general_target_client_notify_cb (ECompEditor *comp_editor,
 
 		e_comp_editor_property_part_set_visible (page_general->priv->comp_color, supports_color);
 	}
+}
+
+static void
+ecep_general_editor_flags_notify_cb (ECompEditor *comp_editor,
+				     GParamSpec *param,
+				     ECompEditorPageGeneral *page_general)
+{
+	gboolean can_change_target;
+
+	g_return_if_fail (E_IS_COMP_EDITOR (comp_editor));
+	g_return_if_fail (E_IS_COMP_EDITOR_PAGE_GENERAL (page_general));
+
+	can_change_target = (e_comp_editor_get_flags (comp_editor) & E_COMP_EDITOR_FLAG_IS_NEW) != 0 ||
+		!e_comp_editor_get_component (comp_editor);
+	if (!can_change_target) {
+		ICalComponent *icomp = e_comp_editor_get_component (comp_editor);
+
+		/* disallow move between targets only for recurring events */
+		can_change_target = i_cal_component_isa (icomp) != I_CAL_VEVENT_COMPONENT ||
+			(!e_cal_util_component_is_instance (icomp) &&
+			 !e_cal_util_component_has_recurrences (icomp));
+	}
+
+	gtk_widget_set_sensitive (page_general->priv->source_combo_box, can_change_target);
+	e_source_combo_box_set_show_full_name (E_SOURCE_COMBO_BOX (page_general->priv->source_combo_box), !can_change_target);
 }
 
 static gboolean
@@ -885,7 +907,7 @@ ecep_general_fill_widgets (ECompEditorPage *page,
 	     g_object_unref (prop), prop = i_cal_component_get_next_property (component, I_CAL_ATTENDEE_PROPERTY)) {
 		const gchar *address;
 
-		address = itip_strip_mailto (i_cal_property_get_attendee (prop));
+		address = e_cal_util_get_property_email (prop);
 		if (address)
 			page_general->priv->orig_attendees = g_slist_prepend (page_general->priv->orig_attendees, g_strdup (address));
 	}
@@ -897,7 +919,7 @@ ecep_general_fill_widgets (ECompEditorPage *page,
 		ICalParameter *param;
 		const gchar *organizer;
 
-		organizer = i_cal_property_get_organizer (prop);
+		organizer = e_cal_util_get_property_email (prop);
 
 		if (organizer && *organizer) {
 			ECompEditor *comp_editor;
@@ -911,7 +933,7 @@ ecep_general_fill_widgets (ECompEditorPage *page,
 
 			flags = flags & E_COMP_EDITOR_FLAG_ORGANIZER_IS_USER;
 
-			if (itip_address_is_user (registry, itip_strip_mailto (organizer))) {
+			if (itip_address_is_user (registry, e_cal_util_strip_mailto (organizer))) {
 				flags = flags | E_COMP_EDITOR_FLAG_ORGANIZER_IS_USER;
 			} else {
 				param = i_cal_property_get_first_parameter (prop, I_CAL_SENTBY_PARAMETER);
@@ -919,7 +941,7 @@ ecep_general_fill_widgets (ECompEditorPage *page,
 					const gchar *sentby = i_cal_parameter_get_sentby (param);
 
 					if (sentby && *sentby &&
-					    itip_address_is_user (registry, itip_strip_mailto (organizer))) {
+					    itip_address_is_user (registry, e_cal_util_strip_mailto (organizer))) {
 						flags = flags | E_COMP_EDITOR_FLAG_ORGANIZER_IS_USER;
 					}
 
@@ -935,14 +957,14 @@ ecep_general_fill_widgets (ECompEditorPage *page,
 
 				cn = i_cal_parameter_get_cn (param);
 				if (cn && *cn) {
-					value = camel_internet_address_format_address (cn, itip_strip_mailto (organizer));
+					value = camel_internet_address_format_address (cn, e_cal_util_strip_mailto (organizer));
 				}
 
 				g_object_unref (param);
 			}
 
 			if (!value)
-				value = g_strdup (itip_strip_mailto (organizer));
+				value = g_strdup (e_cal_util_strip_mailto (organizer));
 
 			if (!(flags & E_COMP_EDITOR_FLAG_ORGANIZER_IS_USER) ||
 			    !ecep_general_pick_organizer_for_email_address (page_general, organizer, FALSE)) {
@@ -973,7 +995,7 @@ ecep_general_fill_widgets (ECompEditorPage *page,
 	     g_object_unref (prop), prop = i_cal_component_get_next_property (component, I_CAL_ATTENDEE_PROPERTY)) {
 		const gchar *address;
 
-		address = itip_strip_mailto (i_cal_property_get_attendee (prop));
+		address = e_cal_util_get_property_email (prop);
 		if (address) {
 			EMeetingAttendee *attendee;
 			ECalComponentAttendee *comp_attendee;
@@ -1111,7 +1133,7 @@ ecep_general_fill_component (ECompEditorPage *page,
 			EMeetingAttendee *attendee = g_ptr_array_index (attendees, ii);
 			const gchar *address;
 
-			address = itip_strip_mailto (e_meeting_attendee_get_address (attendee));
+			address = e_cal_util_strip_mailto (e_meeting_attendee_get_address (attendee));
 			if (address) {
 				ICalParameter *param;
 
@@ -1330,13 +1352,15 @@ ecep_general_constructed (GObject *object)
 	page_general->priv->organizer_hbox = widget;
 
 	widget = e_ellipsized_combo_box_text_new (FALSE);
+	e_ellipsized_combo_box_text_set_max_natural_width (E_ELLIPSIZED_COMBO_BOX_TEXT (widget), 100);
 	g_object_set (G_OBJECT (widget),
-		"hexpand", TRUE,
+		"hexpand", FALSE,
 		"halign", GTK_ALIGN_FILL,
 		"vexpand", FALSE,
 		"valign", GTK_ALIGN_START,
+		"width-request", 100,
 		NULL);
-	gtk_box_pack_start (GTK_BOX (page_general->priv->organizer_hbox), widget, TRUE, TRUE, 0);
+	gtk_box_pack_start (GTK_BOX (page_general->priv->organizer_hbox), widget, FALSE, FALSE, 0);
 	gtk_widget_show (widget);
 
 	page_general->priv->organizer_combo_box = widget;
@@ -1374,12 +1398,14 @@ ecep_general_constructed (GObject *object)
 	widget = e_source_combo_box_new (
 		e_shell_get_registry (shell),
 		page_general->priv->source_extension_name);
-	e_source_combo_box_set_show_colors (E_SOURCE_COMBO_BOX (widget), TRUE);
 	g_object_set (G_OBJECT (widget),
 		"hexpand", TRUE,
 		"halign", GTK_ALIGN_FILL,
 		"vexpand", FALSE,
 		"valign", GTK_ALIGN_START,
+		"width-request", 100,
+		"max-natural-width", 100,
+		"show-colors", TRUE,
 		NULL);
 	gtk_box_pack_start (GTK_BOX (page_general->priv->source_and_color_hbox), widget, TRUE, TRUE, 0);
 	gtk_widget_show (widget);
@@ -1514,7 +1540,10 @@ ecep_general_constructed (GObject *object)
 
 	g_signal_connect (widget, "clicked", G_CALLBACK (ecep_general_attendees_remove_clicked_cb), page_general);
 
-	e_signal_connect_notify (comp_editor, "notify::target-client", G_CALLBACK (ecep_general_target_client_notify_cb), page_general);
+	e_signal_connect_notify_object (comp_editor, "notify::target-client", G_CALLBACK (ecep_general_target_client_notify_cb), page_general, 0);
+	e_signal_connect_notify_object (comp_editor, "notify::flags", G_CALLBACK (ecep_general_editor_flags_notify_cb), page_general, 0);
+
+	ecep_general_editor_flags_notify_cb (comp_editor, NULL, page_general);
 
 	ecep_general_init_ui (page_general, comp_editor);
 
@@ -1555,9 +1584,7 @@ ecep_general_finalize (GObject *object)
 static void
 e_comp_editor_page_general_init (ECompEditorPageGeneral *page_general)
 {
-	page_general->priv = G_TYPE_INSTANCE_GET_PRIVATE (page_general,
-		E_TYPE_COMP_EDITOR_PAGE_GENERAL,
-		ECompEditorPageGeneralPrivate);
+	page_general->priv = e_comp_editor_page_general_get_instance_private (page_general);
 }
 
 static void
@@ -1565,8 +1592,6 @@ e_comp_editor_page_general_class_init (ECompEditorPageGeneralClass *klass)
 {
 	ECompEditorPageClass *page_class;
 	GObjectClass *object_class;
-
-	g_type_class_add_private (klass, sizeof (ECompEditorPageGeneralPrivate));
 
 	page_class = E_COMP_EDITOR_PAGE_CLASS (klass);
 	page_class->sensitize_widgets = ecep_general_sensitize_widgets;
@@ -1902,6 +1927,14 @@ e_comp_editor_page_general_get_meeting_store (ECompEditorPageGeneral *page_gener
 	return page_general->priv->meeting_store;
 }
 
+ENameSelector *
+e_comp_editor_page_general_get_name_selector (ECompEditorPageGeneral *page_general)
+{
+	g_return_val_if_fail (E_IS_COMP_EDITOR_PAGE_GENERAL (page_general), NULL);
+
+	return e_meeting_list_view_get_name_selector (E_MEETING_LIST_VIEW (page_general->priv->attendees_list_view));
+}
+
 /* Element is a string, an email address; free with g_slist_free_full (slist, g_free); */
 GSList *
 e_comp_editor_page_general_get_added_attendees (ECompEditorPageGeneral *page_general)
@@ -1934,7 +1967,7 @@ e_comp_editor_page_general_get_added_attendees (ECompEditorPageGeneral *page_gen
 		EMeetingAttendee *attendee = g_ptr_array_index (attendees, ii);
 		const gchar *address;
 
-		address = itip_strip_mailto (e_meeting_attendee_get_address (attendee));
+		address = e_cal_util_strip_mailto (e_meeting_attendee_get_address (attendee));
 
 		if (address && (!orig_attendees || !g_hash_table_contains (orig_attendees, address)))
 			added_attendees = g_slist_prepend (added_attendees, g_strdup (address));
@@ -1961,7 +1994,7 @@ e_comp_editor_page_general_get_removed_attendees (ECompEditorPageGeneral *page_g
 		return NULL;
 
 	if (!page_general->priv->show_attendees) {
-		GSList *copy, *link;
+		GSList *copy;
 
 		copy = g_slist_copy (page_general->priv->orig_attendees);
 		for (link = copy; link; link = g_slist_next (link)) {
@@ -1978,7 +2011,7 @@ e_comp_editor_page_general_get_removed_attendees (ECompEditorPageGeneral *page_g
 		EMeetingAttendee *attendee = g_ptr_array_index (attendees, ii);
 		const gchar *address;
 
-		address = itip_strip_mailto (e_meeting_attendee_get_address (attendee));
+		address = e_cal_util_strip_mailto (e_meeting_attendee_get_address (attendee));
 		if (address)
 			g_hash_table_insert (new_attendees, (gpointer) address, GINT_TO_POINTER (1));
 	}
